@@ -1,0 +1,47 @@
+---
+# Базовый стиль, на котором строятся остальные правила
+BasedOnStyle: LLVM
+
+# Главное правило стиля Allman: перенос фигурных скобок на новую строку
+BreakBeforeBraces: Allman
+
+# Тонкая настройка переноса скобок для различных конструкций
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterObjCDeclaration: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: false
+  BeforeWhile: true
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# Настройки отступов и форматирования (стандартные 4 пробела)
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+
+# Ограничение длины строки (0 — без ограничений)
+ColumnLimit: 120
+
+# Запрет слияния коротких блоков в одну строку (чтобы скобки всегда переносились)
+AllowShortBlocksOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+
+# Сортировка инклудов по алфавиту
+SortIncludes: true
+
+# Стандарт C++
+Standard: Latest
+...
