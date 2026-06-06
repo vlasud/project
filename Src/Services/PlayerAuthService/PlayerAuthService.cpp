@@ -17,3 +17,24 @@ void PlayerAuthService::setPlayerAuthenticated(size_t playerId, bool authenticat
     }
     m_authenticatedPlayers[playerId] = authenticated;
 }
+
+void PlayerAuthService::setPlayerPassword(size_t playerId, const std::string &password)
+{
+    if (playerId >= m_authenticatedPlayers.size())
+    {
+        return;
+    }
+    m_playersPasswords[playerId] = password;
+}
+
+const std::string &PlayerAuthService::getPlayerPassword(size_t playerId) const
+{
+    static const std::string emptyPassword = "";
+
+    if (playerId >= m_authenticatedPlayers.size())
+    {
+        return emptyPassword;
+    }
+
+    return m_playersPasswords[playerId];
+}

@@ -1,9 +1,11 @@
 #include "SystemRegister.h"
 
 #include "PlayerAuthSystem/PlayerAuthSystem.h"
+#include "PlayerConnectionVersionSystem/PlayerConnectionVersionSystem.h"
 
 void SystemRegister::registerSystems(ICore &core, const ServiceRegister &serviceRegister)
 {
+    m_systems.push_back(std::make_unique<PlayerConnectionVersionSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
 }
 

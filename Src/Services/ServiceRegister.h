@@ -12,7 +12,7 @@ class ServiceRegister final
   public:
     void registerServices();
 
-    template <typename T> const T &getService() const
+    template <typename T> T &getService() const
     {
         static_assert(std::is_base_of<IService, T>::value, "T must derive from IService");
 

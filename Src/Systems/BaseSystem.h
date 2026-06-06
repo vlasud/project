@@ -15,8 +15,13 @@ class BaseSystem
 
     virtual ~BaseSystem() = default;
 
-    virtual void initialize() = 0;
-    virtual void reset() = 0;
+    virtual void initialize()
+    {
+    }
+
+    virtual void reset()
+    {
+    }
 
   protected:
     ICore &m_core;
