@@ -1,14 +1,9 @@
 #include "PlayerAuthSystem.h"
-#include "Strings.h"
 
-#include "../../Pools/PlayerPool.h"
-#include "core.hpp"
-
-#include <fmt/core.h>
-
-void PlayerAuthSystem::link(ICore *core)
+PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRegister)
+    : BaseSystem(core, serviceRegister), m_playerAuthService(serviceRegister.getService<PlayerAuthService>())
 {
-    core->getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
 }
 
 void PlayerAuthSystem::initialize()
@@ -21,29 +16,15 @@ void PlayerAuthSystem::reset()
 
 void PlayerAuthSystem::onPlayerConnect(IPlayer &player)
 {
-    Player *newPlayer = PlayerPool::get(player.getID());
-    if (!newPlayer)
+    if (m_playerAuthService.isPlayerAuthenticated(player.getID()))
     {
-        player.sendClientMessage(Colour::White(), PLAYER_AUTH_SYSTEM_INVALID_ID);
         player.kick();
         return;
     }
 
-    if (newPlayer->getIsLoggedIn())
-    {
-        player.sendClientMessage(Colour::White(), PLAYER_AUTH_SYSTEM_ALREADY_LOGGED_IN);
-        player.kick();
-        return;
-    }
+    player.sendClientMessage(Colour::White(), "Hello, world");
 }
 
 void PlayerAuthSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)
 {
-    Player *newPlayer = PlayerPool::get(player.getID());
-    if (!newPlayer)
-    {
-        return;
-    }
-
-    newPlayer->setIsLoggedIn(false);
 }

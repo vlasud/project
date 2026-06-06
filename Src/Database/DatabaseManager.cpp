@@ -3,77 +3,112 @@
 #include "../Log/LogManager.h"
 #include "../ThreadPool/ThreadPool.h"
 #include "core.hpp"
-#include "fmt/base.h"
+#include "mysqlx/devapi/settings.h"
 #include <memory>
 
 namespace
 {
-const char *HOST = "tcp://127.0.0.1:3306";
-const char *USER = "root";
-const char *PASSWORD = "root";
-const char *DATABASE = "test";
+const std::string HOST = "127.0.0.1";
+const std::string USER = "root";
+const std::string PASSWORD = "root";
+const std::string DATABASE = "test";
+const std::string PORT = "33060";
 } // namespace
 
-bool ConnectionWrapper::initialize()
+void SessionWrapper::initialize()
 {
-    m_driver = std::unique_ptr<sql::mysql::MySQL_Driver>(sql::mysql::get_mysql_driver_instance());
-    if (!m_driver)
-    {
-        LogManager::log(LogLevel::Error, "Failed to get MySQL driver instance.");
-        return false;
-    }
-
-    m_connection = std::unique_ptr<sql::Connection>(m_driver->connect(HOST, USER, PASSWORD));
-    if (!m_connection || !m_connection->isValid())
-    {
-        LogManager::log(LogLevel::Error, "Failed to establish database connection.");
-        return false;
-    }
-
-    m_connection->setSchema(DATABASE);
-    return true;
+    std::string uri = "mysqlx://" + USER + ":" + PASSWORD + "@" + HOST + ":" + PORT + "/" + DATABASE;
+    m_session = std::make_unique<mysqlx::Session>(uri);
 }
 
-const std::unique_ptr<sql::Connection> &ConnectionWrapper::getConnection() const
+mysqlx::Schema SessionWrapper::getSchema()
 {
-    return m_connection;
+    return m_session->getSchema(DATABASE);
+}
+
+void SessionWrapper::setRowResult(mysqlx::RowResult result)
+{
+    m_result = std::move(result);
+}
+
+mysqlx::RowResult &&SessionWrapper::moveOutRowResult()
+{
+    return std::move(m_result);
 }
 
 void DatabaseManager::initialize()
 {
-    bool allConnectionsInitialized = false;
-    m_connectionPool.forEach(
-        [&allConnectionsInitialized](auto *connectionWrapper)
+    m_sessionPool.forEach(
+        [](SessionWrapper &wrapper)
         {
-            allConnectionsInitialized = connectionWrapper->initialize();
-            return allConnectionsInitialized;
+            wrapper.initialize();
+            return true;
         });
 
-    if (!allConnectionsInitialized)
+    LogManager::log(Message, "DatabaseManager initialized with " + std::to_string(m_sessionPool.size()) + " sessions");
+}
+
+// Not thread safe, should be called from the main thread
+void DatabaseManager::throwQuery(DatabaseManager::Task task)
+{
+    SessionWrapper *sessionWrapper = m_sessionPool.get();
+    if (sessionWrapper == nullptr)
     {
-        LogManager::log(LogLevel::Error, "Failed to initialize all database connections.");
+        m_queue.push(task);
         return;
     }
 
-    char buffer[256] = {0};
-    fmt::format_to_n(buffer, sizeof(buffer), "DatabaseManager initialized with connection pool size: {}",
-                     m_connectionPool.size());
-    LogManager::log(LogLevel::Message, buffer);
-}
+    ThreadPool::Task asyncTask;
 
-void DatabaseManager::query(std::function<void()> task)
-{
-    ThreadPool::Task queryTask;
-
-    queryTask.asyncFunc = []()
+    asyncTask.func = [task = std::move(task), sessionWrapper]()
     {
-        ConnectionWrapper *connectionWrapper = m_connectionPool.get();
-        std::unique_ptr<sql::PreparedStatement> pstmt(
-            connectionWrapper->getConnection()->prepareStatement("INSERT INTO test (name) VALUES (?)"));
-        pstmt->setString(1, "Ivan_Petrov");
-        pstmt->executeUpdate();
+        task(sessionWrapper->getSchema());
     };
 
-    queryTask.resultCallback = [connectionWrapper]() { m_connectionPool.release(connectionWrapper); };
-    ThreadPool::addTaskWithResult(std::move(queryTask));
+    asyncTask.callback = [sessionWrapper]()
+    {
+        m_sessionPool.release(sessionWrapper);
+
+        if (!m_queue.empty())
+        {
+            DatabaseManager::Task nextTask = m_queue.front();
+            m_queue.pop();
+            throwQuery(std::move(nextTask));
+        }
+    };
+
+    ThreadPool::addTaskWithCallback(std::move(asyncTask));
+}
+
+// Not thread safe, should be called from the main thread
+void DatabaseManager::selectQuery(DatabaseManager::SelectTask task, DatabaseManager::SelectCallback callback)
+{
+    SessionWrapper *sessionWrapper = m_sessionPool.get();
+    if (sessionWrapper == nullptr)
+    {
+        m_selectQueue.push({task, callback});
+        return;
+    }
+
+    ThreadPool::Task asyncTask;
+
+    asyncTask.func = [task = std::move(task), sessionWrapper]()
+    {
+        sessionWrapper->setRowResult(task(sessionWrapper->getSchema()));
+    };
+
+    asyncTask.callback = [sessionWrapper, callback = std::move(callback)]()
+    {
+        callback(sessionWrapper->moveOutRowResult());
+        m_sessionPool.release(sessionWrapper);
+
+        if (!m_selectQueue.empty())
+        {
+            auto [nextTask, nextCallback] = m_selectQueue.front();
+            m_selectQueue.pop();
+            selectQuery(std::move(nextTask), std::move(nextCallback));
+        }
+    };
+
+    ThreadPool::addTaskWithCallback(std::move(asyncTask));
 }

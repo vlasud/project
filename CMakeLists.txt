@@ -26,7 +26,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE
-        "${MYSQL_CONNECTOR_DIR}/lib/vs14/mysqlcppconn.lib"
+        "${MYSQL_CONNECTOR_DIR}/lib/vs14/mysqlcppconn8.lib"
         ws2_32
     )
 else()

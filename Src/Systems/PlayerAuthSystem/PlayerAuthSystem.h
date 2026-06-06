@@ -1,12 +1,13 @@
 #pragma once
 
-#include "../ISystem.h"
+#include "../../Services/PlayerAuthService/PlayerAuthService.h"
+#include "../BaseSystem.h"
 #include "player.hpp"
 
-class PlayerAuthSystem : public ISystem, public PlayerConnectEventHandler
+class PlayerAuthSystem : public BaseSystem, public PlayerConnectEventHandler
 {
   public:
-    void link(ICore *core) override;
+    PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRegister);
     void initialize() override;
     void reset() override;
 
@@ -14,4 +15,5 @@ class PlayerAuthSystem : public ISystem, public PlayerConnectEventHandler
     void onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason) override;
 
   private:
+    const PlayerAuthService &m_playerAuthService;
 };

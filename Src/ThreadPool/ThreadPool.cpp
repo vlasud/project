@@ -34,7 +34,7 @@ void ThreadPool::addTask(std::function<void()> task)
     m_condition.notify_one();
 }
 
-void ThreadPool::addTaskWithResult(Task task)
+void ThreadPool::addTaskWithCallback(Task task)
 {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -63,8 +63,14 @@ void ThreadPool::shutdown()
 // their tasks.
 void ThreadPool::flush()
 {
-    std::lock_guard<std::mutex> lock(m_callbackMutex);
-    for (auto &callback : m_callbacks)
+    std::vector<std::function<void()>> callbacks;
+
+    {
+        std::lock_guard<std::mutex> lock(m_callbackMutex);
+        callbacks.swap(m_callbacks);
+    }
+
+    for (auto &callback : callbacks)
     {
         callback();
     }
@@ -78,7 +84,11 @@ void ThreadPool::workerThread()
 
         {
             std::unique_lock<std::mutex> lock(m_mutex);
-            m_condition.wait(lock, [] { return m_stop || !m_tasks.empty(); });
+            m_condition.wait(lock,
+                             []
+                             {
+                                 return m_stop || !m_tasks.empty();
+                             });
 
             if (m_stop && m_tasks.empty())
             {
@@ -89,12 +99,12 @@ void ThreadPool::workerThread()
             m_tasks.pop();
         }
 
-        task.asyncFunc();
+        task.func();
 
-        if (task.resultCallback)
+        if (task.callback)
         {
             std::lock_guard<std::mutex> callbackLock(m_callbackMutex);
-            m_callbacks.push_back(std::move(task.resultCallback));
+            m_callbacks.push_back(std::move(task.callback));
         }
     }
 }

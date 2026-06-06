@@ -1,15 +1,11 @@
-#include <memory>
-#include <player.hpp>
 #include <sdk.hpp>
-
-#include "Systems/ISystem.h"
-#include "Systems/PlayerAuthSystem/PlayerAuthSystem.h"
-#include "Systems/SpawnSystem/SpawnSystem.h"
 
 #include "ThreadPool/ThreadPool.h"
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
+#include "Services/ServiceRegister.h"
+#include "Systems/SystemRegister.h"
 
 class GameMode : public IComponent, public CoreEventHandler
 {
@@ -27,26 +23,18 @@ class GameMode : public IComponent, public CoreEventHandler
     void onLoad(ICore *core) override
     {
         LogManager::initialize(core);
-        ThreadPool::initialize(std::thread::hardware_concurrency());
+        ThreadPool::initialize(std::thread::hardware_concurrency() - 1);
         DatabaseManager::initialize();
 
         core->getEventDispatcher().addEventHandler(this);
 
-        m_systems.push_back(std::make_unique<PlayerAuthSystem>());
-        m_systems.push_back(std::make_unique<SpawnSystem>());
-
-        for (const auto &system : m_systems)
-        {
-            system->link(core);
-        }
+        m_serviceRegister.registerServices();
+        m_systemRegister.registerSystems(*core, m_serviceRegister);
     }
 
     void onInit(IComponentList *components) override
     {
-        for (const auto &system : m_systems)
-        {
-            system->initialize();
-        }
+        m_systemRegister.initializeSystems();
     }
 
     void free() override
@@ -56,10 +44,7 @@ class GameMode : public IComponent, public CoreEventHandler
 
     void reset() override
     {
-        for (auto &system : m_systems)
-        {
-            system->reset();
-        }
+        m_systemRegister.resetSystems();
     }
 
     UID getUID() override
@@ -73,7 +58,8 @@ class GameMode : public IComponent, public CoreEventHandler
     }
 
   private:
-    std::vector<std::unique_ptr<ISystem>> m_systems;
+    ServiceRegister m_serviceRegister;
+    SystemRegister m_systemRegister;
 };
 
 COMPONENT_ENTRY_POINT()

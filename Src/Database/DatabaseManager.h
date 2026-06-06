@@ -1,25 +1,38 @@
 #pragma once
 
 #include "../Pools/StaticPool.h"
-#include <jdbc.h>
+#include <functional>
+#include <mysqlx/xdevapi.h>
+#include <queue>
 
-class ConnectionWrapper
+class SessionWrapper
 {
   public:
-    bool initialize();
-    const std::unique_ptr<sql::Connection> &getConnection() const;
+    void initialize();
+    mysqlx::Schema getSchema();
+    void setRowResult(mysqlx::RowResult result);
+    mysqlx::RowResult &&moveOutRowResult();
 
   private:
-    std::unique_ptr<sql::mysql::MySQL_Driver> m_driver;
-    std::unique_ptr<sql::Connection> m_connection;
+    std::unique_ptr<mysqlx::Session> m_session;
+    mysqlx::RowResult m_result;
 };
 
 class DatabaseManager
 {
+    using Task = std::function<void(mysqlx::Schema)>;
+    using SelectTask = std::function<mysqlx::RowResult(mysqlx::Schema)>;
+    using SelectCallback = std::function<void(mysqlx::RowResult)>;
+
   public:
     static void initialize();
-    static void query(std::function<void()> task);
+    static void flush();
+    static void throwQuery(DatabaseManager::Task task);
+    static void selectQuery(DatabaseManager::SelectTask task, DatabaseManager::SelectCallback callback);
+    static mysqlx::Schema getSchema();
 
   private:
-    inline static StaticPool<ConnectionWrapper, 10> m_connectionPool;
+    inline static StaticPool<SessionWrapper, 16> m_sessionPool;
+    inline static std::queue<DatabaseManager::Task> m_queue;
+    inline static std::queue<std::pair<DatabaseManager::SelectTask, DatabaseManager::SelectCallback>> m_selectQueue;
 };

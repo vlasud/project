@@ -44,11 +44,11 @@ template <typename T, size_t N> class StaticPool
         return N;
     }
 
-    void forEach(std::function<bool(T *)> func)
+    void forEach(std::function<bool(T &)> func)
     {
         for (size_t i = 0; i < N; ++i)
         {
-            if (!func(&m_pool[i]))
+            if (!func(m_pool[i]))
             {
                 break;
             }

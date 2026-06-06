@@ -13,13 +13,13 @@ class ThreadPool
   public:
     struct Task
     {
-        std::function<void()> asyncFunc;
-        std::function<void()> resultCallback;
+        std::function<void()> func;
+        std::function<void()> callback;
     };
 
     static void initialize(size_t threadCount);
     static void addTask(std::function<void()> task);
-    static void addTaskWithResult(Task task);
+    static void addTaskWithCallback(Task task);
     static void shutdown();
     static void flush();
 
