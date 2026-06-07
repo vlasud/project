@@ -30,6 +30,8 @@ class GameMode : public IComponent, public CoreEventHandler
 
         m_serviceRegister.registerServices();
         m_systemRegister.registerSystems(*core, m_serviceRegister);
+
+        core->useStuntBonuses(false);
     }
 
     void onInit(IComponentList *components) override

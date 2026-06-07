@@ -5,6 +5,7 @@
 #include "mysqlx/xdevapi.h"
 #include "sodium/crypto_pwhash.h"
 #include "types.hpp"
+#include <Server/Components/Dialogs/dialogs.hpp>
 #include <sodium.h>
 
 PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -90,7 +91,10 @@ void PlayerAuthSystem::runLogin(int playerId)
         return;
     }
 
-    player->sendClientMessage(Colour::White(), "runLogin");
+    // auto dialog = player->_queryExtension<IPlayerDialogData>();
+    // dialog->show(*player, 0, DialogStyle_INPUT, "Test", "test", "test", "");
+
+    player->sendClientMessage(Colour::White(), "Как дела?");
 
     std::string hash = m_playerAuthService.getPlayerPasswordHash(playerId);
     std::string password = "vlasud2204";
