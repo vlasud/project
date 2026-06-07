@@ -14,8 +14,8 @@ class PlayerAuthSystem : public BaseSystem, public PlayerConnectEventHandler
     void onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason) override;
 
   private:
-    void runRegistration(IPlayer &player);
-    void runLogin(IPlayer &player);
+    void runRegistration(int playerId);
+    void runLogin(int playerId);
 
     PlayerAuthService &m_playerAuthService;
     PlayerConnectionVersionService &m_playerConnectionVersionService;

@@ -1,7 +1,6 @@
 #include "ThreadPool.h"
 #include "../Log/LogManager.h"
 #include "fmt/base.h"
-#include <functional>
 #include <mutex>
 
 void ThreadPool::initialize(const size_t threadCount)
@@ -24,25 +23,6 @@ void ThreadPool::initialize(const size_t threadCount)
     LogManager::log(LogLevel::Message, text);
 }
 
-void ThreadPool::addTask(std::function<void()> task)
-{
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        Task newTask{std::move(task), nullptr};
-        m_tasks.emplace(std::move(newTask));
-    }
-    m_condition.notify_one();
-}
-
-void ThreadPool::addTaskWithCallback(Task task)
-{
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_tasks.emplace(std::move(task));
-    }
-    m_condition.notify_one();
-}
-
 void ThreadPool::shutdown()
 {
     m_stop = true;
@@ -63,16 +43,16 @@ void ThreadPool::shutdown()
 // their tasks.
 void ThreadPool::flush()
 {
-    std::vector<std::function<void()>> callbacks;
-
+    std::queue<std::unique_ptr<ITask>> tasks;
     {
         std::lock_guard<std::mutex> lock(m_callbackMutex);
-        callbacks.swap(m_callbacks);
+        tasks.swap(m_completedTasks);
     }
 
-    for (auto &callback : callbacks)
+    while (!tasks.empty())
     {
-        callback();
+        tasks.front()->call();
+        tasks.pop();
     }
 }
 
@@ -80,7 +60,7 @@ void ThreadPool::workerThread()
 {
     while (!m_stop)
     {
-        Task task;
+        std::unique_ptr<ITask> task;
 
         {
             std::unique_lock<std::mutex> lock(m_mutex);
@@ -99,12 +79,11 @@ void ThreadPool::workerThread()
             m_tasks.pop();
         }
 
-        task.func();
+        task->run();
 
-        if (task.callback)
         {
-            std::lock_guard<std::mutex> callbackLock(m_callbackMutex);
-            m_callbacks.push_back(std::move(task.callback));
+            std::lock_guard lock(m_callbackMutex);
+            m_completedTasks.push(std::move(task));
         }
     }
 }

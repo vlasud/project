@@ -35,3 +35,11 @@ else()
         pthread
     )
 endif()
+
+set(LIBSODIUM_CONNECTOR_DIR "${CMAKE_SOURCE_DIR}/ThirdParty/libsodium-1.0.22")
+target_include_directories(${PROJECT_NAME} PRIVATE
+    "${LIBSODIUM_CONNECTOR_DIR}/include"
+)
+target_link_libraries(${PROJECT_NAME} PRIVATE
+        "${LIBSODIUM_CONNECTOR_DIR}/lib/libsodium.lib"
+)

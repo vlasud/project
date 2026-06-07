@@ -4,6 +4,7 @@
 #include "../ThreadPool/ThreadPool.h"
 #include "core.hpp"
 #include "mysqlx/devapi/settings.h"
+#include "mysqlx/xdevapi.h"
 #include <memory>
 
 namespace
@@ -24,16 +25,6 @@ void SessionWrapper::initialize()
 mysqlx::Schema SessionWrapper::getSchema()
 {
     return m_session->getSchema(DATABASE);
-}
-
-void SessionWrapper::setRowResult(mysqlx::RowResult result)
-{
-    m_result = std::move(result);
-}
-
-mysqlx::RowResult &&SessionWrapper::moveOutRowResult()
-{
-    return std::move(m_result);
 }
 
 void DatabaseManager::initialize()
@@ -58,14 +49,15 @@ void DatabaseManager::throwQuery(DatabaseManager::Task task)
         return;
     }
 
-    ThreadPool::Task asyncTask;
+    ThreadPool::Task<bool> asyncTask;
 
     asyncTask.func = [task = std::move(task), sessionWrapper]()
     {
         task(sessionWrapper->getSchema());
+        return true;
     };
 
-    asyncTask.callback = [sessionWrapper]()
+    asyncTask.callback = [sessionWrapper](...)
     {
         m_sessionPool.release(sessionWrapper);
 
@@ -77,7 +69,7 @@ void DatabaseManager::throwQuery(DatabaseManager::Task task)
         }
     };
 
-    ThreadPool::addTaskWithCallback(std::move(asyncTask));
+    ThreadPool::addTask(std::move(asyncTask));
 }
 
 // Not thread safe, should be called from the main thread
@@ -90,16 +82,16 @@ void DatabaseManager::selectQuery(DatabaseManager::SelectTask task, DatabaseMana
         return;
     }
 
-    ThreadPool::Task asyncTask;
+    ThreadPool::Task<mysqlx::RowResult> asyncTask;
 
     asyncTask.func = [task = std::move(task), sessionWrapper]()
     {
-        sessionWrapper->setRowResult(task(sessionWrapper->getSchema()));
+        return task(sessionWrapper->getSchema());
     };
 
-    asyncTask.callback = [sessionWrapper, callback = std::move(callback)]()
+    asyncTask.callback = [callback = std::move(callback), sessionWrapper](mysqlx::RowResult result)
     {
-        callback(sessionWrapper->moveOutRowResult());
+        callback(std::move(result));
         m_sessionPool.release(sessionWrapper);
 
         if (!m_selectQueue.empty())
@@ -110,5 +102,5 @@ void DatabaseManager::selectQuery(DatabaseManager::SelectTask task, DatabaseMana
         }
     };
 
-    ThreadPool::addTaskWithCallback(std::move(asyncTask));
+    ThreadPool::addTask(std::move(asyncTask));
 }

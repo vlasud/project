@@ -9,5 +9,5 @@ PlayerConnectionVersionSystem::PlayerConnectionVersionSystem(ICore &core, const 
 
 void PlayerConnectionVersionSystem::onPlayerConnect(IPlayer &player)
 {
-    m_playerConnectionVersionService.changePlayerConnectionVersion(player.getID());
+    m_playerConnectionVersionService.changeVersion(player.getID());
 }

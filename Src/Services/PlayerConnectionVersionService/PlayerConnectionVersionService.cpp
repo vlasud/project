@@ -1,11 +1,11 @@
 #include "PlayerConnectionVersionService.h"
 
-void PlayerConnectionVersionService::changePlayerConnectionVersion(int playerID)
+void PlayerConnectionVersionService::changeVersion(int playerID)
 {
     m_playerConnectionVersions[playerID]++;
 }
 
-int PlayerConnectionVersionService::getPlayerConnectionVersion(int playerID) const
+int PlayerConnectionVersionService::getVersion(int playerID) const
 {
     return m_playerConnectionVersions[playerID];
 }

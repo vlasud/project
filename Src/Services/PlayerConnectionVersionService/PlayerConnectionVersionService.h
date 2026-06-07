@@ -7,8 +7,8 @@
 class PlayerConnectionVersionService final : public IService
 {
   public:
-    void changePlayerConnectionVersion(int playerID);
-    int getPlayerConnectionVersion(int playerID) const;
+    void changeVersion(int playerID);
+    int getVersion(int playerID) const;
 
   private:
     std::array<int, MAX_PLAYERS> m_playerConnectionVersions{};

@@ -10,12 +10,9 @@ class SessionWrapper
   public:
     void initialize();
     mysqlx::Schema getSchema();
-    void setRowResult(mysqlx::RowResult result);
-    mysqlx::RowResult &&moveOutRowResult();
 
   private:
     std::unique_ptr<mysqlx::Session> m_session;
-    mysqlx::RowResult m_result;
 };
 
 class DatabaseManager
