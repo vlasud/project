@@ -8,7 +8,7 @@ class SystemRegister final
 {
   public:
     void registerSystems(ICore &core, const ServiceRegister &serviceRegister);
-    void initializeSystems();
+    void initializeSystems(IComponentList *components);
     void resetSystems();
 
   private:

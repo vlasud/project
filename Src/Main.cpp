@@ -6,6 +6,7 @@
 #include "Log/LogManager.h"
 #include "Services/ServiceRegister.h"
 #include "Systems/SystemRegister.h"
+#include <Server/Components/Dialogs/dialogs.hpp>
 
 class GameMode : public IComponent, public CoreEventHandler
 {
@@ -36,7 +37,7 @@ class GameMode : public IComponent, public CoreEventHandler
 
     void onInit(IComponentList *components) override
     {
-        m_systemRegister.initializeSystems();
+        m_systemRegister.initializeSystems(components);
     }
 
     void free() override

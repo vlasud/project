@@ -15,7 +15,7 @@ class BaseSystem
 
     virtual ~BaseSystem() = default;
 
-    virtual void initialize()
+    virtual void initialize(IComponentList *components)
     {
     }
 
