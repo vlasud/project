@@ -2,6 +2,7 @@
 
 #include "../../Database/DatabaseManager.h"
 #include "../../ThreadPool/ThreadPool.h"
+#include "../../Utils/Encoding/Encoding.h"
 #include "mysqlx/xdevapi.h"
 #include "sodium/crypto_pwhash.h"
 #include "types.hpp"
@@ -94,7 +95,7 @@ void PlayerAuthSystem::runLogin(int playerId)
     // auto dialog = player->_queryExtension<IPlayerDialogData>();
     // dialog->show(*player, 0, DialogStyle_INPUT, "Test", "test", "test", "");
 
-    player->sendClientMessage(Colour::White(), "Как дела?");
+    player->sendClientMessage(Colour::White(), Encoding::utf8Tocp1251("Как дела?Как дела?Как дела?Как дела?Как дела?"));
 
     std::string hash = m_playerAuthService.getPlayerPasswordHash(playerId);
     std::string password = "vlasud2204";
