@@ -6,11 +6,13 @@
 #include "../BaseSystem.h"
 #include "player.hpp"
 #include <Server/Components/Classes/classes.hpp>
+#include <cstdint>
 
 class PlayerAuthSystem : public BaseSystem,
                          public PlayerConnectEventHandler,
                          public PlayerChangeEventHandler,
-                         public ClassEventHandler
+                         public ClassEventHandler,
+                         public PlayerSpawnEventHandler
 {
   public:
     PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRegister);
@@ -24,26 +26,46 @@ class PlayerAuthSystem : public BaseSystem,
 
     bool onPlayerRequestClass(IPlayer &player, unsigned int classId) override;
 
+    void onPlayerSpawn(IPlayer &player) override;
+
   private:
-    void resetPlayerState(int playerId);
+    enum class ESex : uint8_t
+    {
+        MALE = 0,
+        FEMALE
+    };
+
+    struct LoginData
+    {
+        int loginAttempts = 0;
+        std::string passwordHash;
+    };
+
+    struct RegistrationData
+    {
+        ESex sex = ESex::MALE;
+        std::string password;
+    };
+
+    void resetState(int playerId);
     void runRegistration(int playerId);
     void runLogin(int playerId);
+    void runChooseSex(int playerId);
     void runSelectSkin(int playerId);
     void buildLoginDialogs();
     void buildRegistrationDialogs();
+    void finalizeRegistration(IPlayer &player);
     void finalize(IPlayer &player);
 
-    PlayerAuthService &m_playerAuthService;
-    PlayerConnectionVersionService &m_playerConnectionVersionService;
-    PlayerDialogService &m_playerDialogService;
+    PlayerAuthService &m_authService;
+    PlayerConnectionVersionService &m_connectionVersionService;
+    PlayerDialogService &m_dialogService;
+
+    std::array<LoginData, MAX_PLAYERS> m_loginData;
+    std::array<RegistrationData, MAX_PLAYERS> m_registrationData;
 
     int m_loginDialogId = -1;
     int m_registrationPasswordDialogId = -1;
     int m_registrationConfirmPassowrdDialogId = -1;
-
-    std::array<bool, MAX_PLAYERS> m_isPlayerSelectSkin{};
-    std::array<int, MAX_PLAYERS> m_playerLoginAttempts{};
-    std::array<int, MAX_PLAYERS> m_playerSelectedSkinIndex{};
-    std::array<std::string, MAX_PLAYERS> m_playerPassword{};
-    std::array<std::string, MAX_PLAYERS> m_playersPasswordHash{};
+    int m_registrationChooseSexDialog = -1;
 };

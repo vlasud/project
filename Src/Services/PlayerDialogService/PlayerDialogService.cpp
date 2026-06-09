@@ -34,10 +34,15 @@ void PlayerDialogService::showDialog(IPlayer &player, int dialogId)
         return;
     }
 
-    LogManager::log(Message, "showDialog");
     const Dialog &dialog = m_dialogs[dialogId];
     m_dialogExtension->show(player, dialogId, dialog.style, dialog.title, dialog.body, dialog.leftButton,
                             dialog.rightButton);
+}
+
+void PlayerDialogService::setDialogBody(int dialogId, StringView body)
+{
+    Dialog &dialog = m_dialogs[dialogId];
+    dialog.body = body.data();
 }
 
 bool PlayerDialogService::validateDialog(int playerId, int dialogId)

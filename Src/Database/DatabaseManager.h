@@ -8,7 +8,7 @@
 class SessionWrapper
 {
   public:
-    void initialize();
+    bool initialize();
     mysqlx::Schema getSchema();
 
   private:

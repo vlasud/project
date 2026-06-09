@@ -4,12 +4,24 @@
 #include "../IService.h"
 #include <array>
 
+class PlayerAuthSystem;
+
 class PlayerAuthService final : public IService
 {
+    friend PlayerAuthSystem;
+
   public:
-    bool isPlayerAuthenticated(size_t playerId) const;
-    void setPlayerAuthenticated(size_t playerId, bool authenticated);
+    enum class EAuthState : uint8_t
+    {
+        UNKNOWN = 0,
+        AUTHORIZING,
+        AUTHENTICATED
+    };
+
+    EAuthState getAuthState(size_t playerId) const;
 
   private:
-    std::array<bool, MAX_PLAYERS> m_authenticatedPlayers{};
+    void setPlayerAuthenticated(size_t playerId, EAuthState state);
+
+    std::array<EAuthState, MAX_PLAYERS> m_authState{};
 };

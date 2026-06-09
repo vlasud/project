@@ -16,10 +16,19 @@ const std::string DATABASE = "test";
 const std::string PORT = "33060";
 } // namespace
 
-void SessionWrapper::initialize()
+bool SessionWrapper::initialize()
 {
     std::string uri = "mysqlx://" + USER + ":" + PASSWORD + "@" + HOST + ":" + PORT + "/" + DATABASE;
-    m_session = std::make_unique<mysqlx::Session>(uri);
+    try
+    {
+        m_session = std::make_unique<mysqlx::Session>(uri);
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        LogManager::log(Error, std::string("Failed to open MySQL session: ") + e.what());
+        return false;
+    }
 }
 
 mysqlx::Schema SessionWrapper::getSchema()
@@ -29,14 +38,25 @@ mysqlx::Schema SessionWrapper::getSchema()
 
 void DatabaseManager::initialize()
 {
+    size_t opened = 0;
     m_sessionPool.forEach(
-        [](SessionWrapper &wrapper)
+        [&opened](SessionWrapper &wrapper)
         {
-            wrapper.initialize();
+            if (wrapper.initialize())
+            {
+                ++opened;
+            }
             return true;
         });
 
-    LogManager::log(Message, "DatabaseManager initialized with " + std::to_string(m_sessionPool.size()) + " sessions");
+    if (opened == 0)
+    {
+        LogManager::log(Error, "DatabaseManager: no MySQL sessions could be opened. Check that MySQL X Protocol "
+                               "(port 33060) is reachable and credentials are correct.");
+        return;
+    }
+
+    LogManager::log(Message, "DatabaseManager initialized with " + std::to_string(opened) + " sessions");
 }
 
 // Not thread safe, should be called from the main thread

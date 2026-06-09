@@ -29,6 +29,7 @@ class PlayerDialogService final : public IService
   public:
     int buildDialog(Dialog &&);
     void showDialog(IPlayer &player, int dialogId);
+    void setDialogBody(int dialogId, StringView body);
 
   private:
     bool validateDialog(int playerId, int dialogId);
