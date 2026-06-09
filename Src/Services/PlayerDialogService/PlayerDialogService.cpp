@@ -2,55 +2,55 @@
 #include "../../Log/LogManager.h"
 #include "component.hpp"
 
-int PlayerDialogService::buildDialog(Dialog &&dialog)
+void PlayerDialogService::show(IPlayer &player, const Dialog &dialog, Handler handler)
 {
-    m_dialogs.emplace_back(std::move(dialog));
-    return m_dialogs.size() - 1;
-}
-
-void PlayerDialogService::showDialog(IPlayer &player, int dialogId)
-{
-    if (!m_dialogExtension)
+    IPlayerDialogData *data = queryExtension<IPlayerDialogData>(player);
+    if (!data)
     {
-        m_dialogExtension = queryExtension<IPlayerDialogData>(player);
-    }
-
-    if (!m_dialogExtension)
-    {
-        LogManager::log(Message, "Failed to load IPlayerDialogData");
-        assert(false && "Failed to load IPlayerDialogData");
+        LogManager::log(Error, "PlayerDialogService: IPlayerDialogData extension is missing");
         return;
     }
 
-    if (dialogId >= m_dialogs.size())
+    Slot &slot = m_slots[player.getID()];
+    slot.serial = slot.serial % 32000 + 1; // id в диапазоне 1..32000, новый на каждый показ
+    slot.activeId = slot.serial;
+    slot.handler = std::move(handler);
+
+    data->show(player, slot.activeId, dialog.style, dialog.title, dialog.body, dialog.leftButton, dialog.rightButton);
+}
+
+void PlayerDialogService::hide(IPlayer &player)
+{
+    Slot &slot = m_slots[player.getID()];
+    slot.activeId = -1;
+    slot.handler = nullptr;
+
+    if (IPlayerDialogData *data = queryExtension<IPlayerDialogData>(player))
     {
-        dialogId = -1;
+        data->hide(player);
+    }
+}
+
+void PlayerDialogService::handleResponse(IPlayer &player, int dialogId, DialogResponse response, int listItem,
+                                         StringView inputText)
+{
+    Slot &slot = m_slots[player.getID()];
+    if (dialogId != slot.activeId || !slot.handler)
+    {
+        return; // запоздалый или подделанный ответ
     }
 
-    m_playersCurrentDialogId[player.getID()] = dialogId;
+    // Забираем колбэк до вызова: внутри него обычно show() следующего экрана, который займёт слот.
+    Handler handler = std::move(slot.handler);
+    slot.handler = nullptr;
+    slot.activeId = -1;
 
-    if (dialogId < 0)
-    {
-        return;
-    }
-
-    const Dialog &dialog = m_dialogs[dialogId];
-    m_dialogExtension->show(player, dialogId, dialog.style, dialog.title, dialog.body, dialog.leftButton,
-                            dialog.rightButton);
+    handler(response, listItem, inputText);
 }
 
-void PlayerDialogService::setDialogBody(int dialogId, StringView body)
+void PlayerDialogService::resetPlayer(int playerId)
 {
-    Dialog &dialog = m_dialogs[dialogId];
-    dialog.body = body.data();
-}
-
-bool PlayerDialogService::validateDialog(int playerId, int dialogId)
-{
-    return m_playersCurrentDialogId[playerId] == dialogId;
-}
-
-Dialog &PlayerDialogService::getPlayerDialog(int playerId)
-{
-    return m_dialogs[m_playersCurrentDialogId[playerId]];
+    // serial не сбрасываем: он продолжает защищать от запоздалых ответов прошлого подключения.
+    m_slots[playerId].activeId = -1;
+    m_slots[playerId].handler = nullptr;
 }

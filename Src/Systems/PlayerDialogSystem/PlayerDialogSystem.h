@@ -5,7 +5,9 @@
 #include "Server/Components/Dialogs/dialogs.hpp"
 #include "player.hpp"
 
-class PlayerDialogSystem : public BaseSystem, public PlayerDialogEventHandler
+// Единственный подписчик на onDialogResponse: маршрутизирует ответы в PlayerDialogService
+// и чистит per-player слот диалога при отключении игрока.
+class PlayerDialogSystem : public BaseSystem, public PlayerDialogEventHandler, public PlayerConnectEventHandler
 {
   public:
     PlayerDialogSystem(ICore &core, const ServiceRegister &serviceRegister);
@@ -14,6 +16,7 @@ class PlayerDialogSystem : public BaseSystem, public PlayerDialogEventHandler
 
     void onDialogResponse(IPlayer &player, int dialogId, DialogResponse response, int listItem,
                           StringView inputText) override;
+    void onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason) override;
 
   private:
     PlayerDialogService &m_playerDialogService;

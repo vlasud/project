@@ -4,6 +4,7 @@
 PlayerDialogSystem::PlayerDialogSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_playerDialogService(serviceRegister.getService<PlayerDialogService>())
 {
+    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
 }
 
 void PlayerDialogSystem::initialize(IComponentList *components)
@@ -15,21 +16,10 @@ void PlayerDialogSystem::initialize(IComponentList *components)
 void PlayerDialogSystem::onDialogResponse(IPlayer &player, int dialogId, DialogResponse response, int listItem,
                                           StringView inputText)
 {
-    const int playerId = player.getID();
+    m_playerDialogService.handleResponse(player, dialogId, response, listItem, inputText);
+}
 
-    if (!m_playerDialogService.validateDialog(playerId, dialogId))
-    {
-        return;
-    }
-
-    Dialog &dialog = m_playerDialogService.getPlayerDialog(playerId);
-
-    if (response == DialogResponse_Right && dialog.rightAction)
-    {
-        dialog.rightAction(playerId, listItem, inputText);
-    }
-    else if (response == DialogResponse_Left && dialog.leftAction)
-    {
-        dialog.leftAction(playerId, listItem, inputText);
-    }
+void PlayerDialogSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)
+{
+    m_playerDialogService.resetPlayer(player.getID());
 }

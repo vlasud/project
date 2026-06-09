@@ -6,7 +6,6 @@
 #include "../../Utils/Encoding/Encoding.h"
 #include "Server/Components/Dialogs/dialogs.hpp"
 #include "core.hpp"
-#include "fmt/base.h"
 #include "mysqlx/xdevapi.h"
 #include "sodium/crypto_pwhash.h"
 #include "types.hpp"
@@ -22,9 +21,6 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
-
-    buildLoginDialogs();
-    buildRegistrationDialogs();
 }
 
 void PlayerAuthSystem::initialize(IComponentList *components)
@@ -125,182 +121,198 @@ void PlayerAuthSystem::resetState(int playerId)
 void PlayerAuthSystem::runRegistration(int playerId)
 {
     IPlayer *player = m_core.getPlayers().get(playerId);
-    m_dialogService.showDialog(*player, m_registrationPasswordDialogId);
+    if (!player)
+    {
+        return;
+    }
+    showRegistrationPasswordDialog(*player);
 }
 
 void PlayerAuthSystem::runLogin(int playerId)
 {
     IPlayer *player = m_core.getPlayers().get(playerId);
-
-    char buffer[100] = {0};
-    fmt::format_to_n(buffer, sizeof(buffer), "Аккаунт: {}\n\nВведите пароль", player->getName());
-    m_dialogService.setDialogBody(m_loginDialogId, Encoding::utf8Tocp1251(buffer));
-    m_dialogService.showDialog(*player, m_loginDialogId);
+    if (!player)
+    {
+        return;
+    }
+    showLoginDialog(*player);
 }
 
 void PlayerAuthSystem::runChooseSex(int playerId)
 {
     IPlayer *player = m_core.getPlayers().get(playerId);
-    m_dialogService.showDialog(*player, m_registrationChooseSexDialog);
+    if (!player)
+    {
+        return;
+    }
+    showChooseSexDialog(*player);
 }
 
 void PlayerAuthSystem::runSelectSkin(int playerId)
 {
     IPlayer *player = m_core.getPlayers().get(playerId);
+    if (!player)
+    {
+        return;
+    }
 
     m_authService.setPlayerAuthenticated(playerId, PlayerAuthService::EAuthState::AUTHENTICATED);
     player->setSpectating(false);
-    /*player->interpolateCameraPosition({2059.5425, -1104.4227, 30.5487}, {2059.5425, -1104.4227, 24}, 500,
-                                      PlayerCameraCutType::PlayerCameraCutType_Move);
-    player->interpolateCameraLookAt({2055.8442, -1104.7142, 30}, {2055.8442, -1104.7142, 24}, 500,
-                                    PlayerCameraCutType::PlayerCameraCutType_Move);*/
     player->setSkin(22);
 }
 
-void PlayerAuthSystem::buildLoginDialogs()
+void PlayerAuthSystem::showLoginDialog(IPlayer &player)
 {
-    {
-        Dialog dialog;
-        dialog.style = DialogStyle_PASSWORD;
-        dialog.title = Encoding::utf8Tocp1251("Авторизация");
-        dialog.body = Encoding::utf8Tocp1251("Введите свой пароль");
+    Dialog dialog;
+    dialog.style = DialogStyle_PASSWORD;
+    dialog.title = Encoding::utf8Tocp1251("Авторизация");
+    dialog.body =
+        Encoding::utf8Tocp1251(fmt::format("Аккаунт: {}\n\nВведите пароль", player.getName().to_string()));
+    dialog.leftButton = Encoding::utf8Tocp1251("Далее");
+    dialog.rightButton = Encoding::utf8Tocp1251("Выйти");
 
-        dialog.leftButton = Encoding::utf8Tocp1251("Далее");
-        dialog.leftAction = [this](int playerId, int, StringView text)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
+    m_dialogService.show(player, dialog,
+                         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (!player)
+                             {
+                                 return;
+                             }
 
-            if (text.size() < 8)
-            {
-                m_dialogService.showDialog(*player, m_loginDialogId);
-                player->sendClientMessage(Colour::White(), Encoding::utf8Tocp1251("Неверный пароль!"));
-                return;
-            }
+                             if (response == DialogResponse_Right)
+                             {
+                                 player->kick();
+                                 return;
+                             }
 
-            const std::string password = text.to_string();
-            const std::string hash = m_loginData[playerId].passwordHash;
+                             if (text.size() < 8)
+                             {
+                                 player->sendClientMessage(Colour::White(),
+                                                           Encoding::utf8Tocp1251("Неверный пароль!"));
+                                 showLoginDialog(*player);
+                                 return;
+                             }
 
-            ThreadPool::Task<bool> task;
-            task.func = [password = std::move(password), hash = std::move(hash)]()
-            {
-                return crypto_pwhash_str_verify(hash.c_str(), password.c_str(), password.size()) == 0;
-            };
-            task.callback = [this, playerId](bool verifyResult)
-            {
-                IPlayer *player = m_core.getPlayers().get(playerId);
+                             ThreadPool::Task<bool> task;
+                             task.func = [password = text.to_string(),
+                                          hash = m_loginData[playerId].passwordHash]()
+                             {
+                                 return crypto_pwhash_str_verify(hash.c_str(), password.c_str(), password.size()) ==
+                                        0;
+                             };
+                             task.callback = [this, playerId](bool verified)
+                             {
+                                 IPlayer *player = m_core.getPlayers().get(playerId);
+                                 if (!player)
+                                 {
+                                     return;
+                                 }
 
-                if (!verifyResult)
-                {
-                    m_dialogService.showDialog(*player, m_loginDialogId);
-                    player->sendClientMessage(Colour::White(), Encoding::utf8Tocp1251("Неверный пароль!"));
-                    return;
-                }
+                                 if (!verified)
+                                 {
+                                     player->sendClientMessage(Colour::White(),
+                                                               Encoding::utf8Tocp1251("Неверный пароль!"));
+                                     showLoginDialog(*player);
+                                     return;
+                                 }
 
-                finalize(*player);
-            };
+                                 finalize(*player);
+                             };
 
-            ThreadPool::addTask(task);
-        };
-
-        dialog.rightButton = Encoding::utf8Tocp1251("Выйти");
-        dialog.rightAction = [this](int playerId, ...)
-        {
-            m_core.getPlayers().get(playerId)->kick();
-        };
-
-        m_loginDialogId = m_dialogService.buildDialog(std::move(dialog));
-    }
+                             ThreadPool::addTask(std::move(task));
+                         });
 }
 
-void PlayerAuthSystem::buildRegistrationDialogs()
+void PlayerAuthSystem::showRegistrationPasswordDialog(IPlayer &player)
 {
-    {
-        Dialog dialog;
-        dialog.style = DialogStyle_PASSWORD;
-        dialog.title = Encoding::utf8Tocp1251("Регистрация - Пароль");
-        dialog.body = Encoding::utf8Tocp1251("Придумайте и введите пароль. Минимум 8 символов");
+    Dialog dialog;
+    dialog.style = DialogStyle_PASSWORD;
+    dialog.title = Encoding::utf8Tocp1251("Регистрация - Пароль");
+    dialog.body = Encoding::utf8Tocp1251("Придумайте и введите пароль. Минимум 8 символов");
+    dialog.leftButton = Encoding::utf8Tocp1251("Далее");
+    dialog.rightButton = Encoding::utf8Tocp1251("Выйти");
 
-        dialog.leftButton = Encoding::utf8Tocp1251("Далее");
-        dialog.leftAction = [this](int playerId, int, StringView text)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
+    m_dialogService.show(player, dialog,
+                         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (!player)
+                             {
+                                 return;
+                             }
 
-            if (text.size() < 8)
-            {
-                player->sendClientMessage(Colour::White(), Encoding::utf8Tocp1251("Минимум 8 символов!"));
-                m_dialogService.showDialog(*player, m_registrationPasswordDialogId);
-                return;
-            }
+                             if (response == DialogResponse_Right)
+                             {
+                                 player->kick();
+                                 return;
+                             }
 
-            m_registrationData[playerId].password = text.to_string();
+                             if (text.size() < 8)
+                             {
+                                 player->sendClientMessage(Colour::White(),
+                                                           Encoding::utf8Tocp1251("Минимум 8 символов!"));
+                                 showRegistrationPasswordDialog(*player);
+                                 return;
+                             }
 
-            m_dialogService.showDialog(*player, m_registrationConfirmPassowrdDialogId);
-        };
+                             m_registrationData[playerId].password = text.to_string();
+                             showRegistrationConfirmDialog(*player);
+                         });
+}
 
-        dialog.rightButton = Encoding::utf8Tocp1251("Выйти");
-        dialog.rightAction = [this](int playerId, ...)
-        {
-            m_core.getPlayers().get(playerId)->kick();
-        };
+void PlayerAuthSystem::showRegistrationConfirmDialog(IPlayer &player)
+{
+    Dialog dialog;
+    dialog.style = DialogStyle_PASSWORD;
+    dialog.title = Encoding::utf8Tocp1251("Регистрация - Подтверждение пароля");
+    dialog.body = Encoding::utf8Tocp1251("Повторите введенный пароль. Можете вернуться назад и изменить пароль");
+    dialog.leftButton = Encoding::utf8Tocp1251("Далее");
+    dialog.rightButton = Encoding::utf8Tocp1251("Назад");
 
-        m_registrationPasswordDialogId = m_dialogService.buildDialog(std::move(dialog));
-    }
+    m_dialogService.show(player, dialog,
+                         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (!player)
+                             {
+                                 return;
+                             }
 
-    {
-        Dialog dialog;
-        dialog.style = DialogStyle_PASSWORD;
-        dialog.title = Encoding::utf8Tocp1251("Регистрация - Подтверждение пароля");
-        dialog.body = Encoding::utf8Tocp1251("Повторите введенный пароль. Можете вернуться назад и изменить пароль");
+                             if (response == DialogResponse_Right)
+                             {
+                                 showRegistrationPasswordDialog(*player);
+                                 return;
+                             }
 
-        dialog.leftButton = Encoding::utf8Tocp1251("Далее");
-        dialog.leftAction = [this](int playerId, int, StringView text)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (m_registrationData[playerId].password != text.to_string())
+                             {
+                                 player->sendClientMessage(Colour::White(),
+                                                           Encoding::utf8Tocp1251("Пароли не совпадают"));
+                                 showRegistrationConfirmDialog(*player);
+                                 return;
+                             }
 
-            const std::string password = text.to_string();
+                             runChooseSex(playerId);
+                         });
+}
 
-            if (m_registrationData[playerId].password != password)
-            {
-                player->sendClientMessage(Colour::White(), Encoding::utf8Tocp1251("Пароли не совпадают"));
-                m_dialogService.showDialog(*player, m_registrationConfirmPassowrdDialogId);
-                return;
-            }
+void PlayerAuthSystem::showChooseSexDialog(IPlayer &player)
+{
+    Dialog dialog;
+    dialog.style = DialogStyle_MSGBOX;
+    dialog.title = Encoding::utf8Tocp1251("Регистрация - Пол");
+    dialog.body = Encoding::utf8Tocp1251("Выберите пол персонажа");
+    dialog.leftButton = Encoding::utf8Tocp1251("Мужской");
+    dialog.rightButton = Encoding::utf8Tocp1251("Женский");
 
-            runChooseSex(playerId);
-        };
-
-        dialog.rightButton = Encoding::utf8Tocp1251("Назад");
-        dialog.rightAction = [this](int playerId, ...)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
-            m_dialogService.showDialog(*player, m_registrationPasswordDialogId);
-        };
-
-        m_registrationConfirmPassowrdDialogId = m_dialogService.buildDialog(std::move(dialog));
-    }
-
-    {
-        Dialog dialog;
-        dialog.style = DialogStyle_MSGBOX;
-        dialog.title = Encoding::utf8Tocp1251("Регистрация - Пол");
-        dialog.body = Encoding::utf8Tocp1251("Выберите пол персонажа");
-
-        dialog.leftButton = Encoding::utf8Tocp1251("Мужской");
-        dialog.leftAction = [this](int playerId, int, StringView text)
-        {
-            m_registrationData[playerId].sex = ESex::MALE;
-            runSelectSkin(playerId);
-        };
-
-        dialog.rightButton = Encoding::utf8Tocp1251("Женский");
-        dialog.rightAction = [this](int playerId, ...)
-        {
-            m_registrationData[playerId].sex = ESex::FEMALE;
-            runSelectSkin(playerId);
-        };
-
-        m_registrationChooseSexDialog = m_dialogService.buildDialog(std::move(dialog));
-    }
+    m_dialogService.show(player, dialog,
+                         [this, playerId = player.getID()](DialogResponse response, int, StringView)
+                         {
+                             m_registrationData[playerId].sex =
+                                 (response == DialogResponse_Left) ? ESex::MALE : ESex::FEMALE;
+                             runSelectSkin(playerId);
+                         });
 }
 
 void PlayerAuthSystem::finalizeRegistration(IPlayer &player)

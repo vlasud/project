@@ -52,8 +52,10 @@ class PlayerAuthSystem : public BaseSystem,
     void runLogin(int playerId);
     void runChooseSex(int playerId);
     void runSelectSkin(int playerId);
-    void buildLoginDialogs();
-    void buildRegistrationDialogs();
+    void showLoginDialog(IPlayer &player);
+    void showRegistrationPasswordDialog(IPlayer &player);
+    void showRegistrationConfirmDialog(IPlayer &player);
+    void showChooseSexDialog(IPlayer &player);
     void finalizeRegistration(IPlayer &player);
     void finalize(IPlayer &player);
 
@@ -63,9 +65,4 @@ class PlayerAuthSystem : public BaseSystem,
 
     std::array<LoginData, MAX_PLAYERS> m_loginData;
     std::array<RegistrationData, MAX_PLAYERS> m_registrationData;
-
-    int m_loginDialogId = -1;
-    int m_registrationPasswordDialogId = -1;
-    int m_registrationConfirmPassowrdDialogId = -1;
-    int m_registrationChooseSexDialog = -1;
 };
