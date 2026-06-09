@@ -156,9 +156,7 @@ void PlayerAuthSystem::runSelectSkin(int playerId)
         return;
     }
 
-    m_authService.setPlayerAuthenticated(playerId, PlayerAuthService::EAuthState::AUTHENTICATED);
-    player->setSpectating(false);
-    player->setSkin(22);
+    finalizeRegistration(*player);
 }
 
 void PlayerAuthSystem::showLoginDialog(IPlayer &player)
@@ -166,8 +164,7 @@ void PlayerAuthSystem::showLoginDialog(IPlayer &player)
     Dialog dialog;
     dialog.style = DialogStyle_PASSWORD;
     dialog.title = Encoding::utf8Tocp1251("Авторизация");
-    dialog.body =
-        Encoding::utf8Tocp1251(fmt::format("Аккаунт: {}\n\nВведите пароль", player.getName().to_string()));
+    dialog.body = Encoding::utf8Tocp1251(fmt::format("Аккаунт: {}\n\nВведите пароль", player.getName().to_string()));
     dialog.leftButton = Encoding::utf8Tocp1251("Далее");
     dialog.rightButton = Encoding::utf8Tocp1251("Выйти");
 
@@ -188,18 +185,15 @@ void PlayerAuthSystem::showLoginDialog(IPlayer &player)
 
                              if (text.size() < 8)
                              {
-                                 player->sendClientMessage(Colour::White(),
-                                                           Encoding::utf8Tocp1251("Неверный пароль!"));
+                                 player->sendClientMessage(Colour::White(), Encoding::utf8Tocp1251("Неверный пароль!"));
                                  showLoginDialog(*player);
                                  return;
                              }
 
                              ThreadPool::Task<bool> task;
-                             task.func = [password = text.to_string(),
-                                          hash = m_loginData[playerId].passwordHash]()
+                             task.func = [password = text.to_string(), hash = m_loginData[playerId].passwordHash]()
                              {
-                                 return crypto_pwhash_str_verify(hash.c_str(), password.c_str(), password.size()) ==
-                                        0;
+                                 return crypto_pwhash_str_verify(hash.c_str(), password.c_str(), password.size()) == 0;
                              };
                              task.callback = [this, playerId](bool verified)
                              {
@@ -339,7 +333,8 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
 
 void PlayerAuthSystem::finalize(IPlayer &player)
 {
-    player.spawn();
-    player.setPosition({2144.5574, -1303.4647, 23.8203});
+    m_authService.setPlayerAuthenticated(player.getID(), PlayerAuthService::EAuthState::AUTHENTICATED);
+    player.setSpectating(false);
     player.setSkin(22);
+    player.setPosition({1762.1505, -1896.2495, 13.5621});
 }
