@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../Macro.h"
+#include "../../Services/PlayerCommandService/PlayerCommandService.h"
 #include "../../Services/PlayerDialogService/PlayerDialogService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
@@ -12,15 +13,13 @@
 
 // Инструмент маппинга: расстановка объектов и акторов на сцене через свободную камеру и диалоговый интерфейс.
 // Команда /editor включает режим и открывает меню.
-class EditorSystem : public BaseSystem, public PlayerTextEventHandler, public PlayerUpdateEventHandler,
-                     public PlayerConnectEventHandler
+class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public PlayerConnectEventHandler
 {
   public:
     EditorSystem(ICore &core, const ServiceRegister &serviceRegister);
 
     void initialize(IComponentList *components) override;
 
-    bool onPlayerCommandText(IPlayer &player, StringView message) override;
     bool onPlayerUpdate(IPlayer &player, TimePoint now) override;
     void onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason) override;
 
@@ -95,6 +94,7 @@ class EditorSystem : public BaseSystem, public PlayerTextEventHandler, public Pl
     IPlayer *editorPlayer(int playerId); // игрок, если онлайн и редактор включён
 
     PlayerDialogService &m_dialogService;
+    PlayerCommandService &m_commandService;
 
     IObjectsComponent *m_objects = nullptr;
     IActorsComponent *m_actors = nullptr;

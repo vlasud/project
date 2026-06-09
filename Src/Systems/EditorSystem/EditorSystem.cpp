@@ -1,6 +1,5 @@
 #include "EditorSystem.h"
 
-#include "../../Log/LogManager.h"
 #include "../../Utils/Encoding/Encoding.h"
 #include "component.hpp"
 #include "glm/geometric.hpp"
@@ -72,11 +71,36 @@ bool parseVec3(const std::string &text, Vector3 &out)
 } // namespace
 
 EditorSystem::EditorSystem(ICore &core, const ServiceRegister &serviceRegister)
-    : BaseSystem(core, serviceRegister), m_dialogService(serviceRegister.getService<PlayerDialogService>())
+    : BaseSystem(core, serviceRegister), m_dialogService(serviceRegister.getService<PlayerDialogService>()),
+      m_commandService(serviceRegister.getService<PlayerCommandService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerTextDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
+
+    m_commandService.add("editor", {},
+                         [this](IPlayer &player, ...)
+                         {
+                             EditorState &state = stateOf(player);
+
+                             if (!state.enabled)
+                             {
+                                 enableEditor(player);
+                                 showMain(player);
+                                 return true;
+                             }
+
+                             // В режиме следования /editor фиксирует сущность и возвращает в её редактирование.
+                             if (state.followCamera && state.selectedIndex >= 0 &&
+                                 state.selectedIndex < (int)state.entities.size())
+                             {
+                                 state.followCamera = false;
+                                 showEntityEdit(player);
+                             }
+                             else
+                             {
+                                 showMain(player);
+                             }
+                         });
 }
 
 void EditorSystem::initialize(IComponentList *components)
@@ -98,37 +122,6 @@ IPlayer *EditorSystem::editorPlayer(int playerId)
         return nullptr;
     }
     return player;
-}
-
-// ------------------------------------------------------------------ commands
-
-bool EditorSystem::onPlayerCommandText(IPlayer &player, StringView message)
-{
-    if (message != "/editor")
-    {
-        return false;
-    }
-
-    EditorState &state = stateOf(player);
-
-    if (!state.enabled)
-    {
-        enableEditor(player);
-        showMain(player);
-        return true;
-    }
-
-    // В режиме следования /editor фиксирует сущность и возвращает в её редактирование.
-    if (state.followCamera && state.selectedIndex >= 0 && state.selectedIndex < (int)state.entities.size())
-    {
-        state.followCamera = false;
-        showEntityEdit(player);
-    }
-    else
-    {
-        showMain(player);
-    }
-    return true;
 }
 
 void EditorSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)
@@ -727,42 +720,39 @@ void EditorSystem::showActorEdit(IPlayer &player)
 
 void EditorSystem::showObjectModelInput(IPlayer &player)
 {
-    m_dialogService.show(player,
-                         makeDialog(DialogStyle_INPUT, "Создать объект", "Введите ID модели объекта", "Создать",
-                                    "Назад"),
-                         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
-                         {
-                             IPlayer *player = editorPlayer(playerId);
-                             if (!player)
-                             {
-                                 return;
-                             }
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_INPUT, "Создать объект", "Введите ID модели объекта", "Создать", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
 
-                             if (response == DialogResponse_Right)
-                             {
-                                 showMain(*player);
-                                 return;
-                             }
+            if (response == DialogResponse_Right)
+            {
+                showMain(*player);
+                return;
+            }
 
-                             int model = 0;
-                             if (!parseInt(text, model))
-                             {
-                                 player->sendClientMessage(Colour::White(),
-                                                           u("Введите корректный числовой ID модели"));
-                                 showObjectModelInput(*player);
-                                 return;
-                             }
+            int model = 0;
+            if (!parseInt(text, model))
+            {
+                player->sendClientMessage(Colour::White(), u("Введите корректный числовой ID модели"));
+                showObjectModelInput(*player);
+                return;
+            }
 
-                             createObjectEntity(*player, model);
-                             showEntityEdit(*player);
-                         });
+            createObjectEntity(*player, model);
+            showEntityEdit(*player);
+        });
 }
 
 void EditorSystem::showActorSkinInput(IPlayer &player)
 {
     m_dialogService.show(player,
-                         makeDialog(DialogStyle_INPUT, "Создать актора", "Введите ID скина актора", "Создать",
-                                    "Назад"),
+                         makeDialog(DialogStyle_INPUT, "Создать актора", "Введите ID скина актора", "Создать", "Назад"),
                          [this, playerId = player.getID()](DialogResponse response, int, StringView text)
                          {
                              IPlayer *player = editorPlayer(playerId);
@@ -780,8 +770,7 @@ void EditorSystem::showActorSkinInput(IPlayer &player)
                              int skin = 0;
                              if (!parseInt(text, skin))
                              {
-                                 player->sendClientMessage(Colour::White(),
-                                                           u("Введите корректный числовой ID скина"));
+                                 player->sendClientMessage(Colour::White(), u("Введите корректный числовой ID скина"));
                                  showActorSkinInput(*player);
                                  return;
                              }
@@ -796,8 +785,8 @@ void EditorSystem::showRotateInput(IPlayer &player, int axis)
     static const char *axisNames[3] = {"X", "Y", "Z"};
     const std::string title = fmt::format("Поворот {}", axisNames[axis]);
 
-    m_dialogService.show(player, makeDialog(DialogStyle_INPUT, title, "Введите угол поворота в градусах", "OK",
-                                            "Назад"),
+    m_dialogService.show(player,
+                         makeDialog(DialogStyle_INPUT, title, "Введите угол поворота в градусах", "OK", "Назад"),
                          [this, playerId = player.getID(), axis](DialogResponse response, int, StringView text)
                          {
                              IPlayer *player = editorPlayer(playerId);
@@ -861,32 +850,31 @@ void EditorSystem::showPosInput(IPlayer &player)
 
 void EditorSystem::showDistanceInput(IPlayer &player)
 {
-    m_dialogService.show(player,
-                         makeDialog(DialogStyle_INPUT, "Дистанция установки", "Введите дистанцию (1-100)", "OK",
-                                    "Назад"),
-                         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
-                         {
-                             IPlayer *player = editorPlayer(playerId);
-                             if (!player)
-                             {
-                                 return;
-                             }
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_INPUT, "Дистанция установки", "Введите дистанцию (1-100)", "OK", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
 
-                             if (response == DialogResponse_Left)
-                             {
-                                 float dist = 0.0f;
-                                 if (parseFloat(text.to_string(), dist))
-                                 {
-                                     m_state[playerId].placeDistance = std::clamp(dist, 1.0f, 100.0f);
-                                 }
-                                 else
-                                 {
-                                     player->sendClientMessage(Colour::White(), u("Введите корректное число"));
-                                 }
-                             }
+            if (response == DialogResponse_Left)
+            {
+                float dist = 0.0f;
+                if (parseFloat(text.to_string(), dist))
+                {
+                    m_state[playerId].placeDistance = std::clamp(dist, 1.0f, 100.0f);
+                }
+                else
+                {
+                    player->sendClientMessage(Colour::White(), u("Введите корректное число"));
+                }
+            }
 
-                             showEntityEdit(*player);
-                         });
+            showEntityEdit(*player);
+        });
 }
 
 void EditorSystem::showAnimLibInput(IPlayer &player)
@@ -936,8 +924,8 @@ void EditorSystem::showAnimNameInput(IPlayer &player, std::string animLib)
                 entity.animName = text.to_string();
                 if (IActor *actor = m_actors ? m_actors->get(entity.entityId) : nullptr)
                 {
-                    actor->applyAnimation(AnimationData(4.1f, true, true, true, false, 0, entity.animLib,
-                                                        entity.animName));
+                    actor->applyAnimation(
+                        AnimationData(4.1f, true, true, true, false, 0, entity.animLib, entity.animName));
                 }
             }
 
@@ -947,43 +935,43 @@ void EditorSystem::showAnimNameInput(IPlayer &player, std::string animLib)
 
 void EditorSystem::showSaveNameInput(IPlayer &player)
 {
-    m_dialogService.show(
-        player, makeDialog(DialogStyle_INPUT, "Сохранить карту", "Введите имя файла", "Сохранить", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
-        {
-            IPlayer *player = editorPlayer(playerId);
-            if (!player)
-            {
-                return;
-            }
+    m_dialogService.show(player,
+                         makeDialog(DialogStyle_INPUT, "Сохранить карту", "Введите имя файла", "Сохранить", "Назад"),
+                         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+                         {
+                             IPlayer *player = editorPlayer(playerId);
+                             if (!player)
+                             {
+                                 return;
+                             }
 
-            if (response == DialogResponse_Right)
-            {
-                showMain(*player);
-                return;
-            }
+                             if (response == DialogResponse_Right)
+                             {
+                                 showMain(*player);
+                                 return;
+                             }
 
-            const std::string name = text.to_string();
-            if (name.empty() || name.find('/') != std::string::npos || name.find('\\') != std::string::npos ||
-                name.find("..") != std::string::npos)
-            {
-                player->sendClientMessage(Colour::White(), u("Недопустимое имя файла"));
-                showSaveNameInput(*player);
-                return;
-            }
+                             const std::string name = text.to_string();
+                             if (name.empty() || name.find('/') != std::string::npos ||
+                                 name.find('\\') != std::string::npos || name.find("..") != std::string::npos)
+                             {
+                                 player->sendClientMessage(Colour::White(), u("Недопустимое имя файла"));
+                                 showSaveNameInput(*player);
+                                 return;
+                             }
 
-            std::string error;
-            if (saveToFile(m_state[playerId], name, error))
-            {
-                player->sendClientMessage(Colour::White(),
-                                          u(fmt::format("Карта сохранена: {}/{}.txt", MAPS_DIR, name)));
-            }
-            else
-            {
-                player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
-            }
-            showMain(*player);
-        });
+                             std::string error;
+                             if (saveToFile(m_state[playerId], name, error))
+                             {
+                                 player->sendClientMessage(
+                                     Colour::White(), u(fmt::format("Карта сохранена: {}/{}.txt", MAPS_DIR, name)));
+                             }
+                             else
+                             {
+                                 player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
+                             }
+                             showMain(*player);
+                         });
 }
 
 void EditorSystem::showObjectList(IPlayer &player)
@@ -999,8 +987,8 @@ void EditorSystem::showObjectList(IPlayer &player)
         {
             continue;
         }
-        body += fmt::format("#{}\tмодель {}\t{:.1f} {:.1f} {:.1f}\n", i, e.model, e.position.x, e.position.y,
-                            e.position.z);
+        body +=
+            fmt::format("#{}\tмодель {}\t{:.1f} {:.1f} {:.1f}\n", i, e.model, e.position.x, e.position.y, e.position.z);
         mapping.push_back(static_cast<int>(i));
     }
     if (body.empty())
@@ -1042,8 +1030,8 @@ void EditorSystem::showActorList(IPlayer &player)
         {
             continue;
         }
-        body += fmt::format("#{}\tскин {}\t{:.1f} {:.1f} {:.1f}\n", i, e.model, e.position.x, e.position.y,
-                            e.position.z);
+        body +=
+            fmt::format("#{}\tскин {}\t{:.1f} {:.1f} {:.1f}\n", i, e.model, e.position.x, e.position.y, e.position.z);
         mapping.push_back(static_cast<int>(i));
     }
     if (body.empty())
@@ -1086,34 +1074,33 @@ void EditorSystem::showLoadList(IPlayer &player)
         body = "Нет сохранённых карт";
     }
 
-    m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Загрузить карту", body, "Загрузить", "Назад"),
-                         [this, playerId = player.getID(), files = std::move(files)](DialogResponse response,
-                                                                                     int listItem, StringView)
-                         {
-                             IPlayer *player = editorPlayer(playerId);
-                             if (!player)
-                             {
-                                 return;
-                             }
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_LIST, "Загрузить карту", body, "Загрузить", "Назад"),
+        [this, playerId = player.getID(), files = std::move(files)](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
 
-                             if (response != DialogResponse_Left || listItem < 0 || listItem >= (int)files.size())
-                             {
-                                 showMain(*player);
-                                 return;
-                             }
+            if (response != DialogResponse_Left || listItem < 0 || listItem >= (int)files.size())
+            {
+                showMain(*player);
+                return;
+            }
 
-                             std::string error;
-                             if (loadFromFile(*player, files[listItem], error))
-                             {
-                                 player->sendClientMessage(Colour::White(),
-                                                           u("Карта загружена: " + files[listItem]));
-                             }
-                             else
-                             {
-                                 player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
-                             }
-                             showMain(*player);
-                         });
+            std::string error;
+            if (loadFromFile(*player, files[listItem], error))
+            {
+                player->sendClientMessage(Colour::White(), u("Карта загружена: " + files[listItem]));
+            }
+            else
+            {
+                player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
+            }
+            showMain(*player);
+        });
 }
 
 // ------------------------------------------------------------------ files

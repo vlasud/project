@@ -1,22 +1,18 @@
 #pragma once
 
+#include "../../Services/PlayerCommandService/PlayerCommandService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
 #include "types.hpp"
 #include <Server/Components/Classes/classes.hpp>
 #include <Server/Components/Objects/objects.hpp>
 
-class DebugCameraSystem : public BaseSystem,
-                          public PlayerChangeEventHandler,
-                          public PlayerTextEventHandler,
-                          public PlayerUpdateEventHandler
+class DebugCameraSystem : public BaseSystem, public PlayerChangeEventHandler, public PlayerUpdateEventHandler
 {
   public:
     DebugCameraSystem(ICore &core, const ServiceRegister &serviceRegister);
 
     void initialize(IComponentList *components) override;
-
-    bool onPlayerCommandText(IPlayer &player, StringView message) override;
 
     bool onPlayerUpdate(IPlayer &player, TimePoint now) override;
 
@@ -27,4 +23,6 @@ class DebugCameraSystem : public BaseSystem,
 
     IObjectsComponent *m_component = nullptr;
     IObject *m_object = nullptr;
+
+    PlayerCommandService &m_commandService;
 };

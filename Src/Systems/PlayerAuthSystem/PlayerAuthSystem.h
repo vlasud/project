@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../Services/PlayerAuthService/PlayerAuthService.h"
+#include "../../Services/PlayerCommandService/PlayerCommandService.h"
 #include "../../Services/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
 #include "../../Services/PlayerDialogService/PlayerDialogService.h"
 #include "../BaseSystem.h"
