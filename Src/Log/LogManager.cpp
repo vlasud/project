@@ -1,4 +1,4 @@
-#include "LogManager.h"
+#include "Log/LogManager.h"
 
 void LogManager::initialize(ICore *core)
 {

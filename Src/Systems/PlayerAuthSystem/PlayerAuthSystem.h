@@ -1,13 +1,13 @@
 #pragma once
 
-#include "../../Services/PlayerAuthService/PlayerAuthService.h"
-#include "../../Services/PlayerCommandService/PlayerCommandService.h"
-#include "../../Services/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
-#include "../../Services/PlayerDialogService/PlayerDialogService.h"
-#include "../../Services/PlayerLocationService/PlayerLocationService.h"
-#include "../../Services/PlayerStateService/PlayerStateService.h"
-#include "../../Services/PlayerWeaponService/PlayerWeaponService.h"
-#include "../BaseSystem.h"
+#include "Services/PlayerAuthService/PlayerAuthService.h"
+#include "Services/Core/PlayerCommandService/PlayerCommandService.h"
+#include "Services/Core/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
+#include "Services/Core/PlayerDialogService/PlayerDialogService.h"
+#include "Services/Core/PlayerLocationService/PlayerLocationService.h"
+#include "Services/Core/PlayerStateService/PlayerStateService.h"
+#include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
+#include "Systems/BaseSystem.h"
 #include "player.hpp"
 #include <Server/Components/Classes/classes.hpp>
 #include <cstdint>

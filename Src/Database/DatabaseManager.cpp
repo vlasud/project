@@ -1,7 +1,7 @@
-#include "DatabaseManager.h"
+#include "Database/DatabaseManager.h"
 
-#include "../Log/LogManager.h"
-#include "../ThreadPool/ThreadPool.h"
+#include "Log/LogManager.h"
+#include "ThreadPool/ThreadPool.h"
 #include "core.hpp"
 #include "mysqlx/devapi/settings.h"
 #include "mysqlx/xdevapi.h"

@@ -1,5 +1,5 @@
-#include "ThreadPool.h"
-#include "../Log/LogManager.h"
+#include "ThreadPool/ThreadPool.h"
+#include "Log/LogManager.h"
 #include "fmt/base.h"
 
 void ThreadPool::initialize(size_t threadCount)

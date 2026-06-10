@@ -1,4 +1,4 @@
-#include "PlayerAuthService.h"
+#include "Services/PlayerAuthService/PlayerAuthService.h"
 
 PlayerAuthService::EAuthState PlayerAuthService::getAuthState(size_t playerId) const
 {

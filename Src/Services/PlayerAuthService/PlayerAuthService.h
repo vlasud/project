@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../../Macro.h"
-#include "../IService.h"
+#include "Macro.h"
+#include "Services/IService.h"
 #include <array>
 
 class PlayerAuthSystem;

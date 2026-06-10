@@ -16,6 +16,10 @@ add_subdirectory(ThirdParty/fmt-12.1.0)
 file(GLOB_RECURSE SOURCE_FILES "Src/*.h" "Src/*.cpp")
 add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES})
 
+# Src — корень внутренних include: все #include пишутся от него
+# (например "Services/Core/GridService/GridService.h"), без относительных "../../".
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/Src")
+
 target_link_libraries(${PROJECT_NAME} PUBLIC OMP-SDK fmt::fmt)
 
 set(MYSQL_CONNECTOR_DIR "${CMAKE_SOURCE_DIR}/ThirdParty/mysql-connector-c++-8.0.33-win32")
