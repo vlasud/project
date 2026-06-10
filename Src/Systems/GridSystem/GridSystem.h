@@ -3,6 +3,7 @@
 #include "../../Macro.h"
 #include "../../Services/GridService/GridService.h"
 #include "../../Services/PlayerLocationService/PlayerLocationService.h"
+#include "../../Services/PlayerStateService/PlayerStateService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
 #include <Server/Components/Vehicles/vehicles.hpp>
@@ -36,6 +37,7 @@ class GridSystem : public BaseSystem,
   private:
     GridService &m_gridService;
     PlayerLocationService &m_locationService; // позиция игрока — из источника правды
+    PlayerStateService &m_stateService;       // стейт — из источника истины
     IVehiclesComponent *m_vehicles = nullptr;
 
     std::array<GridService::Handle, MAX_PLAYERS> m_playerHandles;

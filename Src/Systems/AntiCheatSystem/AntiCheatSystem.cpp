@@ -25,6 +25,14 @@ const char *violationName(AntiCheatService::ViolationType type)
         return "DamageHack";
     case AntiCheatService::ViolationType::DeathEvasion:
         return "DeathEvasion";
+    case AntiCheatService::ViolationType::TeleportHack:
+        return "TeleportHack";
+    case AntiCheatService::ViolationType::SpeedHack:
+        return "SpeedHack";
+    case AntiCheatService::ViolationType::StateHack:
+        return "StateHack";
+    case AntiCheatService::ViolationType::SpecialActionHack:
+        return "SpecialActionHack";
     }
     return "Unknown";
 }

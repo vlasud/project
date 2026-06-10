@@ -5,6 +5,7 @@
 #include "../../Services/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
 #include "../../Services/PlayerDialogService/PlayerDialogService.h"
 #include "../../Services/PlayerLocationService/PlayerLocationService.h"
+#include "../../Services/PlayerStateService/PlayerStateService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
 #include <Server/Components/Classes/classes.hpp>
@@ -65,6 +66,7 @@ class PlayerAuthSystem : public BaseSystem,
     PlayerConnectionVersionService &m_connectionVersionService;
     PlayerDialogService &m_dialogService;
     PlayerLocationService &m_locationService;
+    PlayerStateService &m_stateService;
 
     std::array<LoginData, MAX_PLAYERS> m_loginData;
     std::array<RegistrationData, MAX_PLAYERS> m_registrationData;

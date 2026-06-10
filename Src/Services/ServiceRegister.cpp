@@ -10,6 +10,7 @@
 #include "PlayerDialogService/PlayerDialogService.h"
 #include "PlayerHealthService/PlayerHealthService.h"
 #include "PlayerLocationService/PlayerLocationService.h"
+#include "PlayerStateService/PlayerStateService.h"
 #include "PlayerVelocityService/PlayerVelocityService.h"
 #include "StreamerService/StreamerService.h"
 
@@ -17,6 +18,7 @@ void ServiceRegister::registerServices()
 {
     registerService<PlayerConnectionVersionService>();
     registerService<PlayerLocationService>();
+    registerService<PlayerStateService>();
     registerService<PlayerVelocityService>();
     registerService<GridService>();
     registerService<StreamerService>();

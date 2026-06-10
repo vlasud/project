@@ -17,7 +17,8 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
     : BaseSystem(core, serviceRegister), m_authService(serviceRegister.getService<PlayerAuthService>()),
       m_connectionVersionService(serviceRegister.getService<PlayerConnectionVersionService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
-      m_locationService(serviceRegister.getService<PlayerLocationService>())
+      m_locationService(serviceRegister.getService<PlayerLocationService>()),
+      m_stateService(serviceRegister.getService<PlayerStateService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
@@ -74,7 +75,7 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
         return;
     }
 
-    player.setSpectating(true);
+    m_stateService.setSpectating(player, true);
     player.setPosition({2055.8442, -1104.7142, 24.4337});
     player.interpolateCameraPosition({2059.5425, -1104.4227, 30.5487}, {2059.5425, -1104.4227, 30.5487}, 1000,
                                      PlayerCameraCutType::PlayerCameraCutType_Move);
@@ -351,7 +352,7 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
 void PlayerAuthSystem::finalize(IPlayer &player)
 {
     m_authService.setPlayerAuthenticated(player.getID(), PlayerAuthService::EAuthState::AUTHENTICATED);
-    player.setSpectating(false);
+    m_stateService.setSpectating(player, false);
     player.setSkin(22);
     // Серверное перемещение — через источник правды позиции.
     m_locationService.teleport(player, {1762.1505, -1896.2495, 13.5621});

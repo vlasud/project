@@ -46,7 +46,8 @@ ChatSystemSystem::ChatSystemSystem(ICore &core, const ServiceRegister &serviceRe
     : BaseSystem(core, serviceRegister), m_gridService(serviceRegister.getService<GridService>()),
       m_chatService(serviceRegister.getService<PlayerChatService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
-      m_animationService(serviceRegister.getService<PlayerAnimationService>())
+      m_animationService(serviceRegister.getService<PlayerAnimationService>()),
+      m_stateService(serviceRegister.getService<PlayerStateService>())
 {
     core.getPlayers().getPlayerTextDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
@@ -114,7 +115,7 @@ bool ChatSystemSystem::onPlayerText(IPlayer &player, StringView message)
 
     // Прерываемая анимация разговора: игрок выходит из неё движением, сервер
     // не переустанавливает (interruptible). В транспорте не проигрываем.
-    if (player.getState() == PlayerState_OnFoot)
+    if (m_stateService.getState(playerId) == PlayerState_OnFoot)
     {
         m_animationService.play(player, AnimationData(4.1f, false, false, false, false, 0, "PED", "IDLE_CHAT"), true);
     }

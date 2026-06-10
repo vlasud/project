@@ -14,6 +14,7 @@
 #include "PlayerDialogSystem/PlayerDialogSystem.h"
 #include "PlayerHealthSystem/PlayerHealthSystem.h"
 #include "PlayerLocationSystem/PlayerLocationSystem.h"
+#include "PlayerStateSystem/PlayerStateSystem.h"
 #include "PlayerVelocitySystem/PlayerVelocitySystem.h"
 #include "StreamerSystem/StreamerSystem.h"
 
@@ -23,6 +24,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // LocationSystem раньше остальных: на том же апдейте все читают уже принятую
     // позицию; VelocitySystem сразу после — производная от свежей позиции.
     m_systems.push_back(std::make_unique<PlayerLocationSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PlayerStateSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerVelocitySystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<GridSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<StreamerSystem>(core, serviceRegister));

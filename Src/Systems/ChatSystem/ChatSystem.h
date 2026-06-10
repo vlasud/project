@@ -4,6 +4,7 @@
 #include "../../Services/PlayerAnimationService/PlayerAnimationService.h"
 #include "../../Services/PlayerChatService/PlayerChatService.h"
 #include "../../Services/PlayerLocationService/PlayerLocationService.h"
+#include "../../Services/PlayerStateService/PlayerStateService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
 #include <vector>
@@ -25,6 +26,7 @@ class ChatSystemSystem : public BaseSystem, public PlayerTextEventHandler, publi
     PlayerChatService &m_chatService;
     PlayerLocationService &m_locationService;
     PlayerAnimationService &m_animationService;
+    PlayerStateService &m_stateService;
 
     std::vector<GridService::Result> m_listeners; // переиспользуемый буфер запроса
 };

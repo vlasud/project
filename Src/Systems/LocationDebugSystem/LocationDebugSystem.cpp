@@ -33,6 +33,10 @@ const char *violationName(AntiCheatService::ViolationType type)
         return "TeleportHack";
     case AntiCheatService::ViolationType::SpeedHack:
         return "SpeedHack";
+    case AntiCheatService::ViolationType::StateHack:
+        return "StateHack";
+    case AntiCheatService::ViolationType::SpecialActionHack:
+        return "SpecialActionHack";
     }
     return "Unknown";
 }

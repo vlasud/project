@@ -26,6 +26,8 @@ class AntiCheatService final : public IService
         DeathEvasion,          // отказ умирать: игнор setHealth(0) или игра после серверной смерти
         TeleportHack,          // непровдоподобный скачок позиции / игнор серверного телепорта
         SpeedHack,             // устойчивое превышение физически возможной скорости
+        StateHack,             // нелегальный переход стейта (мгновенный вход в ТС и т.п.)
+        SpecialActionHack,     // джетпак без выдачи / побег из принудительного экшена
     };
 
     struct Violation
