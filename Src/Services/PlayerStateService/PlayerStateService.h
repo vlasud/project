@@ -59,9 +59,13 @@ class PlayerStateService final : public IService
         std::string detail;
     };
 
-    // --- вызывается PlayerStateSystem ---
+    // --- вызывается PlayerStateSystem / VehicleSystem ---
     StateOutcome onStateChange(IPlayer &player, PlayerState newState, PlayerState oldState, TimePoint now);
     ActionOutcome verifyAction(IPlayer &player, TimePoint now);
+    // Игрок начал вход в машину (onPlayerEnterVehicle — нажатие Enter у двери).
+    // Ядро на практике НЕ эмитит стейты EnterVehicle*, легальная посадка выглядит
+    // как OnFoot -> Driver напрямую — фаза входа подтверждается этим событием.
+    void onEnterVehicle(IPlayer &player, int vehicleId, TimePoint now);
     void onSpawn(IPlayer &player);
     void reset(int playerId);
 
@@ -74,7 +78,8 @@ class PlayerStateService final : public IService
         bool actionEnforced = false;
         TimePoint actionChange; // последняя серверная смена экшена (грейс синхронизации)
 
-        TimePoint enterStart; // начало фазы входа в ТС (EnterVehicle*)
+        TimePoint enterStart;    // начало фазы входа в ТС (onPlayerEnterVehicle)
+        int enterVehicleId = -1; // в какую машину начат вход
 
         bool pendingPut = false; // санкция putInVehicle
         TimePoint putAt;

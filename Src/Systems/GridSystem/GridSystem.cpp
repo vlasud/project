@@ -3,7 +3,8 @@
 GridSystem::GridSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_gridService(serviceRegister.getService<GridService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
-      m_stateService(serviceRegister.getService<PlayerStateService>())
+      m_stateService(serviceRegister.getService<PlayerStateService>()),
+      m_vehicleService(serviceRegister.getService<VehicleService>())
 {
     m_playerHandles.fill(GridService::INVALID_HANDLE);
     m_vehicleHandles.fill(GridService::INVALID_HANDLE);
@@ -36,10 +37,10 @@ bool GridSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
     m_gridService.move(handle, m_locationService.getPosition(playerId));
 
     // Машина едет только когда её синхронизирует водитель — обновляем её здесь же.
-    if (m_stateService.getState(playerId) == PlayerState_Driver)
+    // Машина игрока — из источника правды (заодно без queryExtension на апдейт).
+    if (m_vehicleService.getSeat(playerId) == 0)
     {
-        IPlayerVehicleData *vehicleData = queryExtension<IPlayerVehicleData>(player);
-        IVehicle *vehicle = vehicleData ? vehicleData->getVehicle() : nullptr;
+        IVehicle *vehicle = m_vehicleService.getVehicle(playerId);
         if (vehicle)
         {
             const GridService::Handle vehicleHandle = m_vehicleHandles[vehicle->getID()];

@@ -29,6 +29,7 @@ class AntiCheatService final : public IService
         StateHack,             // нелегальный переход стейта (мгновенный вход в ТС и т.п.)
         SpecialActionHack,     // джетпак без выдачи / побег из принудительного экшена
         WeaponHack,            // оружие без выдачи / стрельба без патронов
+        VehicleHack,           // repair hack / фейковый unoccupied-trailer sync
     };
 
     struct Violation

@@ -10,6 +10,10 @@ namespace
 // от ~0.6 с даже на байке; порог сознательно ниже — ловим только мгновенное.
 constexpr std::chrono::milliseconds MIN_ENTER{200};
 
+// Максимум от нажатия Enter до посадки: анимация с подходом к двери бывает
+// долгой (обход машины, грузовики). Старше окна сигнал входа не засчитывается.
+constexpr std::chrono::milliseconds ENTER_WINDOW{10000};
+
 // Максимум от принятой позиции игрока до машины в момент посадки. Щедро из-за
 // габаритов (дверь AT-400 далеко от центра) и лага — ловим вход «через карту».
 constexpr float ENTER_MAX_DIST = 30.0f;
@@ -114,7 +118,7 @@ PlayerStateService::StateOutcome PlayerStateService::onStateChange(IPlayer &play
     {
     case PlayerState_EnterVehicleDriver:
     case PlayerState_EnterVehiclePassenger:
-        st.enterStart = timeNow; // началась легальная фаза входа
+        st.enterStart = timeNow; // если ядро всё же эмитит фазу — тоже сигнал входа
         break;
 
     case PlayerState_Driver:
@@ -127,41 +131,53 @@ PlayerStateService::StateOutcome PlayerStateService::onStateChange(IPlayer &play
         if (prev == PlayerState_Driver || prev == PlayerState_Passenger)
             break;
 
-        const PlayerState requiredPhase = (newState == PlayerState_Driver) ? PlayerState_EnterVehicleDriver
-                                                                           : PlayerState_EnterVehiclePassenger;
-        if (prev != requiredPhase)
+        // Легальная посадка выглядит как OnFoot -> Driver напрямую; фаза входа
+        // подтверждена событием onPlayerEnterVehicle (свежим и не мгновенным).
+        const bool hasEnterSignal = st.enterStart.time_since_epoch().count() != 0;
+        const auto sinceEnter = timeNow - st.enterStart;
+        st.enterStart = {}; // сигнал одноразовый
+
+        if (!hasEnterSignal || sinceEnter > ENTER_WINDOW)
         {
-            // Мгновенная посадка без фазы входа — driverSync без анимации.
+            // Driver sync без начала входа — мгновенная посадка.
             outcome.stateHack = true;
             outcome.detail = fmt::format("instant vehicle entry: state {} -> {}", static_cast<int>(prev),
                                          static_cast<int>(newState));
             break;
         }
 
-        if (timeNow - st.enterStart < MIN_ENTER)
+        if (sinceEnter < MIN_ENTER)
         {
             outcome.stateHack = true;
             outcome.detail = fmt::format(
                 "vehicle entry too fast: {}ms",
-                std::chrono::duration_cast<std::chrono::milliseconds>(timeNow - st.enterStart).count());
+                std::chrono::duration_cast<std::chrono::milliseconds>(sinceEnter).count());
             break;
         }
 
+        IPlayerVehicleData *vehicleData = queryExtension<IPlayerVehicleData>(player);
+        IVehicle *vehicle = vehicleData ? vehicleData->getVehicle() : nullptr;
+
         // Дистанция до машины в момент посадки — против входа «через карту».
-        if (m_location)
+        if (vehicle && m_location)
         {
-            IPlayerVehicleData *vehicleData = queryExtension<IPlayerVehicleData>(player);
-            IVehicle *vehicle = vehicleData ? vehicleData->getVehicle() : nullptr;
-            if (vehicle)
+            const float dist = glm::distance(m_location->getPosition(player.getID()), vehicle->getPosition());
+            if (dist > ENTER_MAX_DIST)
             {
-                const float dist =
-                    glm::distance(m_location->getPosition(player.getID()), vehicle->getPosition());
-                if (dist > ENTER_MAX_DIST)
-                {
-                    outcome.stateHack = true;
-                    outcome.detail = fmt::format("remote vehicle entry: {:.0f}m", dist);
-                }
+                outcome.stateHack = true;
+                outcome.detail = fmt::format("remote vehicle entry: {:.0f}m", dist);
+                break;
             }
+        }
+
+        // Замок: честный клиент в запертую машину сесть не может (замок не пускает
+        // на стороне игры) — севший внутрь проигнорировал его хакнутым клиентом.
+        // Серверная посадка putInVehicle сюда не доходит (санкция выше).
+        if (vehicle && vehicle->getParams().doors == 1)
+        {
+            player.removeFromVehicle(true); // высадка: в запертой машине не ездят
+            outcome.stateHack = true;
+            outcome.detail = fmt::format("entered locked vehicle {}", vehicle->getID());
         }
         break;
     }
@@ -249,6 +265,13 @@ PlayerStateService::ActionOutcome PlayerStateService::verifyAction(IPlayer &play
         st.serverAction = SpecialAction_None;
     st.action = reported;
     return outcome;
+}
+
+void PlayerStateService::onEnterVehicle(IPlayer &player, int vehicleId, TimePoint timeNow)
+{
+    State &st = m_state[player.getID()];
+    st.enterStart = timeNow;
+    st.enterVehicleId = vehicleId;
 }
 
 void PlayerStateService::onSpawn(IPlayer &player)
