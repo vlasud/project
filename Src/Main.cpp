@@ -42,6 +42,10 @@ class GameMode : public IComponent, public CoreEventHandler
 
     void free() override
     {
+        // Без shutdown статический вектор joinable-потоков разрушился бы при
+        // выгрузке компонента → std::terminate. Заодно дорабатывается очередь
+        // задач (записи в БД) и выполняются их колбэки.
+        ThreadPool::shutdown();
         delete this;
     };
 

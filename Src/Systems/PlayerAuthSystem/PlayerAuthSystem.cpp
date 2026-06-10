@@ -109,6 +109,22 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
             mysqlx::Row row = result.fetchOne();
             m_loginData[playerId].passwordHash = row.get(1).get<std::string>();
             runLogin(playerId);
+        },
+        [this, requestConnectionVersion, playerId = player.getID()](const std::string &)
+        {
+            // Запрос упал (БД недоступна) — не оставляем игрока висеть в спектейте.
+            if (m_connectionVersionService.getVersion(playerId) != requestConnectionVersion)
+            {
+                return;
+            }
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+            {
+                return;
+            }
+            player->sendClientMessage(Colour::White(),
+                                      Encoding::utf8Tocp1251("Ошибка сервера. Попробуйте зайти позже"));
+            player->kick();
         });
 }
 

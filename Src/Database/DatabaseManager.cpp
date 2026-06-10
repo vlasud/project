@@ -59,13 +59,34 @@ void DatabaseManager::initialize()
     LogManager::log(Message, "DatabaseManager initialized with " + std::to_string(opened) + " sessions");
 }
 
+// Сессия возвращается в пул и запускается следующий отложенный запрос.
+// Вызывается на главном потоке и при успехе, и при ошибке — поэтому пул
+// не утекает, даже если запросы падают подряд.
+void DatabaseManager::releaseAndPump(SessionWrapper *sessionWrapper)
+{
+    m_sessionPool.release(sessionWrapper);
+
+    if (!m_queue.empty())
+    {
+        PendingThrow pending = std::move(m_queue.front());
+        m_queue.pop();
+        throwQuery(std::move(pending.task), std::move(pending.errorCallback));
+    }
+    else if (!m_selectQueue.empty())
+    {
+        PendingSelect pending = std::move(m_selectQueue.front());
+        m_selectQueue.pop();
+        selectQuery(std::move(pending.task), std::move(pending.callback), std::move(pending.errorCallback));
+    }
+}
+
 // Not thread safe, should be called from the main thread
-void DatabaseManager::throwQuery(DatabaseManager::Task task)
+void DatabaseManager::throwQuery(DatabaseManager::Task task, DatabaseManager::ErrorCallback errorCallback)
 {
     SessionWrapper *sessionWrapper = m_sessionPool.get();
     if (sessionWrapper == nullptr)
     {
-        m_queue.push(task);
+        m_queue.push({std::move(task), std::move(errorCallback)});
         return;
     }
 
@@ -77,28 +98,32 @@ void DatabaseManager::throwQuery(DatabaseManager::Task task)
         return true;
     };
 
-    asyncTask.callback = [sessionWrapper](...)
+    asyncTask.callback = [sessionWrapper](bool)
     {
-        m_sessionPool.release(sessionWrapper);
+        releaseAndPump(sessionWrapper);
+    };
 
-        if (!m_queue.empty())
+    asyncTask.errorCallback = [errorCallback = std::move(errorCallback), sessionWrapper](const std::string &error)
+    {
+        LogManager::log(Error, "DatabaseManager: query failed: " + error);
+        if (errorCallback)
         {
-            DatabaseManager::Task nextTask = m_queue.front();
-            m_queue.pop();
-            throwQuery(std::move(nextTask));
+            errorCallback(error);
         }
+        releaseAndPump(sessionWrapper);
     };
 
     ThreadPool::addTask(std::move(asyncTask));
 }
 
 // Not thread safe, should be called from the main thread
-void DatabaseManager::selectQuery(DatabaseManager::SelectTask task, DatabaseManager::SelectCallback callback)
+void DatabaseManager::selectQuery(DatabaseManager::SelectTask task, DatabaseManager::SelectCallback callback,
+                                  DatabaseManager::ErrorCallback errorCallback)
 {
     SessionWrapper *sessionWrapper = m_sessionPool.get();
     if (sessionWrapper == nullptr)
     {
-        m_selectQueue.push({task, callback});
+        m_selectQueue.push({std::move(task), std::move(callback), std::move(errorCallback)});
         return;
     }
 
@@ -112,14 +137,17 @@ void DatabaseManager::selectQuery(DatabaseManager::SelectTask task, DatabaseMana
     asyncTask.callback = [callback = std::move(callback), sessionWrapper](mysqlx::RowResult result)
     {
         callback(std::move(result));
-        m_sessionPool.release(sessionWrapper);
+        releaseAndPump(sessionWrapper);
+    };
 
-        if (!m_selectQueue.empty())
+    asyncTask.errorCallback = [errorCallback = std::move(errorCallback), sessionWrapper](const std::string &error)
+    {
+        LogManager::log(Error, "DatabaseManager: select failed: " + error);
+        if (errorCallback)
         {
-            auto [nextTask, nextCallback] = m_selectQueue.front();
-            m_selectQueue.pop();
-            selectQuery(std::move(nextTask), std::move(nextCallback));
+            errorCallback(error);
         }
+        releaseAndPump(sessionWrapper);
     };
 
     ThreadPool::addTask(std::move(asyncTask));
