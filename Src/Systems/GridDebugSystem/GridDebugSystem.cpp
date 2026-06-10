@@ -30,7 +30,8 @@ std::string u(const std::string &text)
 
 GridDebugSystem::GridDebugSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_gridService(serviceRegister.getService<GridService>()),
-      m_streamerService(serviceRegister.getService<StreamerService>())
+      m_streamerService(serviceRegister.getService<StreamerService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
@@ -75,7 +76,7 @@ void GridDebugSystem::buildTestField(IPlayer &player)
         return;
     }
 
-    const Vector3 center = player.getPosition();
+    const Vector3 center = m_locationService.getPosition(player.getID());
 
     for (float dx = -FIELD_HALF; dx <= FIELD_HALF; dx += OBJECT_SPACING)
     {
@@ -150,7 +151,8 @@ void GridDebugSystem::reportNear(IPlayer &player, int radius)
     int icons = 0;
     float nearestPlayerSq = -1.0f;
 
-    m_gridService.forEachInRadius(player.getPosition(), static_cast<float>(radius), GRID_MASK_ALL,
+    m_gridService.forEachInRadius(m_locationService.getPosition(player.getID()), static_cast<float>(radius),
+                                  GRID_MASK_ALL,
                                   [&](GridEntityType type, std::int32_t id, float distSq)
                                   {
                                       switch (type)
@@ -196,7 +198,7 @@ bool GridDebugSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
 
     if (state.cellNotify)
     {
-        const GridService::CellCoords cell = GridService::cellOf(player.getPosition());
+        const GridService::CellCoords cell = GridService::cellOf(m_locationService.getPosition(player.getID()));
         if (cell.cx != state.lastCx || cell.cy != state.lastCy)
         {
             if (state.lastCx >= 0)

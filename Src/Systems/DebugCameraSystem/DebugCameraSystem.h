@@ -2,6 +2,7 @@
 
 #include "../../Services/PlayerAnimationService/PlayerAnimationService.h"
 #include "../../Services/PlayerCommandService/PlayerCommandService.h"
+#include "../../Services/PlayerLocationService/PlayerLocationService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
 #include "types.hpp"
@@ -27,4 +28,5 @@ class DebugCameraSystem : public BaseSystem, public PlayerChangeEventHandler, pu
 
     PlayerCommandService &m_commandService;
     PlayerAnimationService &m_animationService;
+    PlayerLocationService &m_locationService;
 };

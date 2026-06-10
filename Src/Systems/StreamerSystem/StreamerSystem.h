@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../Services/GridService/GridService.h"
+#include "../../Services/PlayerLocationService/PlayerLocationService.h"
 #include "../../Services/StreamerService/StreamerService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
@@ -24,6 +25,7 @@ class StreamerSystem : public BaseSystem,
   private:
     GridService &m_gridService;
     StreamerService &m_streamerService;
+    PlayerLocationService &m_locationService;
 
     TimePoint m_nextPickupSweep{};
 };

@@ -4,7 +4,8 @@
 
 DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_commandService(serviceRegister.getService<PlayerCommandService>()),
-      m_animationService(serviceRegister.getService<PlayerAnimationService>())
+      m_animationService(serviceRegister.getService<PlayerAnimationService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
@@ -16,7 +17,7 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
 
                              if (m_isEnabled)
                              {
-                                 m_cameraPosition = player.getPosition();
+                                 m_cameraPosition = m_locationService.getPosition(player.getID());
                                  m_cameraDirection = player.getCameraLookAt();
 
                                  m_object = m_component->create(0, m_cameraPosition, m_cameraDirection);

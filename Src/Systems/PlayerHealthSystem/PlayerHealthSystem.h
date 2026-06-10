@@ -2,6 +2,7 @@
 
 #include "../../Services/AntiCheatService/AntiCheatService.h"
 #include "../../Services/PlayerHealthService/PlayerHealthService.h"
+#include "../../Services/PlayerLocationService/PlayerLocationService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
 #include <array>
@@ -56,6 +57,7 @@ class PlayerHealthSystem : public BaseSystem,
 
     PlayerHealthService &m_healthService;
     AntiCheatService &m_antiCheatService;
+    PlayerLocationService &m_locationService;
 
     std::array<AttackState, MAX_PLAYERS> m_attack;
 };

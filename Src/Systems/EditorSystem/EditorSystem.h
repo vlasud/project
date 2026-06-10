@@ -3,6 +3,7 @@
 #include "../../Macro.h"
 #include "../../Services/PlayerCommandService/PlayerCommandService.h"
 #include "../../Services/PlayerDialogService/PlayerDialogService.h"
+#include "../../Services/PlayerLocationService/PlayerLocationService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
 #include <Server/Components/Actors/actors.hpp>
@@ -95,6 +96,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
 
     PlayerDialogService &m_dialogService;
     PlayerCommandService &m_commandService;
+    PlayerLocationService &m_locationService; // байпас валидации позиции на время редактора
 
     IObjectsComponent *m_objects = nullptr;
     IActorsComponent *m_actors = nullptr;

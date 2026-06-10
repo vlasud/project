@@ -9,7 +9,8 @@ constexpr std::chrono::milliseconds PICKUP_SWEEP_INTERVAL{1000};
 
 StreamerSystem::StreamerSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_gridService(serviceRegister.getService<GridService>()),
-      m_streamerService(serviceRegister.getService<StreamerService>())
+      m_streamerService(serviceRegister.getService<StreamerService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
@@ -23,7 +24,7 @@ void StreamerSystem::initialize(IComponentList *components)
 
 bool StreamerSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
 {
-    m_streamerService.streamPlayer(player, now);
+    m_streamerService.streamPlayer(player, m_locationService.getPosition(player.getID()), now);
     return true;
 }
 

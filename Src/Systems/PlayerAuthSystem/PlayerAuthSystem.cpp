@@ -16,7 +16,8 @@
 PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_authService(serviceRegister.getService<PlayerAuthService>()),
       m_connectionVersionService(serviceRegister.getService<PlayerConnectionVersionService>()),
-      m_dialogService(serviceRegister.getService<PlayerDialogService>())
+      m_dialogService(serviceRegister.getService<PlayerDialogService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
@@ -352,5 +353,6 @@ void PlayerAuthSystem::finalize(IPlayer &player)
     m_authService.setPlayerAuthenticated(player.getID(), PlayerAuthService::EAuthState::AUTHENTICATED);
     player.setSpectating(false);
     player.setSkin(22);
-    player.setPosition({1762.1505, -1896.2495, 13.5621});
+    // Серверное перемещение — через источник правды позиции.
+    m_locationService.teleport(player, {1762.1505, -1896.2495, 13.5621});
 }

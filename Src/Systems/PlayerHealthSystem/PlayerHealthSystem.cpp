@@ -30,7 +30,8 @@ TimePoint now()
 
 PlayerHealthSystem::PlayerHealthSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_healthService(serviceRegister.getService<PlayerHealthService>()),
-      m_antiCheatService(serviceRegister.getService<AntiCheatService>())
+      m_antiCheatService(serviceRegister.getService<AntiCheatService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
@@ -120,7 +121,9 @@ bool PlayerHealthSystem::validateGiveDamage(IPlayer &attacker, IPlayer &victim, 
     }
     attack.fireTokens -= 1.0f;
 
-    const float distance = glm::distance(attacker.getPosition(), victim.getPosition());
+    // Принятые позиции из источника правды: чит не сдвинет себя к жертве в обход.
+    const float distance =
+        glm::distance(m_locationService.getPosition(attacker.getID()), m_locationService.getPosition(victim.getID()));
     const float allowed = info->range * RANGE_FACTOR + RANGE_SLACK;
     if (distance > allowed)
     {

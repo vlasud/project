@@ -2,6 +2,7 @@
 
 #include "../../Macro.h"
 #include "../../Services/GridService/GridService.h"
+#include "../../Services/PlayerLocationService/PlayerLocationService.h"
 #include "../../Services/StreamerService/StreamerService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
@@ -41,6 +42,7 @@ class GridDebugSystem : public BaseSystem, public PlayerUpdateEventHandler, publ
 
     GridService &m_gridService;
     StreamerService &m_streamerService;
+    PlayerLocationService &m_locationService;
 
     std::array<DebugState, MAX_PLAYERS> m_state;
 

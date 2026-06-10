@@ -182,7 +182,7 @@ void StreamerService::removeMapIcon(int defId)
 
 // --- стриминг ---
 
-void StreamerService::streamPlayer(IPlayer &player, TimePoint now)
+void StreamerService::streamPlayer(IPlayer &player, const Vector3 &position, TimePoint now)
 {
     PerPlayer &pp = m_players[player.getID()];
     if (now < pp.nextStreamAt)
@@ -190,7 +190,7 @@ void StreamerService::streamPlayer(IPlayer &player, TimePoint now)
     pp.nextStreamAt = now + STREAM_INTERVAL;
 
     // Кандидаты из сетки одним запросом по всем стримящимся типам.
-    const Vector3 pos = player.getPosition();
+    const Vector3 &pos = position;
     m_grid->queryRadius(pos, MAX_STREAM_DISTANCE,
                         gridMask(GridEntityType::Object) | gridMask(GridEntityType::Pickup) |
                             gridMask(GridEntityType::MapIcon),

@@ -1,7 +1,8 @@
 #include "GridSystem.h"
 
 GridSystem::GridSystem(ICore &core, const ServiceRegister &serviceRegister)
-    : BaseSystem(core, serviceRegister), m_gridService(serviceRegister.getService<GridService>())
+    : BaseSystem(core, serviceRegister), m_gridService(serviceRegister.getService<GridService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
     m_playerHandles.fill(GridService::INVALID_HANDLE);
     m_vehicleHandles.fill(GridService::INVALID_HANDLE);
@@ -29,7 +30,9 @@ bool GridSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
         return true; // ещё не заспавнен
     }
 
-    m_gridService.move(handle, player.getPosition());
+    // Принятая сервером позиция, а не сырая клиентская: читерский скачок,
+    // откаченный валидатором, в сетку не попадает.
+    m_gridService.move(handle, m_locationService.getPosition(playerId));
 
     // Машина едет только когда её синхронизирует водитель — обновляем её здесь же.
     if (player.getState() == PlayerState_Driver)
@@ -51,14 +54,17 @@ bool GridSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
 
 void GridSystem::onPlayerSpawn(IPlayer &player)
 {
+    // LocationSystem обрабатывает спавн раньше (порядок регистрации) — позиция в
+    // сервисе уже принята.
+    const Vector3 position = m_locationService.getPosition(player.getID());
     GridService::Handle &handle = m_playerHandles[player.getID()];
     if (handle == GridService::INVALID_HANDLE)
     {
-        handle = m_gridService.add(GridEntityType::Player, player.getID(), player.getPosition());
+        handle = m_gridService.add(GridEntityType::Player, player.getID(), position);
     }
     else
     {
-        m_gridService.move(handle, player.getPosition()); // респаун
+        m_gridService.move(handle, position); // респаун
     }
 }
 

@@ -24,6 +24,8 @@ class AntiCheatService final : public IService
         HealthHack,            // несанкционированный рост HP/брони (god mode / health hack)
         DamageHack,            // неправдоподобный give-damage (фейковый урон по другим)
         DeathEvasion,          // отказ умирать: игнор setHealth(0) или игра после серверной смерти
+        TeleportHack,          // непровдоподобный скачок позиции / игнор серверного телепорта
+        SpeedHack,             // устойчивое превышение физически возможной скорости
     };
 
     struct Violation

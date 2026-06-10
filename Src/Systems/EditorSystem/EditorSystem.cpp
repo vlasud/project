@@ -72,7 +72,8 @@ bool parseVec3(const std::string &text, Vector3 &out)
 
 EditorSystem::EditorSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_dialogService(serviceRegister.getService<PlayerDialogService>()),
-      m_commandService(serviceRegister.getService<PlayerCommandService>())
+      m_commandService(serviceRegister.getService<PlayerCommandService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
@@ -145,7 +146,10 @@ void EditorSystem::enableEditor(IPlayer &player)
 
     EditorState &state = stateOf(player);
     state.enabled = true;
-    state.cameraPosition = player.getPosition() + Vector3(0.0f, 0.0f, 5.0f);
+    state.cameraPosition = m_locationService.getPosition(player.getID()) + Vector3(0.0f, 0.0f, 5.0f);
+
+    // FindZ-пробы редактора легально двигают игрока — отключаем валидацию позиции.
+    m_locationService.setBypass(player.getID(), true);
 
     IObject *camObject = m_objects->create(0, state.cameraPosition, Vector3(0.0f, 0.0f, 0.0f));
     if (camObject)
@@ -170,6 +174,7 @@ void EditorSystem::disableEditor(IPlayer &player)
     state.followCamera = false;
     state.groundProbe = -1;
 
+    m_locationService.setBypass(player.getID(), false);
     player.setCameraBehind();
     player.sendClientMessage(Colour::White(), u("Редактор выключен. Расставленные объекты остались на сцене."));
 }
@@ -239,7 +244,7 @@ Vector3 EditorSystem::placementPoint(IPlayer &player) const
     const float len = glm::length(forward);
     if (len < 0.0001f)
     {
-        return player.getPosition();
+        return m_locationService.getPosition(player.getID());
     }
     forward /= len;
 
@@ -419,7 +424,9 @@ void EditorSystem::processGroundProbe(IPlayer &player)
     }
 
     EditorEntity &entity = state.entities[state.groundProbe];
-    const float z = player.getPosition().z;
+    // В режиме редактора сервис принимает позицию каждый апдейт (байпас) —
+    // здесь это уже приземлённый клиентом Z после FindZ.
+    const float z = m_locationService.getPosition(player.getID()).z;
 
     if (z < GROUND_PROBE_Z - 1.0f)
     {

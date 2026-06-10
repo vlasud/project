@@ -49,7 +49,8 @@ class StreamerService final : public IService
     void removeMapIcon(int defId);
 
     // --- вызывается StreamerSystem ---
-    void streamPlayer(IPlayer &player, TimePoint now); // внутри троттлится сам
+    // position — принятая позиция из PlayerLocationService (не сырая клиентская).
+    void streamPlayer(IPlayer &player, const Vector3 &position, TimePoint now); // внутри троттлится сам
     void sweepPickups(TimePoint now);                  // глобальная развёртка пикапов
     void resetPlayer(int playerId);
 
