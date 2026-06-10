@@ -1,0 +1,88 @@
+#include "GridSystem.h"
+
+GridSystem::GridSystem(ICore &core, const ServiceRegister &serviceRegister)
+    : BaseSystem(core, serviceRegister), m_gridService(serviceRegister.getService<GridService>())
+{
+    m_playerHandles.fill(GridService::INVALID_HANDLE);
+    m_vehicleHandles.fill(GridService::INVALID_HANDLE);
+
+    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
+    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+}
+
+void GridSystem::initialize(IComponentList *components)
+{
+    m_vehicles = components->queryComponent<IVehiclesComponent>();
+    if (m_vehicles)
+    {
+        m_vehicles->getPoolEventDispatcher().addEventHandler(this);
+    }
+}
+
+bool GridSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
+{
+    const int playerId = player.getID();
+    GridService::Handle &handle = m_playerHandles[playerId];
+    if (handle == GridService::INVALID_HANDLE)
+    {
+        return true; // ещё не заспавнен
+    }
+
+    m_gridService.move(handle, player.getPosition());
+
+    // Машина едет только когда её синхронизирует водитель — обновляем её здесь же.
+    if (player.getState() == PlayerState_Driver)
+    {
+        IPlayerVehicleData *vehicleData = queryExtension<IPlayerVehicleData>(player);
+        IVehicle *vehicle = vehicleData ? vehicleData->getVehicle() : nullptr;
+        if (vehicle)
+        {
+            const GridService::Handle vehicleHandle = m_vehicleHandles[vehicle->getID()];
+            if (vehicleHandle != GridService::INVALID_HANDLE)
+            {
+                m_gridService.move(vehicleHandle, vehicle->getPosition());
+            }
+        }
+    }
+
+    return true;
+}
+
+void GridSystem::onPlayerSpawn(IPlayer &player)
+{
+    GridService::Handle &handle = m_playerHandles[player.getID()];
+    if (handle == GridService::INVALID_HANDLE)
+    {
+        handle = m_gridService.add(GridEntityType::Player, player.getID(), player.getPosition());
+    }
+    else
+    {
+        m_gridService.move(handle, player.getPosition()); // респаун
+    }
+}
+
+void GridSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)
+{
+    GridService::Handle &handle = m_playerHandles[player.getID()];
+    if (handle != GridService::INVALID_HANDLE)
+    {
+        m_gridService.remove(handle);
+        handle = GridService::INVALID_HANDLE;
+    }
+}
+
+void GridSystem::onPoolEntryCreated(IVehicle &vehicle)
+{
+    m_vehicleHandles[vehicle.getID()] = m_gridService.add(GridEntityType::Vehicle, vehicle.getID(), vehicle.getPosition());
+}
+
+void GridSystem::onPoolEntryDestroyed(IVehicle &vehicle)
+{
+    GridService::Handle &handle = m_vehicleHandles[vehicle.getID()];
+    if (handle != GridService::INVALID_HANDLE)
+    {
+        m_gridService.remove(handle);
+        handle = GridService::INVALID_HANDLE;
+    }
+}
