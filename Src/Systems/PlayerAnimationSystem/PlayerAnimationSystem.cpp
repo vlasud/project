@@ -22,9 +22,5 @@ bool PlayerAnimationSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
 void PlayerAnimationSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)
 {
     m_animationService.reset(player.getID());
-
-    // Журнал нарушений — пер-слотовый, поэтому чистим при отключении, чтобы новый
-    // игрок в том же слоте не унаследовал чужие записи. Когда появится отдельная
-    // система-античит, управление жизненным циклом записей логично перенести в неё.
-    m_antiCheatService.clear(player.getID());
+    // Журнал нарушений чистит AntiCheatSystem — она владеет его жизненным циклом.
 }

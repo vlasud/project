@@ -16,6 +16,14 @@ void AntiCheatService::record(int playerId, ViolationType type, std::string deta
     record.recent.push_back({type, now, std::move(detail)});
     if (record.recent.size() > RECENT_LIMIT)
         record.recent.erase(record.recent.begin());
+
+    for (const Observer &observer : m_observers)
+        observer(playerId, type, record);
+}
+
+void AntiCheatService::subscribe(Observer observer)
+{
+    m_observers.push_back(std::move(observer));
 }
 
 const AntiCheatService::PlayerRecord &AntiCheatService::get(int playerId) const

@@ -5,6 +5,7 @@
 #include "types.hpp"
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,9 @@ class AntiCheatService final : public IService
     enum class ViolationType : std::uint8_t
     {
         ForcedAnimationEscape, // игрок вышел из непрерываемой серверной анимации
+        HealthHack,            // несанкционированный рост HP/брони (god mode / health hack)
+        DamageHack,            // неправдоподобный give-damage (фейковый урон по другим)
+        DeathEvasion,          // отказ умирать: игнор setHealth(0) или игра после серверной смерти
     };
 
     struct Violation
@@ -37,10 +41,17 @@ class AntiCheatService final : public IService
         std::vector<Violation> recent; // последние нарушения с деталями (ограничено)
     };
 
+    // Наблюдатель вызывается синхронно после каждой записи — так система-античит
+    // реагирует на нарушения без поллинга журнала.
+    using Observer = std::function<void(int playerId, ViolationType type, const PlayerRecord &record)>;
+
     // Зафиксировать нарушение. Вызывают системы-детекторы.
     void record(int playerId, ViolationType type, std::string detail, TimePoint now);
 
-    // Для будущего античита: чтение и сброс.
+    // Подписка на нарушения (вызывается из конструкторов систем).
+    void subscribe(Observer observer);
+
+    // Чтение и сброс.
     const PlayerRecord &get(int playerId) const;
     std::uint32_t count(int playerId) const;
     bool flagged(int playerId) const;
@@ -50,4 +61,5 @@ class AntiCheatService final : public IService
     static constexpr std::size_t RECENT_LIMIT = 20;
 
     std::array<PlayerRecord, MAX_PLAYERS> m_records;
+    std::vector<Observer> m_observers;
 };

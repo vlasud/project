@@ -1,5 +1,6 @@
 #include "SystemRegister.h"
 
+#include "AntiCheatSystem/AntiCheatSystem.h"
 #include "DebugCameraSystem/DebugCameraSystem.h"
 #include "EditorSystem/EditorSystem.h"
 #include "PlayerAnimationSystem/PlayerAnimationSystem.h"
@@ -7,13 +8,16 @@
 #include "PlayerCommandSystem/PlayerCommandSystem.h"
 #include "PlayerConnectionVersionSystem/PlayerConnectionVersionSystem.h"
 #include "PlayerDialogSystem/PlayerDialogSystem.h"
+#include "PlayerHealthSystem/PlayerHealthSystem.h"
 
 void SystemRegister::registerSystems(ICore &core, const ServiceRegister &serviceRegister)
 {
     m_systems.push_back(std::make_unique<PlayerConnectionVersionSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerDialogSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerCommandSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<AntiCheatSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAnimationSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PlayerHealthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<DebugCameraSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<EditorSystem>(core, serviceRegister));

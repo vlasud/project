@@ -6,6 +6,7 @@
 #include "PlayerCommandService/PlayerCommandService.h"
 #include "PlayerConnectionVersionService/PlayerConnectionVersionService.h"
 #include "PlayerDialogService/PlayerDialogService.h"
+#include "PlayerHealthService/PlayerHealthService.h"
 
 void ServiceRegister::registerServices()
 {
@@ -14,5 +15,6 @@ void ServiceRegister::registerServices()
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
+    registerService<PlayerHealthService>();
     registerService<PlayerAuthService>();
 }
