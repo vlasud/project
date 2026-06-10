@@ -2,6 +2,7 @@
 
 #include "DebugCameraSystem/DebugCameraSystem.h"
 #include "EditorSystem/EditorSystem.h"
+#include "PlayerAnimationSystem/PlayerAnimationSystem.h"
 #include "PlayerAuthSystem/PlayerAuthSystem.h"
 #include "PlayerCommandSystem/PlayerCommandSystem.h"
 #include "PlayerConnectionVersionSystem/PlayerConnectionVersionSystem.h"
@@ -12,6 +13,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<PlayerConnectionVersionSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerDialogSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerCommandSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PlayerAnimationSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<DebugCameraSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<EditorSystem>(core, serviceRegister));

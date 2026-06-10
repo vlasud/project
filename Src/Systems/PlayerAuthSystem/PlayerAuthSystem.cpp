@@ -164,7 +164,7 @@ void PlayerAuthSystem::showLoginDialog(IPlayer &player)
     Dialog dialog;
     dialog.style = DialogStyle_PASSWORD;
     dialog.title = Encoding::utf8Tocp1251("Авторизация");
-    dialog.body = Encoding::utf8Tocp1251(fmt::format("Аккаунт: {}\n\nВведите пароль", player.getName().to_string()));
+    dialog.body = Encoding::utf8Tocp1251(fmt::format("Аккаунт: {}\n\nВведите пароль", player.getName()));
     dialog.leftButton = Encoding::utf8Tocp1251("Далее");
     dialog.rightButton = Encoding::utf8Tocp1251("Выйти");
 

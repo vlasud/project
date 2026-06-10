@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../Services/PlayerAnimationService/PlayerAnimationService.h"
 #include "../../Services/PlayerCommandService/PlayerCommandService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
@@ -25,4 +26,5 @@ class DebugCameraSystem : public BaseSystem, public PlayerChangeEventHandler, pu
     IObject *m_object = nullptr;
 
     PlayerCommandService &m_commandService;
+    PlayerAnimationService &m_animationService;
 };

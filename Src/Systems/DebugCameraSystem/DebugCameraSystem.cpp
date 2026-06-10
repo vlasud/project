@@ -3,7 +3,8 @@
 #include "types.hpp"
 
 DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &serviceRegister)
-    : BaseSystem(core, serviceRegister), m_commandService(serviceRegister.getService<PlayerCommandService>())
+    : BaseSystem(core, serviceRegister), m_commandService(serviceRegister.getService<PlayerCommandService>()),
+      m_animationService(serviceRegister.getService<PlayerAnimationService>())
 {
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
