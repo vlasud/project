@@ -4,6 +4,7 @@
 #include "GridService/GridService.h"
 #include "PlayerAnimationService/PlayerAnimationService.h"
 #include "PlayerAuthService/PlayerAuthService.h"
+#include "PlayerChatService/PlayerChatService.h"
 #include "PlayerCommandService/PlayerCommandService.h"
 #include "PlayerConnectionVersionService/PlayerConnectionVersionService.h"
 #include "PlayerDialogService/PlayerDialogService.h"
@@ -23,6 +24,7 @@ void ServiceRegister::registerServices()
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
+    registerService<PlayerChatService>();
     registerService<PlayerHealthService>();
     registerService<PlayerAuthService>();
 }

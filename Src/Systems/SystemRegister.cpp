@@ -1,6 +1,7 @@
 #include "SystemRegister.h"
 
 #include "AntiCheatSystem/AntiCheatSystem.h"
+#include "ChatSystem/ChatSystem.h"
 #include "DebugCameraSystem/DebugCameraSystem.h"
 #include "EditorSystem/EditorSystem.h"
 #include "GridDebugSystem/GridDebugSystem.h"
@@ -35,6 +36,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<DebugCameraSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<EditorSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<ChatSystemSystem>(core, serviceRegister));
 }
 
 void SystemRegister::initializeSystems(IComponentList *components)
