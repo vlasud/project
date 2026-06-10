@@ -37,6 +37,8 @@ const char *violationName(AntiCheatService::ViolationType type)
         return "StateHack";
     case AntiCheatService::ViolationType::SpecialActionHack:
         return "SpecialActionHack";
+    case AntiCheatService::ViolationType::WeaponHack:
+        return "WeaponHack";
     }
     return "Unknown";
 }

@@ -16,6 +16,7 @@
 #include "PlayerLocationSystem/PlayerLocationSystem.h"
 #include "PlayerStateSystem/PlayerStateSystem.h"
 #include "PlayerVelocitySystem/PlayerVelocitySystem.h"
+#include "PlayerWeaponSystem/PlayerWeaponSystem.h"
 #include "StreamerSystem/StreamerSystem.h"
 
 void SystemRegister::registerSystems(ICore &core, const ServiceRegister &serviceRegister)
@@ -34,6 +35,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<PlayerCommandSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AntiCheatSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAnimationSystem>(core, serviceRegister));
+    // WeaponSystem раньше HealthSystem: фейковый выстрел (оружие без выдачи)
+    // отбрасывается до регистрации bullet sync в health — не легализует give-damage.
+    m_systems.push_back(std::make_unique<PlayerWeaponSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerHealthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<DebugCameraSystem>(core, serviceRegister));

@@ -12,6 +12,7 @@
 #include "PlayerLocationService/PlayerLocationService.h"
 #include "PlayerStateService/PlayerStateService.h"
 #include "PlayerVelocityService/PlayerVelocityService.h"
+#include "PlayerWeaponService/PlayerWeaponService.h"
 #include "StreamerService/StreamerService.h"
 
 void ServiceRegister::registerServices()
@@ -20,6 +21,7 @@ void ServiceRegister::registerServices()
     registerService<PlayerLocationService>();
     registerService<PlayerStateService>();
     registerService<PlayerVelocityService>();
+    registerService<PlayerWeaponService>();
     registerService<GridService>();
     registerService<StreamerService>();
     registerService<PlayerDialogService>();

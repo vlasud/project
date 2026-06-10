@@ -28,6 +28,7 @@ class AntiCheatService final : public IService
         SpeedHack,             // устойчивое превышение физически возможной скорости
         StateHack,             // нелегальный переход стейта (мгновенный вход в ТС и т.п.)
         SpecialActionHack,     // джетпак без выдачи / побег из принудительного экшена
+        WeaponHack,            // оружие без выдачи / стрельба без патронов
     };
 
     struct Violation

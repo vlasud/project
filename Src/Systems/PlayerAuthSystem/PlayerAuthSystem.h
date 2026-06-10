@@ -6,6 +6,7 @@
 #include "../../Services/PlayerDialogService/PlayerDialogService.h"
 #include "../../Services/PlayerLocationService/PlayerLocationService.h"
 #include "../../Services/PlayerStateService/PlayerStateService.h"
+#include "../../Services/PlayerWeaponService/PlayerWeaponService.h"
 #include "../BaseSystem.h"
 #include "player.hpp"
 #include <Server/Components/Classes/classes.hpp>
@@ -67,7 +68,13 @@ class PlayerAuthSystem : public BaseSystem,
     PlayerDialogService &m_dialogService;
     PlayerLocationService &m_locationService;
     PlayerStateService &m_stateService;
+    PlayerWeaponService &m_weaponService;
 
     std::array<LoginData, MAX_PLAYERS> m_loginData;
     std::array<RegistrationData, MAX_PLAYERS> m_registrationData;
+
+    // setSpectating(false) в finalize() вызывает респаун; экипировку и телепорт
+    // нельзя делать до его события спавна — сервисы на спавне сбрасывают
+    // инвентарь и ожидание телепорта. Флаг переносит настройку в onPlayerSpawn.
+    std::array<bool, MAX_PLAYERS> m_pendingSpawnSetup{};
 };

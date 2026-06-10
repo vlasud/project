@@ -18,7 +18,8 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
       m_connectionVersionService(serviceRegister.getService<PlayerConnectionVersionService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
-      m_stateService(serviceRegister.getService<PlayerStateService>())
+      m_stateService(serviceRegister.getService<PlayerStateService>()),
+      m_weaponService(serviceRegister.getService<PlayerWeaponService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
@@ -70,6 +71,18 @@ bool PlayerAuthSystem::onPlayerRequestClass(IPlayer &player, unsigned int classI
 
 void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
 {
+    // Респаун после finalize (выход из спектейта): сервисы уже отработали свой
+    // onSpawn (порядок регистрации систем), теперь экипировка не будет сброшена.
+    if (m_pendingSpawnSetup[player.getID()])
+    {
+        m_pendingSpawnSetup[player.getID()] = false;
+        player.setSkin(22); // респаун сбрасывает скин на классовый
+        m_locationService.teleport(player, {1762.1505, -1896.2495, 13.5621});
+        m_weaponService.giveWeapon(player, 24, 100);
+        m_weaponService.giveWeapon(player, 31, 100);
+        return;
+    }
+
     if (m_authService.getAuthState(player.getID()) != PlayerAuthService::EAuthState::AUTHORIZING)
     {
         return;
@@ -134,6 +147,7 @@ void PlayerAuthSystem::resetState(int playerId)
 {
     m_loginData[playerId] = {};
     m_registrationData[playerId] = {};
+    m_pendingSpawnSetup[playerId] = false;
 }
 
 void PlayerAuthSystem::runRegistration(int playerId)
@@ -352,8 +366,10 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
 void PlayerAuthSystem::finalize(IPlayer &player)
 {
     m_authService.setPlayerAuthenticated(player.getID(), PlayerAuthService::EAuthState::AUTHENTICATED);
+
+    // Выход из спектейта = респаун. Скин, телепорт и оружие нельзя выдавать
+    // здесь: событие спавна придёт позже и сбросит их (инвентарь чистится на
+    // спавне, ожидание телепорта отменяется). Настройка — в onPlayerSpawn.
+    m_pendingSpawnSetup[player.getID()] = true;
     m_stateService.setSpectating(player, false);
-    player.setSkin(22);
-    // Серверное перемещение — через источник правды позиции.
-    m_locationService.teleport(player, {1762.1505, -1896.2495, 13.5621});
 }
