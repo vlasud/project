@@ -244,7 +244,8 @@ EditorSystem::EditorSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_commandService(serviceRegister.getService<PlayerCommandService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
       m_checkpointService(serviceRegister.getService<CheckpointService>()),
-      m_vehicleService(serviceRegister.getService<VehicleService>())
+      m_vehicleService(serviceRegister.getService<VehicleService>()),
+      m_objectEditService(serviceRegister.getService<ObjectEditService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
@@ -380,6 +381,8 @@ void EditorSystem::disableEditor(IPlayer &player)
 
     // Машины сцены становятся обычными мировыми — античит снова их охраняет.
     setVehicleEditBypasses(state, false);
+    // Активная сессия нативного редактирования/выбора мышью завершается.
+    m_objectEditService.end(player);
 
     // Возвращаем тело в точку входа: зонды и слепой бег растаскали его по карте.
     m_locationService.teleport(player, state.returnPosition);
@@ -646,6 +649,96 @@ void EditorSystem::createObjectEntity(IPlayer &player, int model)
     {
         requestGroundSnap(player, state.selectedIndex);
     }
+}
+
+void EditorSystem::beginMouseEdit(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    if (!selectedValid(state) || state.entities[state.selectedIndex].type != EntityType::Object)
+    {
+        showMain(player);
+        return;
+    }
+
+    IObject *object = m_objects ? m_objects->get(state.entities[state.selectedIndex].entityId) : nullptr;
+    if (!object)
+    {
+        showEntityEdit(player);
+        return;
+    }
+
+    state.followCamera = false;
+    state.keyMode = KeyMode::Camera;
+
+    m_objectEditService.beginEdit(
+        player, *object,
+        [this, playerId = player.getID()](IPlayer &p, IObject &object, ObjectEditResponse response, Vector3 position,
+                                          Vector3 rotation)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            // Сущность ищем по pool id: индексы могли сдвинуться за время сессии.
+            EditorState &state = m_state[playerId];
+            for (EditorEntity &entity : state.entities)
+            {
+                if (entity.type != EntityType::Object || entity.entityId != object.getID())
+                {
+                    continue;
+                }
+
+                if (response == ObjectEditResponse_Cancel)
+                {
+                    applyEntityTransform(entity); // откат на сохранённый трансформ
+                }
+                else
+                {
+                    entity.position = position;
+                    entity.rotation = rotation;
+                    applyEntityTransform(entity); // Update — двигается у всех вживую
+                }
+                break;
+            }
+
+            if (response == ObjectEditResponse_Final || response == ObjectEditResponse_Cancel)
+            {
+                showEntityEdit(*player);
+            }
+        });
+
+    player.sendClientMessage(Colour::White(),
+                             u("Тащите стрелки/кольца мышью. Клик вне объекта — сохранить, ESC — отмена."));
+}
+
+void EditorSystem::beginMouseSelect(IPlayer &player)
+{
+    m_objectEditService.beginSelect(
+        player,
+        [this, playerId = player.getID()](IPlayer &, IObject &object, int, Vector3)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            EditorState &state = m_state[playerId];
+            for (std::size_t i = 0; i < state.entities.size(); ++i)
+            {
+                if (state.entities[i].type == EntityType::Object && state.entities[i].entityId == object.getID())
+                {
+                    state.selectedIndex = static_cast<int>(i);
+                    showEntityEdit(*player);
+                    return;
+                }
+            }
+            player->sendClientMessage(Colour::White(), u("Этот объект не из сцены редактора"));
+        });
+
+    player.sendClientMessage(Colour::White(), u("Кликните по объекту сцены. ESC — отмена."));
 }
 
 void EditorSystem::createActorEntity(IPlayer &player, int skin)
@@ -1243,6 +1336,7 @@ void EditorSystem::showMain(IPlayer &player)
     body += fmt::format("Машины ({})\n", vehicleCount);
     body += fmt::format("Пикапы ({})\n", pickupCount);
     body += fmt::format("Чекпоинты ({})\n", checkpointCount);
+    body += "Выбрать объект мышью\n";
     body += "Телепорт тела к камере\n";
     body += fmt::format("Интерьер: {}\n", m_locationService.getInterior(player.getID()));
     body += "Телепорт по интерьерам\n";
@@ -1302,34 +1396,37 @@ void EditorSystem::showMain(IPlayer &player)
                                  showCheckpointList(*player);
                                  break;
                              case 10:
+                                 beginMouseSelect(*player); // клик по объекту сцены — в его меню
+                                 break;
+                             case 11:
                                  teleportBodyToCamera(*player);
                                  showMain(*player);
                                  break;
-                             case 11:
+                             case 12:
                                  showInteriorInput(*player);
                                  break;
-                             case 12:
+                             case 13:
                                  showInteriorList(*player);
                                  break;
-                             case 13:
+                             case 14:
                                  m_state[playerId].autoGround = !m_state[playerId].autoGround;
                                  showMain(*player);
                                  break;
-                             case 14:
+                             case 15:
                                  showCameraSpeedInput(*player);
                                  break;
-                             case 15:
+                             case 16:
                                  showSaveNameInput(*player);
                                  break;
-                             case 16:
+                             case 17:
                                  listMapFilesAsync(*player); // листинг каталога на воркере
                                  break;
-                             case 17:
+                             case 18:
                                  showClearConfirm(*player);
                                  break;
-                             case 18:
-                                 break; // летать
                              case 19:
+                                 break; // летать
+                             case 20:
                                  disableEditor(*player);
                                  break;
                              default:
@@ -1381,6 +1478,7 @@ void EditorSystem::showObjectEdit(IPlayer &player)
     std::string body;
     body += "Поставить по взгляду камеры\n";
     body += fmt::format("Следовать за взглядом: {}\n", state.followCamera ? "ВКЛ" : "выкл");
+    body += "Редактировать мышью (стрелки-оси)\n";
     body += "Двигать клавишами (XY)\n";
     body += "Двигать клавишами (высота)\n";
     body += "Вращать клавишами (Z)\n";
@@ -1435,49 +1533,52 @@ void EditorSystem::showObjectEdit(IPlayer &player)
                     showObjectEdit(*player);
                 }
                 break;
-            case 2:
+            case 2: // нативный редактор мышью
+                beginMouseEdit(*player);
+                break;
+            case 3:
                 state.followCamera = false;
                 state.keyMode = KeyMode::MoveXY;
                 player->sendClientMessage(Colour::White(),
                                           u("Стрелки двигают объект (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 3:
+            case 4:
                 state.followCamera = false;
                 state.keyMode = KeyMode::MoveZ;
                 player->sendClientMessage(
                     Colour::White(), u("Вверх/вниз меняют высоту (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 4:
+            case 5:
                 state.followCamera = false;
                 state.keyMode = KeyMode::Rotate;
                 player->sendClientMessage(
                     Colour::White(), u("Влево/вправо вращают объект (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 5:
+            case 6:
                 showKeyStepInput(*player);
                 break;
-            case 6: // снэп к земле
+            case 7: // снэп к земле
                 requestGroundSnap(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Ищу землю под объектом..."));
                 showObjectEdit(*player);
                 break;
-            case 7:
+            case 8:
                 showDistanceInput(*player);
                 break;
-            case 8:
+            case 9:
                 showPositionInput(*player);
                 break;
-            case 9:
+            case 10:
                 showRotationInput(*player);
                 break;
-            case 10:
+            case 11:
                 showChangeModelInput(*player);
                 break;
-            case 11:
+            case 12:
                 duplicateEntity(*player, state.selectedIndex);
                 showEntityEdit(*player);
                 break;
-            case 12: // перелететь
+            case 13: // перелететь
                 state.cameraPosition = entity.position + Vector3(2.0f, 2.0f, 2.0f);
                 if (state.cameraObjectId >= 0 && m_objects)
                 {
@@ -1488,7 +1589,7 @@ void EditorSystem::showObjectEdit(IPlayer &player)
                 }
                 showObjectEdit(*player);
                 break;
-            case 13:
+            case 14:
                 deleteEntity(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Объект удалён"));
                 showMain(*player);

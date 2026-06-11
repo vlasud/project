@@ -2,6 +2,7 @@
 
 #include "Macro.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
+#include "Services/Core/ObjectEditService/ObjectEditService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
@@ -112,6 +113,10 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     // --- работа с сущностями ---
     Vector3 placementPoint(IPlayer &player) const;
     void createObjectEntity(IPlayer &player, int model);
+    // Нативное редактирование выбранного объекта мышью (стрелки-оси клиента).
+    void beginMouseEdit(IPlayer &player);
+    // Выбор объекта сцены кликом мыши.
+    void beginMouseSelect(IPlayer &player);
     void createActorEntity(IPlayer &player, int skin);
     void createVehicleEntity(IPlayer &player, int model);
     // Снять/вернуть античит-байпас всем редакторским машинам сцены (на выходе
@@ -184,6 +189,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     PlayerLocationService &m_locationService;     // байпас валидации позиции на время редактора
     CheckpointService &m_checkpointService;       // превью выбранного чекпоинта
     VehicleService &m_vehicleService;             // байпас unoccupied-валидации редакторских машин
+    ObjectEditService &m_objectEditService;       // нативное редактирование/выбор мышью
 
     IObjectsComponent *m_objects = nullptr;
     IActorsComponent *m_actors = nullptr;

@@ -12,6 +12,7 @@
 #include "Systems/Core/GridSystem/GridSystem.h"
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 #include "Systems/Core/MapIconSystem/MapIconSystem.h"
+#include "Systems/Core/ObjectEditSystem/ObjectEditSystem.h"
 #include "Systems/Core/PickupSystem/PickupSystem.h"
 #include "Systems/Core/PlayerActivitySystem/PlayerActivitySystem.h"
 #include "Systems/Core/PlayerAnimationSystem/PlayerAnimationSystem.h"
@@ -58,6 +59,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<TextLabelSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<WorldSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerActivitySystem>(core, serviceRegister));
+    // ObjectEditSystem раньше EditorSystem: роутер событий редактирования должен
+    // существовать до того, как редактор начнёт сессии.
+    m_systems.push_back(std::make_unique<ObjectEditSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<CheckpointSystem>(core, serviceRegister));
     // m_systems.push_back(std::make_unique<GridDebugSystem>(core, serviceRegister));
