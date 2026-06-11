@@ -26,6 +26,7 @@
 #include "Services/Core/TextLabelService/TextLabelService.h"
 #include "Services/Core/TimerService/TimerService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
+#include "Services/Core/WorldService/WorldService.h"
 
 void ServiceRegister::registerServices()
 {
@@ -47,6 +48,7 @@ void ServiceRegister::registerServices()
     registerService<ClassSelectionService>();
     registerService<PlayerKeyService>();
     registerService<TextLabelService>();
+    registerService<WorldService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
