@@ -19,6 +19,8 @@
 #include "Systems/Core/PlayerVelocitySystem/PlayerVelocitySystem.h"
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
 #include "Systems/Core/StreamerSystem/StreamerSystem.h"
+#include "Systems/Core/TextDrawEditorSystem/TextDrawEditorSystem.h"
+#include "Systems/Core/TextDrawSystem/TextDrawSystem.h"
 #include "Systems/Core/VehicleDebugSystem/VehicleDebugSystem.h"
 #include "Systems/Core/VehicleSystem/VehicleSystem.h"
 
@@ -40,6 +42,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<VehicleDebugSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerDialogSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerCommandSystem>(core, serviceRegister));
+    // TextDrawSystem раньше редактора: роутер кликов должен существовать до того,
+    // как редактор начнёт регистрировать обработчики.
+    m_systems.push_back(std::make_unique<TextDrawSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<TextDrawEditorSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AntiCheatSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAnimationSystem>(core, serviceRegister));
     // WeaponSystem раньше HealthSystem: фейковый выстрел (оружие без выдачи)

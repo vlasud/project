@@ -15,6 +15,7 @@
 #include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/StreamerService/StreamerService.h"
+#include "Services/Core/TextDrawService/TextDrawService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 
 void ServiceRegister::registerServices()
@@ -28,6 +29,7 @@ void ServiceRegister::registerServices()
     registerService<GridService>();
     registerService<StreamerService>();
     registerService<PlayerDialogService>();
+    registerService<TextDrawService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
