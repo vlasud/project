@@ -4,6 +4,8 @@
 #include "Systems/Core/ChatSystem/ChatSystem.h"
 #include "Systems/Core/DebugCameraSystem/DebugCameraSystem.h"
 #include "Systems/Core/EditorSystem/EditorSystem.h"
+#include "Systems/Core/GangZoneEditorSystem/GangZoneEditorSystem.h"
+#include "Systems/Core/GangZoneSystem/GangZoneSystem.h"
 #include "Systems/Core/GridDebugSystem/GridDebugSystem.h"
 #include "Systems/Core/GridSystem/GridSystem.h"
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
@@ -50,6 +52,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // как редактор начнёт регистрировать обработчики.
     m_systems.push_back(std::make_unique<TextDrawSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<TextDrawEditorSystem>(core, serviceRegister));
+    // GangZoneSystem раньше редактора: сервис должен получить компонент до того,
+    // как тулза начнёт создавать зоны.
+    m_systems.push_back(std::make_unique<GangZoneSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<GangZoneEditorSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AntiCheatSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAnimationSystem>(core, serviceRegister));
     // WeaponSystem раньше HealthSystem: фейковый выстрел (оружие без выдачи)

@@ -1,6 +1,7 @@
 #include "Services/ServiceRegister.h"
 
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
+#include "Services/Core/GangZoneService/GangZoneService.h"
 #include "Services/Core/GridService/GridService.h"
 #include "Services/Core/PlayerAnimationService/PlayerAnimationService.h"
 #include "Services/PlayerAuthService/PlayerAuthService.h"
@@ -32,6 +33,7 @@ void ServiceRegister::registerServices()
     registerService<StreamerService>();
     registerService<PlayerDialogService>();
     registerService<TextDrawService>();
+    registerService<GangZoneService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
