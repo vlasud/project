@@ -21,11 +21,15 @@
 #include "Systems/Core/StreamerSystem/StreamerSystem.h"
 #include "Systems/Core/TextDrawEditorSystem/TextDrawEditorSystem.h"
 #include "Systems/Core/TextDrawSystem/TextDrawSystem.h"
+#include "Systems/Core/TimerSystem/TimerSystem.h"
 #include "Systems/Core/VehicleDebugSystem/VehicleDebugSystem.h"
 #include "Systems/Core/VehicleSystem/VehicleSystem.h"
 
 void SystemRegister::registerSystems(ICore &core, const ServiceRegister &serviceRegister)
 {
+    // TimerSystem первым: его initialize() передаёт сервису компонент таймеров
+    // раньше, чем другие системы смогут ставить таймеры в своих initialize().
+    m_systems.push_back(std::make_unique<TimerSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerConnectionVersionSystem>(core, serviceRegister));
     // LocationSystem раньше остальных: на том же апдейте все читают уже принятую
     // позицию; VelocitySystem сразу после — производная от свежей позиции.

@@ -16,10 +16,12 @@
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/StreamerService/StreamerService.h"
 #include "Services/Core/TextDrawService/TextDrawService.h"
+#include "Services/Core/TimerService/TimerService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 
 void ServiceRegister::registerServices()
 {
+    registerService<TimerService>();
     registerService<PlayerConnectionVersionService>();
     registerService<PlayerLocationService>();
     registerService<PlayerStateService>();
