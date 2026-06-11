@@ -1,6 +1,7 @@
 #include "Systems/SystemRegister.h"
 
 #include "Systems/Core/AntiCheatSystem/AntiCheatSystem.h"
+#include "Systems/Core/AudioSystem/AudioSystem.h"
 #include "Systems/Core/ChatSystem/ChatSystem.h"
 #include "Systems/Core/CheckpointSystem/CheckpointSystem.h"
 #include "Systems/Core/ClassSelectionSystem/ClassSelectionSystem.h"
@@ -62,6 +63,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // ObjectEditSystem раньше EditorSystem: роутер событий редактирования должен
     // существовать до того, как редактор начнёт сессии.
     m_systems.push_back(std::make_unique<ObjectEditSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<AudioSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<CheckpointSystem>(core, serviceRegister));
     // m_systems.push_back(std::make_unique<GridDebugSystem>(core, serviceRegister));
