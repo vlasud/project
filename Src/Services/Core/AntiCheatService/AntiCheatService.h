@@ -29,6 +29,9 @@ class AntiCheatService final : public IService
         StateHack,             // нелегальный переход стейта (мгновенный вход в ТС и т.п.)
         SpecialActionHack,     // джетпак без выдачи / побег из принудительного экшена
         WeaponHack,            // оружие без выдачи / стрельба без патронов
+        ShotHack,              // фейковые данные пули: NaN, origin вдали от стрелка, за дальностью оружия
+        RapidFire,             // темп стрельбы устойчиво выше возможного для оружия
+        SilentAim,             // попадание по игроку без наведения камеры на него
         VehicleHack,           // repair hack / фейковый unoccupied-trailer sync
         PickupHack,            // подбор пикапа с неправдоподобной дистанции / из чужого мира
         CheckpointHack,        // вход в чекпоинт с неправдоподобной дистанции

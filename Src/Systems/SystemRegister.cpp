@@ -41,6 +41,7 @@
 #include "Systems/Core/TextLabelSystem/TextLabelSystem.h"
 #include "Systems/Core/TimerSystem/TimerSystem.h"
 #include "Systems/Core/VehicleDebugSystem/VehicleDebugSystem.h"
+#include "Systems/Core/WeaponDebugSystem/WeaponDebugSystem.h"
 #include "Systems/Core/VehicleSystem/VehicleSystem.h"
 #include "Systems/Core/WorldSystem/WorldSystem.h"
 
@@ -79,6 +80,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // m_systems.push_back(std::make_unique<GridDebugSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<LocationDebugSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<VehicleDebugSystem>(core, serviceRegister));
+    // WeaponDebugSystem раньше PlayerWeaponSystem: замер темпа (/rof) видит сырой
+    // клиентский поток выстрелов до того, как валидатор начнёт дропать.
+    m_systems.push_back(std::make_unique<WeaponDebugSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerDialogSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerCommandSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerKeySystem>(core, serviceRegister));

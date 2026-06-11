@@ -1,10 +1,13 @@
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
 
+#include <Server/Components/Vehicles/vehicles.hpp>
 #include <chrono>
 
 PlayerWeaponSystem::PlayerWeaponSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
-      m_antiCheatService(serviceRegister.getService<AntiCheatService>())
+      m_antiCheatService(serviceRegister.getService<AntiCheatService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>()),
+      m_velocityService(serviceRegister.getService<PlayerVelocityService>())
 {
     core.getPlayers().getPlayerShotDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
@@ -12,43 +15,77 @@ PlayerWeaponSystem::PlayerWeaponSystem(ICore &core, const ServiceRegister &servi
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
 }
 
-bool PlayerWeaponSystem::handleShot(IPlayer &player, const PlayerBulletData &bulletData)
+namespace
+{
+AntiCheatService::ViolationType toViolation(PlayerWeaponService::ShotFlag flag)
+{
+    switch (flag)
+    {
+    case PlayerWeaponService::ShotFlag::ShotHack:
+        return AntiCheatService::ViolationType::ShotHack;
+    case PlayerWeaponService::ShotFlag::RapidFire:
+        return AntiCheatService::ViolationType::RapidFire;
+    case PlayerWeaponService::ShotFlag::SilentAim:
+        return AntiCheatService::ViolationType::SilentAim;
+    default:
+        return AntiCheatService::ViolationType::WeaponHack;
+    }
+}
+} // namespace
+
+bool PlayerWeaponSystem::handleShot(IPlayer &player, const PlayerBulletData &bulletData, const Vector3 *targetPos,
+                                    const IPlayer *targetPlayer)
 {
     const TimePoint now = std::chrono::steady_clock::now();
-    PlayerWeaponService::Outcome outcome = m_weaponService.onShot(player, bulletData.weapon, now);
-    if (outcome.weaponHack)
+
+    PlayerWeaponService::ShotContext ctx;
+    ctx.shooterPos = m_locationService.getPosition(player.getID());
+    ctx.targetPos = targetPos;
+    if (targetPlayer)
     {
-        m_antiCheatService.record(player.getID(), AntiCheatService::ViolationType::WeaponHack,
-                                  std::move(outcome.detail), now);
-        return false; // фейковый выстрел дальше по конвейеру не идёт
+        ctx.targetSpeed = m_velocityService.getSpeed(targetPlayer->getID());
+        // Авто-прицел драйв-бая легально стреляет под углом к камере.
+        ctx.checkSilentAim = player.getState() == PlayerState_OnFoot;
     }
-    return true;
+
+    PlayerWeaponService::ShotOutcome outcome = m_weaponService.onShot(player, bulletData, ctx, now);
+    if (outcome.flag != PlayerWeaponService::ShotFlag::None)
+    {
+        m_antiCheatService.record(player.getID(), toViolation(outcome.flag), std::move(outcome.detail), now);
+    }
+    return !outcome.drop; // фейковый выстрел дальше по конвейеру не идёт
 }
 
 bool PlayerWeaponSystem::onPlayerShotMissed(IPlayer &player, const PlayerBulletData &bulletData)
 {
-    return handleShot(player, bulletData);
+    return handleShot(player, bulletData, nullptr, nullptr);
 }
 
 bool PlayerWeaponSystem::onPlayerShotPlayer(IPlayer &player, IPlayer &target, const PlayerBulletData &bulletData)
 {
-    return handleShot(player, bulletData);
+    // Серверная позиция цели — принятая LocationService, не сырая клиентская.
+    const Vector3 targetPos = m_locationService.getPosition(target.getID());
+    return handleShot(player, bulletData, &targetPos, &target);
 }
 
 bool PlayerWeaponSystem::onPlayerShotVehicle(IPlayer &player, IVehicle &target, const PlayerBulletData &bulletData)
 {
-    return handleShot(player, bulletData);
+    const Vector3 targetPos = target.getPosition();
+    return handleShot(player, bulletData, &targetPos, nullptr);
 }
 
 bool PlayerWeaponSystem::onPlayerShotObject(IPlayer &player, IObject &target, const PlayerBulletData &bulletData)
 {
-    return handleShot(player, bulletData);
+    // Дальность по объектам не сверяем: позиция объекта — центр модели, а модели
+    // бывают огромными (мост) — попадание в край дальше «дальности до центра».
+    // Урон по объектам не идёт, абуза нет.
+    return handleShot(player, bulletData, nullptr, nullptr);
 }
 
 bool PlayerWeaponSystem::onPlayerShotPlayerObject(IPlayer &player, IPlayerObject &target,
                                                   const PlayerBulletData &bulletData)
 {
-    return handleShot(player, bulletData);
+    return handleShot(player, bulletData, nullptr, nullptr);
 }
 
 bool PlayerWeaponSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
