@@ -31,6 +31,7 @@ class PlayerAuthSystem : public BaseSystem,
 
     bool onPlayerRequestClass(IPlayer &player, unsigned int classId) override;
 
+    bool onPlayerRequestSpawn(IPlayer &player) override;
     void onPlayerSpawn(IPlayer &player) override;
 
   private:
@@ -79,4 +80,8 @@ class PlayerAuthSystem : public BaseSystem,
     // нельзя делать до его события спавна — сервисы на спавне сбрасывают
     // инвентарь и ожидание телепорта. Флаг переносит настройку в onPlayerSpawn.
     std::array<bool, MAX_PLAYERS> m_pendingSpawnSetup{};
+
+    // Первый onPlayerRequestClass — автоматический вход клиента в класс-селекшн;
+    // все последующие — нажатия дефолтных стрелок ◄ ► внизу экрана.
+    std::array<bool, MAX_PLAYERS> m_classSelectionEntered{};
 };

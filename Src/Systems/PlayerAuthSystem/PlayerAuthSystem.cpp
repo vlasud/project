@@ -62,6 +62,16 @@ void PlayerAuthSystem::onPlayerKeyStateChange(IPlayer &player, uint32_t newKeys,
 
 bool PlayerAuthSystem::onPlayerRequestClass(IPlayer &player, unsigned int classId)
 {
+    // Дефолтные кнопки класс-селекшна (стрелки ◄ ►) полностью заблокированы:
+    // первый запрос — автоматический вход клиента, всё после него — кнопки.
+    if (m_classSelectionEntered[player.getID()])
+    {
+        player.sendClientMessage(Colour::White(),
+                                 Encoding::utf8Tocp1251("Эти кнопки не работают. Вы не должны были их увидеть"));
+        return false;
+    }
+    m_classSelectionEntered[player.getID()] = true;
+
     if (m_authService.getAuthState(player.getID()) != PlayerAuthService::EAuthState::AUTHORIZING)
     {
         return false;
@@ -69,6 +79,16 @@ bool PlayerAuthSystem::onPlayerRequestClass(IPlayer &player, unsigned int classI
 
     player.spawn();
     return true;
+}
+
+bool PlayerAuthSystem::onPlayerRequestSpawn(IPlayer &player)
+{
+    // Кнопка Spawn класс-селекшна. Клиентский запрос спавна нелегитимен всегда:
+    // спавнит только сервер (player.spawn() / выход из спектейта — они через
+    // этот хук не проходят).
+    player.sendClientMessage(Colour::White(),
+                             Encoding::utf8Tocp1251("Эти кнопки не работают. Вы не должны были их увидеть"));
+    return false;
 }
 
 void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
@@ -151,6 +171,7 @@ void PlayerAuthSystem::resetState(int playerId)
     m_loginData[playerId] = {};
     m_registrationData[playerId] = {};
     m_pendingSpawnSetup[playerId] = false;
+    m_classSelectionEntered[playerId] = false;
 }
 
 void PlayerAuthSystem::runRegistration(int playerId)
