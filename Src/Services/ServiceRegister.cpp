@@ -23,6 +23,7 @@
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/StreamerService/StreamerService.h"
 #include "Services/Core/TextDrawService/TextDrawService.h"
+#include "Services/Core/TextLabelService/TextLabelService.h"
 #include "Services/Core/TimerService/TimerService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 
@@ -45,6 +46,7 @@ void ServiceRegister::registerServices()
     registerService<CheckpointService>();
     registerService<ClassSelectionService>();
     registerService<PlayerKeyService>();
+    registerService<TextLabelService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();

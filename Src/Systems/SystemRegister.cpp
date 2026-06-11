@@ -29,6 +29,7 @@
 #include "Systems/Core/StreamerSystem/StreamerSystem.h"
 #include "Systems/Core/TextDrawEditorSystem/TextDrawEditorSystem.h"
 #include "Systems/Core/TextDrawSystem/TextDrawSystem.h"
+#include "Systems/Core/TextLabelSystem/TextLabelSystem.h"
 #include "Systems/Core/TimerSystem/TimerSystem.h"
 #include "Systems/Core/VehicleDebugSystem/VehicleDebugSystem.h"
 #include "Systems/Core/VehicleSystem/VehicleSystem.h"
@@ -52,6 +53,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // PickupSystem после StreamerSystem: маршрутизация подбора опирается на
     // пикапы, созданные стримером.
     m_systems.push_back(std::make_unique<PickupSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<TextLabelSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<CheckpointSystem>(core, serviceRegister));
     // m_systems.push_back(std::make_unique<GridDebugSystem>(core, serviceRegister));

@@ -48,6 +48,12 @@ class StreamerService final : public IService
                    MapIconStyle style = MapIconStyle_Local, float streamDistance = MAX_STREAM_DISTANCE);
     void removeMapIcon(int defId);
 
+    int addTextLabel(StringView text, Colour colour, const Vector3 &position, float drawDistance, bool testLOS = false,
+                     float streamDistance = MAX_STREAM_DISTANCE);
+    void removeTextLabel(int defId);
+    // Живое обновление текста/цвета у всех, кому лейбл сейчас показан.
+    bool updateTextLabel(int defId, StringView text, Colour colour);
+
     // --- вызывается StreamerSystem ---
     // position — принятая позиция из PlayerLocationService (не сырая клиентская).
     void streamPlayer(IPlayer &player, const Vector3 &position, TimePoint now); // внутри троттлится сам
@@ -68,6 +74,10 @@ class StreamerService final : public IService
     std::size_t shownIconCount(int playerId) const
     {
         return m_players[playerId].icons.size();
+    }
+    std::size_t shownLabelCount(int playerId) const
+    {
+        return m_players[playerId].labels.size();
     }
     int activePickupCount() const
     {
@@ -99,6 +109,18 @@ class StreamerService final : public IService
         TimePoint lastWanted; // когда последний раз был нужен кому-то рядом
     };
 
+    struct LabelDef
+    {
+        bool used = false;
+        std::string text; // уже в cp1251
+        Colour colour = Colour::White();
+        float drawDistance = 30.0f;
+        bool testLOS = false;
+        Vector3 position{};
+        float streamDistSq = 0.0f;
+        GridService::Handle gridHandle = GridService::INVALID_HANDLE;
+    };
+
     struct IconDef
     {
         bool used = false;
@@ -121,12 +143,14 @@ class StreamerService final : public IService
         TimePoint nextStreamAt;
         std::vector<Shown> objects; // отсортированы по defId (для merge-diff)
         std::vector<Shown> icons;   // отсортированы по defId
+        std::vector<Shown> labels;  // отсортированы по defId
         std::vector<int> freeIconSlots;
         bool iconSlotsInit = false;
     };
 
     void diffObjects(IPlayer &player, PerPlayer &pp);
     void diffIcons(IPlayer &player, PerPlayer &pp);
+    void diffLabels(IPlayer &player, PerPlayer &pp);
 
     ICore *m_core = nullptr;
     GridService *m_grid = nullptr;
@@ -139,6 +163,8 @@ class StreamerService final : public IService
     std::vector<int> m_freePickupDefs;
     std::vector<IconDef> m_iconDefs;
     std::vector<int> m_freeIconDefs;
+    std::vector<LabelDef> m_labelDefs;
+    std::vector<int> m_freeLabelDefs;
 
     std::array<PerPlayer, MAX_PLAYERS> m_players;
 
@@ -146,5 +172,6 @@ class StreamerService final : public IService
     std::vector<GridService::Result> m_candidates;
     std::vector<int> m_desiredObjects;
     std::vector<int> m_desiredIcons;
+    std::vector<int> m_desiredLabels;
     std::vector<Shown> m_scratchShown;
 };

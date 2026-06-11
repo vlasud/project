@@ -1,6 +1,7 @@
 #include "Services/Core/StreamerService/StreamerService.h"
 
 #include <Server/Components/Objects/objects.hpp>
+#include <Server/Components/TextLabels/textlabels.hpp>
 #include <algorithm>
 #include <chrono>
 
@@ -18,6 +19,7 @@ constexpr std::chrono::milliseconds PICKUP_KEEP{2000};
 // иконок — 100; берём с запасом под ручное использование.
 constexpr int OBJECT_BUDGET = 400;
 constexpr int ICON_BUDGET = 90; // слоты 0..89, слоты 90..99 свободны для ручных иконок
+constexpr int LABEL_BUDGET = 200; // per-player пул лейблов — 1024; запас под ручные/прикреплённые
 
 template <typename Def> int allocDef(std::vector<Def> &defs, std::vector<int> &freeList)
 {
@@ -163,6 +165,83 @@ bool StreamerService::getPickupInfo(int defId, Vector3 &position, std::uint32_t 
     return true;
 }
 
+int StreamerService::addTextLabel(StringView text, Colour colour, const Vector3 &position, float drawDistance,
+                                  bool testLOS, float streamDistance)
+{
+    if (!m_grid)
+        return -1;
+
+    const int id = allocDef(m_labelDefs, m_freeLabelDefs);
+    LabelDef &def = m_labelDefs[id];
+    def = {};
+    def.used = true;
+    def.text = text.to_string();
+    def.colour = colour;
+    def.drawDistance = drawDistance;
+    def.testLOS = testLOS;
+    def.position = position;
+    def.streamDistSq = clampStreamDistSq(streamDistance);
+    def.gridHandle = m_grid->add(GridEntityType::TextLabel, id, position);
+    return id;
+}
+
+void StreamerService::removeTextLabel(int defId)
+{
+    if (defId < 0 || defId >= static_cast<int>(m_labelDefs.size()) || !m_labelDefs[defId].used)
+        return;
+
+    LabelDef &def = m_labelDefs[defId];
+    m_grid->remove(def.gridHandle);
+    def.used = false;
+    m_freeLabelDefs.push_back(defId);
+
+    for (int playerId = 0; playerId < MAX_PLAYERS; ++playerId)
+    {
+        std::vector<Shown> &shown = m_players[playerId].labels;
+        auto it = std::lower_bound(shown.begin(), shown.end(), defId,
+                                   [](const Shown &s, int id) { return s.defId < id; });
+        if (it == shown.end() || it->defId != defId)
+            continue;
+
+        if (IPlayer *player = m_core->getPlayers().get(playerId))
+        {
+            if (IPlayerTextLabelData *labels = queryExtension<IPlayerTextLabelData>(*player))
+                labels->release(it->clientId);
+        }
+        shown.erase(it);
+    }
+}
+
+bool StreamerService::updateTextLabel(int defId, StringView text, Colour colour)
+{
+    if (defId < 0 || defId >= static_cast<int>(m_labelDefs.size()) || !m_labelDefs[defId].used)
+        return false;
+
+    LabelDef &def = m_labelDefs[defId];
+    def.text = text.to_string();
+    def.colour = colour;
+
+    // Живое обновление тем, кому показан: setColourAndText шлёт один пакет.
+    for (int playerId = 0; playerId < MAX_PLAYERS; ++playerId)
+    {
+        std::vector<Shown> &shown = m_players[playerId].labels;
+        auto it = std::lower_bound(shown.begin(), shown.end(), defId,
+                                   [](const Shown &s, int id) { return s.defId < id; });
+        if (it == shown.end() || it->defId != defId)
+            continue;
+
+        if (IPlayer *player = m_core->getPlayers().get(playerId))
+        {
+            if (IPlayerTextLabelData *labels = queryExtension<IPlayerTextLabelData>(*player))
+            {
+                if (IPlayerTextLabel *label = labels->get(it->clientId))
+                    label->setColourAndText(def.colour, def.text);
+            }
+        }
+    }
+    return true;
+}
+
 int StreamerService::addMapIcon(int iconType, const Vector3 &position, Colour colour, MapIconStyle style,
                                 float streamDistance)
 {
@@ -220,7 +299,7 @@ void StreamerService::streamPlayer(IPlayer &player, const Vector3 &position, Tim
     const Vector3 &pos = position;
     m_grid->queryRadius(pos, MAX_STREAM_DISTANCE,
                         gridMask(GridEntityType::Object) | gridMask(GridEntityType::Pickup) |
-                            gridMask(GridEntityType::MapIcon),
+                            gridMask(GridEntityType::MapIcon) | gridMask(GridEntityType::TextLabel),
                         m_candidates);
 
     // Ближние первыми — бюджеты достаются ближайшим.
@@ -229,8 +308,10 @@ void StreamerService::streamPlayer(IPlayer &player, const Vector3 &position, Tim
 
     m_desiredObjects.clear();
     m_desiredIcons.clear();
+    m_desiredLabels.clear();
     int objectBudget = OBJECT_BUDGET;
     int iconBudget = ICON_BUDGET;
+    int labelBudget = LABEL_BUDGET;
 
     for (const GridService::Result &candidate : m_candidates)
     {
@@ -250,6 +331,13 @@ void StreamerService::streamPlayer(IPlayer &player, const Vector3 &position, Tim
                 --iconBudget;
             }
             break;
+        case GridEntityType::TextLabel:
+            if (labelBudget > 0 && candidate.distSq <= m_labelDefs[candidate.id].streamDistSq)
+            {
+                m_desiredLabels.push_back(candidate.id);
+                --labelBudget;
+            }
+            break;
         case GridEntityType::Pickup:
             // Пикапы глобальные: проход только помечает «нужен», создаёт развёртка.
             if (candidate.distSq <= m_pickupDefs[candidate.id].streamDistSq)
@@ -262,6 +350,7 @@ void StreamerService::streamPlayer(IPlayer &player, const Vector3 &position, Tim
 
     diffObjects(player, pp);
     diffIcons(player, pp);
+    diffLabels(player, pp);
 }
 
 void StreamerService::diffObjects(IPlayer &player, PerPlayer &pp)
@@ -346,6 +435,42 @@ void StreamerService::diffIcons(IPlayer &player, PerPlayer &pp)
         }
     }
     pp.icons.swap(m_scratchShown);
+}
+
+void StreamerService::diffLabels(IPlayer &player, PerPlayer &pp)
+{
+    IPlayerTextLabelData *labels = queryExtension<IPlayerTextLabelData>(player);
+    if (!labels)
+        return;
+
+    std::sort(m_desiredLabels.begin(), m_desiredLabels.end());
+    m_scratchShown.clear();
+
+    std::size_t si = 0;
+    std::size_t di = 0;
+    while (si < pp.labels.size() || di < m_desiredLabels.size())
+    {
+        if (di == m_desiredLabels.size() || (si < pp.labels.size() && pp.labels[si].defId < m_desiredLabels[di]))
+        {
+            labels->release(pp.labels[si].clientId); // вышел из зоны — убрать
+            ++si;
+        }
+        else if (si == pp.labels.size() || m_desiredLabels[di] < pp.labels[si].defId)
+        {
+            const LabelDef &def = m_labelDefs[m_desiredLabels[di]]; // вошёл — создать
+            IPlayerTextLabel *label = labels->create(def.text, def.colour, def.position, def.drawDistance, def.testLOS);
+            if (label)
+                m_scratchShown.push_back({m_desiredLabels[di], label->getID()});
+            ++di;
+        }
+        else
+        {
+            m_scratchShown.push_back(pp.labels[si]); // уже показан
+            ++si;
+            ++di;
+        }
+    }
+    pp.labels.swap(m_scratchShown);
 }
 
 void StreamerService::sweepPickups(TimePoint now)

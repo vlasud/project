@@ -15,6 +15,7 @@ enum class GridEntityType : std::uint8_t
     Pickup,
     MapIcon,
     Actor,
+    TextLabel,
 };
 
 constexpr std::uint32_t gridMask(GridEntityType type)
