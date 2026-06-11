@@ -16,6 +16,7 @@
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
+#include "Services/Core/MovingObjectService/MovingObjectService.h"
 #include "Services/Core/ObjectEditService/ObjectEditService.h"
 #include "Services/Core/PickupService/PickupService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
@@ -61,6 +62,7 @@ void ServiceRegister::registerServices()
     registerService<CameraService>();
     registerService<GameTextService>();
     registerService<SpectateService>();
+    registerService<MovingObjectService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
