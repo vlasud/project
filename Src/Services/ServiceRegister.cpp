@@ -5,6 +5,7 @@
 #include "Services/Core/CameraService/CameraService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
 #include "Services/Core/ClassSelectionService/ClassSelectionService.h"
+#include "Services/Core/GameTextService/GameTextService.h"
 #include "Services/Core/GangZoneService/GangZoneService.h"
 #include "Services/Core/GridService/GridService.h"
 #include "Services/Core/PlayerActivityService/PlayerActivityService.h"
@@ -57,6 +58,7 @@ void ServiceRegister::registerServices()
     registerService<ObjectEditService>();
     registerService<AudioService>();
     registerService<CameraService>();
+    registerService<GameTextService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();

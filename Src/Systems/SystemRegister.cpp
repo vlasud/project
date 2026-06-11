@@ -8,6 +8,7 @@
 #include "Systems/Core/ClassSelectionSystem/ClassSelectionSystem.h"
 #include "Systems/Core/DebugCameraSystem/DebugCameraSystem.h"
 #include "Systems/Core/EditorSystem/EditorSystem.h"
+#include "Systems/Core/GameTextSystem/GameTextSystem.h"
 #include "Systems/Core/GangZoneEditorSystem/GangZoneEditorSystem.h"
 #include "Systems/Core/GangZoneSystem/GangZoneSystem.h"
 #include "Systems/Core/GridDebugSystem/GridDebugSystem.h"
@@ -65,6 +66,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // существовать до того, как редактор начнёт сессии.
     m_systems.push_back(std::make_unique<ObjectEditSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AudioSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<GameTextSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<CheckpointSystem>(core, serviceRegister));
     // m_systems.push_back(std::make_unique<GridDebugSystem>(core, serviceRegister));
