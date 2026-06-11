@@ -17,6 +17,7 @@
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 #include "Systems/Core/MapIconSystem/MapIconSystem.h"
 #include "Systems/Core/MovingObjectSystem/MovingObjectSystem.h"
+#include "Systems/Core/NicknameSystem/NicknameSystem.h"
 #include "Systems/Core/ObjectEditSystem/ObjectEditSystem.h"
 #include "Systems/Core/PickupSystem/PickupSystem.h"
 #include "Systems/Core/PlayerActivitySystem/PlayerActivitySystem.h"
@@ -50,6 +51,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // TimerSystem первым: его initialize() передаёт сервису компонент таймеров
     // раньше, чем другие системы смогут ставить таймеры в своих initialize().
     m_systems.push_back(std::make_unique<TimerSystem>(core, serviceRegister));
+    // NicknameSystem максимально рано: невалидный ник отсекается на входящем
+    // подключении, до того как остальные системы заведут на игрока состояние.
+    m_systems.push_back(std::make_unique<NicknameSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerConnectionVersionSystem>(core, serviceRegister));
     // LocationSystem раньше остальных: на том же апдейте все читают уже принятую
     // позицию; VelocitySystem сразу после — производная от свежей позиции.
