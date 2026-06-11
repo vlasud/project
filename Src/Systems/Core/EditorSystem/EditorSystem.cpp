@@ -35,6 +35,8 @@ constexpr int MAX_ACTOR_SKIN = 311;
 constexpr int MIN_VEHICLE_MODEL = 400;
 constexpr int MAX_VEHICLE_MODEL = 611;
 constexpr int MAX_VEHICLE_COLOUR = 255;
+constexpr int MAX_PICKUP_TYPE = 23;   // клиентские типы поведения SA
+constexpr int DEFAULT_PICKUP_TYPE = 1; // статичный, не исчезает при касании
 
 // Зонд FindZ читает позицию стоящего игрока, а это его туловище (~центр педа),
 // не ноги: прочитанный Z = уровень земли + PED_ORIGIN_HEIGHT. Объект ставим на
@@ -42,6 +44,7 @@ constexpr int MAX_VEHICLE_COLOUR = 255;
 // чуть выше земли, дальше её усадит клиентская физика.
 constexpr float PED_ORIGIN_HEIGHT = 1.0f;     // от ног стоящего педа до его origin
 constexpr float VEHICLE_GROUND_OFFSET = 0.5f; // полколеса над землёй
+constexpr float PICKUP_GROUND_OFFSET = 0.5f;  // пикап чуть над землёй, чтобы не утонул в текстуре
 
 // Высота, с которой клиент ищет землю (выше самой высокой точки карты ~ г. Чилиад).
 constexpr float GROUND_PROBE_Z = 1500.0f;
@@ -198,6 +201,7 @@ void EditorSystem::initialize(IComponentList *components)
     m_objects = components->queryComponent<IObjectsComponent>();
     m_actors = components->queryComponent<IActorsComponent>();
     m_vehicles = components->queryComponent<IVehiclesComponent>();
+    m_pickups = components->queryComponent<IPickupsComponent>();
 }
 
 EditorSystem::EditorState &EditorSystem::stateOf(const IPlayer &player)
@@ -586,6 +590,36 @@ void EditorSystem::createVehicleEntity(IPlayer &player, int model)
     }
 }
 
+void EditorSystem::createPickupEntity(IPlayer &player, int model)
+{
+    EditorState &state = stateOf(player);
+    const Vector3 pos = placementPoint(player);
+
+    // isStatic=false: позицию можно менять на месте (setPosition с рестримом).
+    IPickup *pickup = m_pickups ? m_pickups->create(model, DEFAULT_PICKUP_TYPE, pos, 0, false) : nullptr;
+    if (!pickup)
+    {
+        player.sendClientMessage(Colour::White(), u("Не удалось создать пикап (нет компонента или лимит)"));
+        return;
+    }
+
+    EditorEntity entity;
+    entity.type = EntityType::Pickup;
+    entity.entityId = pickup->getID();
+    entity.model = model;
+    entity.position = pos;
+    entity.pickupType = DEFAULT_PICKUP_TYPE;
+
+    state.entities.push_back(entity);
+    state.selectedIndex = static_cast<int>(state.entities.size()) - 1;
+    state.followCamera = false;
+
+    if (state.autoGround)
+    {
+        requestGroundSnap(player, state.selectedIndex);
+    }
+}
+
 void EditorSystem::duplicateEntity(IPlayer &player, int index)
 {
     EditorState &state = stateOf(player);
@@ -617,7 +651,7 @@ void EditorSystem::duplicateEntity(IPlayer &player, int index)
         }
         copy.entityId = actor->getID();
     }
-    else
+    else if (copy.type == EntityType::Vehicle)
     {
         IVehicle *vehicle = spawnVehicle(copy);
         if (!vehicle)
@@ -626,6 +660,18 @@ void EditorSystem::duplicateEntity(IPlayer &player, int index)
             return;
         }
         copy.entityId = vehicle->getID();
+    }
+    else
+    {
+        IPickup *pickup =
+            m_pickups ? m_pickups->create(copy.model, static_cast<PickupType>(copy.pickupType), copy.position, 0, false)
+                      : nullptr;
+        if (!pickup)
+        {
+            player.sendClientMessage(Colour::White(), u("Не удалось создать копию пикапа"));
+            return;
+        }
+        copy.entityId = pickup->getID();
     }
 
     state.entities.push_back(copy);
@@ -652,12 +698,19 @@ void EditorSystem::applyEntityTransform(EditorEntity &entity)
             actor->setRotation(GTAQuat(entity.rotation));
         }
     }
-    else
+    else if (entity.type == EntityType::Vehicle)
     {
         if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(entity.entityId) : nullptr)
         {
             vehicle->setPosition(entity.position);
             vehicle->setZAngle(entity.rotation.z);
+        }
+    }
+    else
+    {
+        if (IPickup *pickup = m_pickups ? m_pickups->get(entity.entityId) : nullptr)
+        {
+            pickup->setPosition(entity.position); // пикапы не вращаются — только позиция
         }
     }
 }
@@ -719,9 +772,16 @@ void EditorSystem::deleteEntity(IPlayer &player, int index)
             m_actors->release(entity.entityId);
         }
     }
-    else if (m_vehicles)
+    else if (entity.type == EntityType::Vehicle)
     {
-        m_vehicles->release(entity.entityId);
+        if (m_vehicles)
+        {
+            m_vehicles->release(entity.entityId);
+        }
+    }
+    else if (m_pickups)
+    {
+        m_pickups->release(entity.entityId);
     }
 
     state.entities.erase(state.entities.begin() + index);
@@ -751,9 +811,16 @@ void EditorSystem::clearScene(IPlayer &player)
                 m_actors->release(entity.entityId);
             }
         }
-        else if (m_vehicles)
+        else if (entity.type == EntityType::Vehicle)
         {
-            m_vehicles->release(entity.entityId);
+            if (m_vehicles)
+            {
+                m_vehicles->release(entity.entityId);
+            }
+        }
+        else if (m_pickups)
+        {
+            m_pickups->release(entity.entityId);
         }
     }
     state.entities.clear();
@@ -798,9 +865,16 @@ void EditorSystem::requestGroundSnap(IPlayer &player, int index)
             actor->setPosition(parkPosition);
         }
     }
-    else if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(entity.entityId) : nullptr)
+    else if (entity.type == EntityType::Vehicle)
     {
-        vehicle->setPosition(parkPosition);
+        if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(entity.entityId) : nullptr)
+        {
+            vehicle->setPosition(parkPosition);
+        }
+    }
+    else if (IPickup *pickup = m_pickups ? m_pickups->get(entity.entityId) : nullptr)
+    {
+        pickup->setPosition(parkPosition);
     }
 
     state.groundProbe = index;
@@ -860,6 +934,9 @@ void EditorSystem::processGroundProbe(IPlayer &player)
         case EntityType::Vehicle:
             entity.position.z = groundZ + VEHICLE_GROUND_OFFSET;
             break;
+        case EntityType::Pickup:
+            entity.position.z = groundZ + PICKUP_GROUND_OFFSET;
+            break;
         }
     }
     else
@@ -882,6 +959,7 @@ void EditorSystem::showMain(IPlayer &player)
     size_t objectCount = 0;
     size_t actorCount = 0;
     size_t vehicleCount = 0;
+    size_t pickupCount = 0;
     for (const EditorEntity &e : state.entities)
     {
         switch (e.type)
@@ -895,6 +973,9 @@ void EditorSystem::showMain(IPlayer &player)
         case EntityType::Vehicle:
             ++vehicleCount;
             break;
+        case EntityType::Pickup:
+            ++pickupCount;
+            break;
         }
     }
 
@@ -902,9 +983,11 @@ void EditorSystem::showMain(IPlayer &player)
     body += "Создать объект\n";
     body += "Создать актора (NPC)\n";
     body += "Создать машину\n";
+    body += "Создать пикап\n";
     body += fmt::format("Объекты ({})\n", objectCount);
     body += fmt::format("Акторы ({})\n", actorCount);
     body += fmt::format("Машины ({})\n", vehicleCount);
+    body += fmt::format("Пикапы ({})\n", pickupCount);
     body += fmt::format("Автоснап к земле: {}\n", state.autoGround ? "ВКЛ" : "выкл");
     body += fmt::format("Скорость камеры: {:.1f}\n", state.cameraSpeed);
     body += "Сохранить в файл\n";
@@ -939,33 +1022,39 @@ void EditorSystem::showMain(IPlayer &player)
                                  showVehicleModelInput(*player);
                                  break;
                              case 3:
-                                 showObjectList(*player);
+                                 showPickupModelInput(*player);
                                  break;
                              case 4:
-                                 showActorList(*player);
+                                 showObjectList(*player);
                                  break;
                              case 5:
-                                 showVehicleList(*player);
+                                 showActorList(*player);
                                  break;
                              case 6:
+                                 showVehicleList(*player);
+                                 break;
+                             case 7:
+                                 showPickupList(*player);
+                                 break;
+                             case 8:
                                  m_state[playerId].autoGround = !m_state[playerId].autoGround;
                                  showMain(*player);
                                  break;
-                             case 7:
+                             case 9:
                                  showCameraSpeedInput(*player);
                                  break;
-                             case 8:
+                             case 10:
                                  showSaveNameInput(*player);
                                  break;
-                             case 9:
+                             case 11:
                                  showLoadList(*player);
                                  break;
-                             case 10:
+                             case 12:
                                  showClearConfirm(*player);
                                  break;
-                             case 11:
+                             case 13:
                                  break; // летать
-                             case 12:
+                             case 14:
                                  disableEditor(*player);
                                  break;
                              default:
@@ -990,6 +1079,9 @@ void EditorSystem::showEntityEdit(IPlayer &player)
         break;
     case EntityType::Vehicle:
         showVehicleEdit(player);
+        break;
+    case EntityType::Pickup:
+        showPickupEdit(player);
         break;
     default:
         showObjectEdit(player);
@@ -1414,6 +1506,205 @@ void EditorSystem::showVehicleEdit(IPlayer &player)
         });
 }
 
+void EditorSystem::showPickupEdit(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    if (!selectedValid(state))
+    {
+        showMain(player);
+        return;
+    }
+    const EditorEntity &e = state.entities[state.selectedIndex];
+
+    std::string body;
+    body += "Поставить по взгляду камеры\n";
+    body += fmt::format("Следовать за взглядом: {}\n", state.followCamera ? "ВКЛ" : "выкл");
+    body += "Двигать клавишами (XY)\n";
+    body += "Двигать клавишами (высота)\n";
+    body += fmt::format("Шаг клавиш: {:.2f}\n", state.keyStep);
+    body += "Снэп к земле (FindZ)\n";
+    body += fmt::format("Дистанция установки: {:.1f}\n", state.placeDistance);
+    body += fmt::format("Позиция: {:.1f} {:.1f} {:.1f}\n", e.position.x, e.position.y, e.position.z);
+    body += fmt::format("Сменить модель ({})\n", e.model);
+    body += fmt::format("Тип пикапа: {}\n", e.pickupType);
+    body += "Дублировать\n";
+    body += "Перелететь к пикапу\n";
+    body += "Удалить";
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_LIST, fmt::format("Пикап (модель {})", e.model), body, "Выбрать", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            EditorState &state = m_state[playerId];
+            if (response == DialogResponse_Right || !selectedValid(state))
+            {
+                showMain(*player);
+                return;
+            }
+            EditorEntity &entity = state.entities[state.selectedIndex];
+
+            switch (listItem)
+            {
+            case 0:
+                entity.position = placementPoint(*player);
+                applyEntityTransform(entity);
+                if (state.autoGround)
+                {
+                    requestGroundSnap(*player, state.selectedIndex);
+                }
+                showPickupEdit(*player);
+                break;
+            case 1:
+                state.followCamera = !state.followCamera;
+                if (state.followCamera)
+                {
+                    player->sendClientMessage(
+                        Colour::White(), u("Пикап следует за взглядом. Летайте, затем /editor чтобы зафиксировать."));
+                }
+                else
+                {
+                    showPickupEdit(*player);
+                }
+                break;
+            case 2:
+                state.followCamera = false;
+                state.keyMode = KeyMode::MoveXY;
+                player->sendClientMessage(Colour::White(),
+                                          u("Стрелки двигают пикап (Sprint — крупно, Alt — точно). /editor — готово."));
+                break;
+            case 3:
+                state.followCamera = false;
+                state.keyMode = KeyMode::MoveZ;
+                player->sendClientMessage(
+                    Colour::White(), u("Вверх/вниз меняют высоту (Sprint — крупно, Alt — точно). /editor — готово."));
+                break;
+            case 4:
+                showKeyStepInput(*player);
+                break;
+            case 5:
+                requestGroundSnap(*player, state.selectedIndex);
+                player->sendClientMessage(Colour::White(), u("Ищу землю под пикапом..."));
+                showPickupEdit(*player);
+                break;
+            case 6:
+                showDistanceInput(*player);
+                break;
+            case 7:
+                showPositionInput(*player);
+                break;
+            case 8:
+                showChangeModelInput(*player);
+                break;
+            case 9:
+                showPickupTypeInput(*player);
+                break;
+            case 10:
+                duplicateEntity(*player, state.selectedIndex);
+                showEntityEdit(*player);
+                break;
+            case 11: // перелететь
+                state.cameraPosition = entity.position + Vector3(2.0f, 2.0f, 2.0f);
+                if (state.cameraObjectId >= 0 && m_objects)
+                {
+                    if (IObject *camObject = m_objects->get(state.cameraObjectId))
+                    {
+                        camObject->setPosition(state.cameraPosition);
+                    }
+                }
+                showPickupEdit(*player);
+                break;
+            case 12:
+                deleteEntity(*player, state.selectedIndex);
+                player->sendClientMessage(Colour::White(), u("Пикап удалён"));
+                showMain(*player);
+                break;
+            default:
+                break;
+            }
+        });
+}
+
+void EditorSystem::showPickupModelInput(IPlayer &player)
+{
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_INPUT, "Создать пикап", "Введите ID модели пикапа (напр. 1212 — деньги, 1240 — сердце)",
+                   "Создать", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            if (response == DialogResponse_Right)
+            {
+                showMain(*player);
+                return;
+            }
+
+            int model = 0;
+            if (!parseInt(text, model) || model < 0 || model > MAX_OBJECT_MODEL)
+            {
+                player->sendClientMessage(Colour::White(),
+                                          u(fmt::format("Введите ID модели от 0 до {}", MAX_OBJECT_MODEL)));
+                showPickupModelInput(*player);
+                return;
+            }
+
+            createPickupEntity(*player, model);
+            showEntityEdit(*player);
+        });
+}
+
+void EditorSystem::showPickupTypeInput(IPlayer &player)
+{
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_INPUT, "Тип пикапа",
+                   u(fmt::format("Введите тип поведения (0-{}). Частые: 1 — статичный, 2 — исчезает и респавнится, "
+                                 "14 — подбор из машины",
+                                 MAX_PICKUP_TYPE)),
+                   "OK", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            EditorState &state = m_state[playerId];
+            if (response == DialogResponse_Left && selectedValid(state))
+            {
+                int type = 0;
+                if (!parseInt(text, type) || type < 0 || type > MAX_PICKUP_TYPE)
+                {
+                    player->sendClientMessage(Colour::White(),
+                                              u(fmt::format("Введите тип от 0 до {}", MAX_PICKUP_TYPE)));
+                    showPickupTypeInput(*player);
+                    return;
+                }
+
+                EditorEntity &entity = state.entities[state.selectedIndex];
+                entity.pickupType = type;
+                if (IPickup *pickup = m_pickups ? m_pickups->get(entity.entityId) : nullptr)
+                {
+                    pickup->setType(static_cast<PickupType>(type));
+                }
+            }
+
+            showEntityEdit(*player);
+        });
+}
+
 void EditorSystem::showObjectModelInput(IPlayer &player)
 {
     m_dialogService.show(
@@ -1622,7 +1913,7 @@ void EditorSystem::showChangeModelInput(IPlayer &player)
                         applyEntityAnimation(entity); // смена скина сбрасывает анимацию на клиенте
                     }
                 }
-                else
+                else if (entity.type == EntityType::Vehicle)
                 {
                     // У машин модель не меняется на месте — пересоздаём с тем же трансформом.
                     const int oldModel = entity.model;
@@ -1640,6 +1931,14 @@ void EditorSystem::showChangeModelInput(IPlayer &player)
                     {
                         entity.model = oldModel;
                         player->sendClientMessage(Colour::White(), u("Не удалось пересоздать машину"));
+                    }
+                }
+                else
+                {
+                    entity.model = model;
+                    if (IPickup *pickup = m_pickups ? m_pickups->get(entity.entityId) : nullptr)
+                    {
+                        pickup->setModel(model);
                     }
                 }
             }
@@ -2130,6 +2429,49 @@ void EditorSystem::showVehicleList(IPlayer &player)
                          });
 }
 
+void EditorSystem::showPickupList(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+
+    std::vector<int> mapping;
+    std::string body;
+    for (size_t i = 0; i < state.entities.size(); ++i)
+    {
+        const EditorEntity &e = state.entities[i];
+        if (e.type != EntityType::Pickup)
+        {
+            continue;
+        }
+        body += fmt::format("#{}\tмодель {}\tтип {}\t{:.1f} {:.1f} {:.1f}\n", i, e.model, e.pickupType, e.position.x,
+                            e.position.y, e.position.z);
+        mapping.push_back(static_cast<int>(i));
+    }
+    if (body.empty())
+    {
+        body = "Список пуст";
+    }
+
+    m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Пикапы на сцене", body, "Выбрать", "Назад"),
+                         [this, playerId = player.getID(), mapping = std::move(mapping)](DialogResponse response,
+                                                                                         int listItem, StringView)
+                         {
+                             IPlayer *player = editorPlayer(playerId);
+                             if (!player)
+                             {
+                                 return;
+                             }
+
+                             if (response != DialogResponse_Left || listItem < 0 || listItem >= (int)mapping.size())
+                             {
+                                 showMain(*player);
+                                 return;
+                             }
+
+                             m_state[playerId].selectedIndex = mapping[listItem];
+                             showPickupEdit(*player);
+                         });
+}
+
 void EditorSystem::showLoadList(IPlayer &player)
 {
     std::vector<std::string> files = listMapFiles();
@@ -2255,10 +2597,15 @@ bool EditorSystem::saveToFile(const EditorState &state, const std::string &name,
             out << fmt::format("actor {} {:.4f} {:.4f} {:.4f} {:.4f} {} {} {}\n", e.model, e.position.x, e.position.y,
                                e.position.z, e.rotation.z, lib, anim, e.animLoop ? "loop" : "freeze");
         }
-        else
+        else if (e.type == EntityType::Vehicle)
         {
             out << fmt::format("vehicle {} {:.4f} {:.4f} {:.4f} {:.4f} {} {}\n", e.model, e.position.x, e.position.y,
                                e.position.z, e.rotation.z, e.colour1, e.colour2);
+        }
+        else
+        {
+            out << fmt::format("pickup {} {} {:.4f} {:.4f} {:.4f}\n", e.model, e.pickupType, e.position.x,
+                               e.position.y, e.position.z);
         }
     }
 
@@ -2359,6 +2706,28 @@ bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::s
                 continue;
             }
             entity.entityId = vehicle->getID();
+            state.entities.push_back(entity);
+            ++loaded;
+        }
+        else if (kind == "pickup")
+        {
+            EditorEntity entity;
+            entity.type = EntityType::Pickup;
+            if (!(ss >> entity.model >> entity.pickupType >> entity.position.x >> entity.position.y >>
+                  entity.position.z))
+            {
+                continue;
+            }
+            entity.pickupType = std::clamp(entity.pickupType, 0, MAX_PICKUP_TYPE);
+
+            IPickup *pickup = m_pickups ? m_pickups->create(entity.model, static_cast<PickupType>(entity.pickupType),
+                                                            entity.position, 0, false)
+                                        : nullptr;
+            if (!pickup)
+            {
+                continue;
+            }
+            entity.entityId = pickup->getID();
             state.entities.push_back(entity);
             ++loaded;
         }

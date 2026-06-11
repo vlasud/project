@@ -136,6 +136,33 @@ void StreamerService::removePickup(int defId)
     m_freePickupDefs.push_back(defId);
 }
 
+int StreamerService::pickupDefByPoolId(int poolId) const
+{
+    if (poolId < 0)
+    {
+        return -1;
+    }
+    for (std::size_t i = 0; i < m_pickupDefs.size(); ++i)
+    {
+        if (m_pickupDefs[i].used && m_pickupDefs[i].poolId == poolId)
+        {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+bool StreamerService::getPickupInfo(int defId, Vector3 &position, std::uint32_t &virtualWorld) const
+{
+    if (defId < 0 || defId >= static_cast<int>(m_pickupDefs.size()) || !m_pickupDefs[defId].used)
+    {
+        return false;
+    }
+    position = m_pickupDefs[defId].position;
+    virtualWorld = m_pickupDefs[defId].virtualWorld;
+    return true;
+}
+
 int StreamerService::addMapIcon(int iconType, const Vector3 &position, Colour colour, MapIconStyle style,
                                 float streamDistance)
 {

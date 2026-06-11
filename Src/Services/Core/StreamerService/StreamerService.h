@@ -54,6 +54,12 @@ class StreamerService final : public IService
     void sweepPickups(TimePoint now);                  // глобальная развёртка пикапов
     void resetPlayer(int playerId);
 
+    // Def id пикапа по id в пуле (для маршрутизации onPlayerPickUpPickup), -1 —
+    // пикап не из стримера. Линейный по числу def'ов — события подбора редкие.
+    int pickupDefByPoolId(int poolId) const;
+    // Позиция и мир def'а пикапа (для валидации подбора).
+    bool getPickupInfo(int defId, Vector3 &position, std::uint32_t &virtualWorld) const;
+
     // --- отладка/инспекция ---
     std::size_t shownObjectCount(int playerId) const
     {

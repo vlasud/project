@@ -30,6 +30,7 @@ class AntiCheatService final : public IService
         SpecialActionHack,     // джетпак без выдачи / побег из принудительного экшена
         WeaponHack,            // оружие без выдачи / стрельба без патронов
         VehicleHack,           // repair hack / фейковый unoccupied-trailer sync
+        PickupHack,            // подбор пикапа с неправдоподобной дистанции / из чужого мира
     };
 
     struct Violation

@@ -8,6 +8,7 @@
 #include "player.hpp"
 #include <Server/Components/Actors/actors.hpp>
 #include <Server/Components/Objects/objects.hpp>
+#include <Server/Components/Pickups/pickups.hpp>
 #include <Server/Components/Vehicles/vehicles.hpp>
 #include <array>
 #include <string>
@@ -42,7 +43,8 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     {
         Object,
         Actor,
-        Vehicle
+        Vehicle,
+        Pickup
     };
 
     // Кому сейчас принадлежат стрелки: камере или выбранной сущности.
@@ -66,6 +68,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
         bool animLoop = true; // true — зациклена; false — стоп-поза (freeze на последнем кадре)
         int colour1 = -1;     // цвета машины (-1 — случайный)
         int colour2 = -1;
+        int pickupType = 1;   // клиентский тип поведения пикапа
     };
 
     struct EditorState
@@ -101,6 +104,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void createObjectEntity(IPlayer &player, int model);
     void createActorEntity(IPlayer &player, int skin);
     void createVehicleEntity(IPlayer &player, int model);
+    void createPickupEntity(IPlayer &player, int model);
     IVehicle *spawnVehicle(const EditorEntity &entity); // создать машину по данным сущности
     void duplicateEntity(IPlayer &player, int index);
     void applyEntityTransform(EditorEntity &entity);
@@ -117,10 +121,13 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void showObjectEdit(IPlayer &player);
     void showActorEdit(IPlayer &player);
     void showVehicleEdit(IPlayer &player);
+    void showPickupEdit(IPlayer &player);
     void showObjectModelInput(IPlayer &player);
     void showActorSkinInput(IPlayer &player);
     void showVehicleModelInput(IPlayer &player);
     void showVehicleColoursInput(IPlayer &player);
+    void showPickupModelInput(IPlayer &player);
+    void showPickupTypeInput(IPlayer &player);
     void showChangeModelInput(IPlayer &player); // смена модели объекта / скина актора на месте
     void showPositionInput(IPlayer &player);
     void showRotationInput(IPlayer &player); // объект: три угла одной строкой
@@ -138,6 +145,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void showObjectList(IPlayer &player);
     void showActorList(IPlayer &player);
     void showVehicleList(IPlayer &player);
+    void showPickupList(IPlayer &player);
 
     // --- файлы ---
     bool saveToFile(const EditorState &state, const std::string &name, std::string &error);
@@ -154,6 +162,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     IObjectsComponent *m_objects = nullptr;
     IActorsComponent *m_actors = nullptr;
     IVehiclesComponent *m_vehicles = nullptr;
+    IPickupsComponent *m_pickups = nullptr;
 
     std::array<EditorState, MAX_PLAYERS> m_state;
 };
