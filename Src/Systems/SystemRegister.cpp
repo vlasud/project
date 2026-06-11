@@ -2,6 +2,7 @@
 
 #include "Systems/Core/AntiCheatSystem/AntiCheatSystem.h"
 #include "Systems/Core/ChatSystem/ChatSystem.h"
+#include "Systems/Core/CheckpointSystem/CheckpointSystem.h"
 #include "Systems/Core/DebugCameraSystem/DebugCameraSystem.h"
 #include "Systems/Core/EditorSystem/EditorSystem.h"
 #include "Systems/Core/GangZoneEditorSystem/GangZoneEditorSystem.h"
@@ -49,6 +50,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // пикапы, созданные стримером.
     m_systems.push_back(std::make_unique<PickupSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<CheckpointSystem>(core, serviceRegister));
     // m_systems.push_back(std::make_unique<GridDebugSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<LocationDebugSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<VehicleDebugSystem>(core, serviceRegister));

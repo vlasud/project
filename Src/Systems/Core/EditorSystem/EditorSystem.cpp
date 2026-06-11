@@ -37,6 +37,7 @@ constexpr int MAX_VEHICLE_MODEL = 611;
 constexpr int MAX_VEHICLE_COLOUR = 255;
 constexpr int MAX_PICKUP_TYPE = 23;   // клиентские типы поведения SA
 constexpr int DEFAULT_PICKUP_TYPE = 1; // статичный, не исчезает при касании
+constexpr float DEFAULT_CHECKPOINT_RADIUS = 3.0f;
 
 // Зонд FindZ читает позицию стоящего игрока, а это его туловище (~центр педа),
 // не ноги: прочитанный Z = уровень земли + PED_ORIGIN_HEIGHT. Объект ставим на
@@ -45,6 +46,10 @@ constexpr int DEFAULT_PICKUP_TYPE = 1; // статичный, не исчеза�
 constexpr float PED_ORIGIN_HEIGHT = 1.0f;     // от ног стоящего педа до его origin
 constexpr float VEHICLE_GROUND_OFFSET = 0.5f; // полколеса над землёй
 constexpr float PICKUP_GROUND_OFFSET = 0.5f;  // пикап чуть над землёй, чтобы не утонул в текстуре
+constexpr float CHECKPOINT_GROUND_OFFSET = 1.0f; // цилиндр чекпоинта рисуется от его Z
+// Превью чекпоинта обновляется пересозданием на клиенте — 30 раз в секунду он
+// не переваривает, обновляем с троттлингом (финальное значение доедет в меню).
+constexpr int CHECKPOINT_REFRESH_TICKS = 5;
 
 // Высота, с которой клиент ищет землю (выше самой высокой точки карты ~ г. Чилиад).
 constexpr float GROUND_PROBE_Z = 1500.0f;
@@ -158,7 +163,8 @@ float stepMultiplier(const PlayerKeyData &keys)
 EditorSystem::EditorSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_commandService(serviceRegister.getService<PlayerCommandService>()),
-      m_locationService(serviceRegister.getService<PlayerLocationService>())
+      m_locationService(serviceRegister.getService<PlayerLocationService>()),
+      m_checkpointService(serviceRegister.getService<CheckpointService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
@@ -288,6 +294,7 @@ void EditorSystem::disableEditor(IPlayer &player)
     state.followCamera = false;
     state.keyMode = KeyMode::Camera;
     state.selectedIndex = -1;
+    refreshCheckpointPreview(player); // снять превью чекпоинта
 
     // Возвращаем тело в точку входа: зонды и слепой бег растаскали его по карте.
     m_locationService.teleport(player, state.returnPosition);
@@ -323,6 +330,10 @@ bool EditorSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
         EditorEntity &entity = state.entities[state.selectedIndex];
         entity.position = placementPoint(player);
         applyEntityTransform(entity);
+        if (entity.type == EntityType::Checkpoint)
+        {
+            refreshCheckpointPreview(player);
+        }
     }
 
     return true;
@@ -448,6 +459,23 @@ void EditorSystem::processKeyMode(IPlayer &player)
         break;
     case KeyMode::Rotate:
     {
+        // Для чекпоинта вращения нет — влево/вправо меняют радиус.
+        if (entity.type == EntityType::Checkpoint)
+        {
+            if (keyData.leftRight > 0)
+            {
+                entity.radius += step;
+                changed = true;
+            }
+            else if (keyData.leftRight < 0)
+            {
+                entity.radius -= step;
+                changed = true;
+            }
+            entity.radius = std::clamp(entity.radius, CheckpointService::MIN_RADIUS, CheckpointService::MAX_RADIUS);
+            break;
+        }
+
         const float rotStep = step * ROTATE_DEG_PER_STEP;
         if (keyData.leftRight > 0)
         {
@@ -468,6 +496,14 @@ void EditorSystem::processKeyMode(IPlayer &player)
     if (changed)
     {
         applyEntityTransform(entity);
+        if (entity.type == EntityType::Checkpoint)
+        {
+            if (--state.checkpointRefreshCooldown <= 0)
+            {
+                state.checkpointRefreshCooldown = CHECKPOINT_REFRESH_TICKS;
+                refreshCheckpointPreview(player);
+            }
+        }
     }
 }
 
@@ -620,6 +656,66 @@ void EditorSystem::createPickupEntity(IPlayer &player, int model)
     }
 }
 
+void EditorSystem::createCheckpointEntity(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+
+    EditorEntity entity;
+    entity.type = EntityType::Checkpoint;
+    entity.position = placementPoint(player);
+    entity.radius = DEFAULT_CHECKPOINT_RADIUS;
+
+    // Реальный глобальный чекпоинт (без обработчиков): остаётся в мире после
+    // выхода из редактора и стримится всем игрокам, как и остальные сущности.
+    entity.entityId = m_checkpointService.add(entity.position, entity.radius, nullptr);
+    if (entity.entityId < 0)
+    {
+        player.sendClientMessage(Colour::White(), u("Не удалось создать чекпоинт"));
+        return;
+    }
+
+    state.entities.push_back(entity);
+    state.selectedIndex = static_cast<int>(state.entities.size()) - 1;
+    state.followCamera = false;
+
+    refreshCheckpointPreview(player);
+    if (state.autoGround)
+    {
+        requestGroundSnap(player, state.selectedIndex);
+    }
+}
+
+void EditorSystem::refreshCheckpointPreview(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    const bool active =
+        state.enabled && selectedValid(state) && state.entities[state.selectedIndex].type == EntityType::Checkpoint;
+
+    if (!active)
+    {
+        if (state.previewIndex != -1)
+        {
+            state.previewIndex = -1;
+            m_checkpointService.clearForPlayer(player); // стрим глобальных вернёт ближайший
+        }
+        return;
+    }
+
+    // Личный чекпоинт поверх стрима: выбранный виден, даже если рядом есть более
+    // близкий глобальный. Пересоздание маркера — только при фактических изменениях,
+    // иначе он мерцал бы на каждом открытии диалога и тике followCamera.
+    const EditorEntity &e = state.entities[state.selectedIndex];
+    if (state.previewIndex == state.selectedIndex && state.previewPosition == e.position &&
+        state.previewRadius == e.radius)
+    {
+        return;
+    }
+    state.previewIndex = state.selectedIndex;
+    state.previewPosition = e.position;
+    state.previewRadius = e.radius;
+    m_checkpointService.setForPlayer(player, e.position, e.radius);
+}
+
 void EditorSystem::duplicateEntity(IPlayer &player, int index)
 {
     EditorState &state = stateOf(player);
@@ -661,7 +757,7 @@ void EditorSystem::duplicateEntity(IPlayer &player, int index)
         }
         copy.entityId = vehicle->getID();
     }
-    else
+    else if (copy.type == EntityType::Pickup)
     {
         IPickup *pickup =
             m_pickups ? m_pickups->create(copy.model, static_cast<PickupType>(copy.pickupType), copy.position, 0, false)
@@ -673,11 +769,21 @@ void EditorSystem::duplicateEntity(IPlayer &player, int index)
         }
         copy.entityId = pickup->getID();
     }
+    else
+    {
+        copy.entityId = m_checkpointService.add(copy.position, copy.radius, nullptr);
+        if (copy.entityId < 0)
+        {
+            player.sendClientMessage(Colour::White(), u("Не удалось создать копию чекпоинта"));
+            return;
+        }
+    }
 
     state.entities.push_back(copy);
     state.selectedIndex = static_cast<int>(state.entities.size()) - 1;
     state.followCamera = false;
     applyEntityAnimation(state.entities.back());
+    refreshCheckpointPreview(player); // выбор сменился — превью следует за ним
 }
 
 void EditorSystem::applyEntityTransform(EditorEntity &entity)
@@ -706,12 +812,17 @@ void EditorSystem::applyEntityTransform(EditorEntity &entity)
             vehicle->setZAngle(entity.rotation.z);
         }
     }
-    else
+    else if (entity.type == EntityType::Pickup)
     {
         if (IPickup *pickup = m_pickups ? m_pickups->get(entity.entityId) : nullptr)
         {
             pickup->setPosition(entity.position); // пикапы не вращаются — только позиция
         }
+    }
+    else
+    {
+        // Глобальный чекпоинт; превью редактирующего обновляет refreshCheckpointPreview.
+        m_checkpointService.update(entity.entityId, entity.position, entity.radius);
     }
 }
 
@@ -779,15 +890,23 @@ void EditorSystem::deleteEntity(IPlayer &player, int index)
             m_vehicles->release(entity.entityId);
         }
     }
-    else if (m_pickups)
+    else if (entity.type == EntityType::Pickup)
     {
-        m_pickups->release(entity.entityId);
+        if (m_pickups)
+        {
+            m_pickups->release(entity.entityId);
+        }
+    }
+    else
+    {
+        m_checkpointService.remove(entity.entityId);
     }
 
     state.entities.erase(state.entities.begin() + index);
     state.selectedIndex = -1;
     state.followCamera = false;
     state.keyMode = KeyMode::Camera;
+    refreshCheckpointPreview(player); // выбор сброшен — превью гаснет
 }
 
 void EditorSystem::clearScene(IPlayer &player)
@@ -818,15 +937,23 @@ void EditorSystem::clearScene(IPlayer &player)
                 m_vehicles->release(entity.entityId);
             }
         }
-        else if (m_pickups)
+        else if (entity.type == EntityType::Pickup)
         {
-            m_pickups->release(entity.entityId);
+            if (m_pickups)
+            {
+                m_pickups->release(entity.entityId);
+            }
+        }
+        else
+        {
+            m_checkpointService.remove(entity.entityId);
         }
     }
     state.entities.clear();
     state.selectedIndex = -1;
     state.followCamera = false;
     state.keyMode = KeyMode::Camera;
+    refreshCheckpointPreview(player);
 }
 
 // Запускает асинхронный поиск земли: телепортирует невидимое тело игрока в (x, y, высоко),
@@ -872,10 +999,14 @@ void EditorSystem::requestGroundSnap(IPlayer &player, int index)
             vehicle->setPosition(parkPosition);
         }
     }
-    else if (IPickup *pickup = m_pickups ? m_pickups->get(entity.entityId) : nullptr)
+    else if (entity.type == EntityType::Pickup)
     {
-        pickup->setPosition(parkPosition);
+        if (IPickup *pickup = m_pickups ? m_pickups->get(entity.entityId) : nullptr)
+        {
+            pickup->setPosition(parkPosition);
+        }
     }
+    // Checkpoint: коллизии нет — прятать от рейкаста FindZ нечего.
 
     state.groundProbe = index;
     state.groundProbeTicks = 0;
@@ -937,6 +1068,9 @@ void EditorSystem::processGroundProbe(IPlayer &player)
         case EntityType::Pickup:
             entity.position.z = groundZ + PICKUP_GROUND_OFFSET;
             break;
+        case EntityType::Checkpoint:
+            entity.position.z = groundZ + CHECKPOINT_GROUND_OFFSET;
+            break;
         }
     }
     else
@@ -947,6 +1081,10 @@ void EditorSystem::processGroundProbe(IPlayer &player)
     }
 
     applyEntityTransform(entity); // поднять сущность из укрытия на найденную землю (или вернуть как было)
+    if (entity.type == EntityType::Checkpoint)
+    {
+        refreshCheckpointPreview(player);
+    }
     state.groundProbe = -1;
 }
 
@@ -960,6 +1098,7 @@ void EditorSystem::showMain(IPlayer &player)
     size_t actorCount = 0;
     size_t vehicleCount = 0;
     size_t pickupCount = 0;
+    size_t checkpointCount = 0;
     for (const EditorEntity &e : state.entities)
     {
         switch (e.type)
@@ -976,6 +1115,9 @@ void EditorSystem::showMain(IPlayer &player)
         case EntityType::Pickup:
             ++pickupCount;
             break;
+        case EntityType::Checkpoint:
+            ++checkpointCount;
+            break;
         }
     }
 
@@ -984,10 +1126,12 @@ void EditorSystem::showMain(IPlayer &player)
     body += "Создать актора (NPC)\n";
     body += "Создать машину\n";
     body += "Создать пикап\n";
+    body += "Создать чекпоинт\n";
     body += fmt::format("Объекты ({})\n", objectCount);
     body += fmt::format("Акторы ({})\n", actorCount);
     body += fmt::format("Машины ({})\n", vehicleCount);
     body += fmt::format("Пикапы ({})\n", pickupCount);
+    body += fmt::format("Чекпоинты ({})\n", checkpointCount);
     body += fmt::format("Автоснап к земле: {}\n", state.autoGround ? "ВКЛ" : "выкл");
     body += fmt::format("Скорость камеры: {:.1f}\n", state.cameraSpeed);
     body += "Сохранить в файл\n";
@@ -1025,36 +1169,43 @@ void EditorSystem::showMain(IPlayer &player)
                                  showPickupModelInput(*player);
                                  break;
                              case 4:
-                                 showObjectList(*player);
+                                 createCheckpointEntity(*player);
+                                 showEntityEdit(*player);
                                  break;
                              case 5:
-                                 showActorList(*player);
+                                 showObjectList(*player);
                                  break;
                              case 6:
-                                 showVehicleList(*player);
+                                 showActorList(*player);
                                  break;
                              case 7:
-                                 showPickupList(*player);
+                                 showVehicleList(*player);
                                  break;
                              case 8:
+                                 showPickupList(*player);
+                                 break;
+                             case 9:
+                                 showCheckpointList(*player);
+                                 break;
+                             case 10:
                                  m_state[playerId].autoGround = !m_state[playerId].autoGround;
                                  showMain(*player);
                                  break;
-                             case 9:
+                             case 11:
                                  showCameraSpeedInput(*player);
                                  break;
-                             case 10:
+                             case 12:
                                  showSaveNameInput(*player);
                                  break;
-                             case 11:
+                             case 13:
                                  showLoadList(*player);
                                  break;
-                             case 12:
+                             case 14:
                                  showClearConfirm(*player);
                                  break;
-                             case 13:
+                             case 15:
                                  break; // летать
-                             case 14:
+                             case 16:
                                  disableEditor(*player);
                                  break;
                              default:
@@ -1083,6 +1234,9 @@ void EditorSystem::showEntityEdit(IPlayer &player)
     case EntityType::Pickup:
         showPickupEdit(player);
         break;
+    case EntityType::Checkpoint:
+        showCheckpointEdit(player);
+        break;
     default:
         showObjectEdit(player);
         break;
@@ -1098,6 +1252,7 @@ void EditorSystem::showObjectEdit(IPlayer &player)
         return;
     }
     const EditorEntity &e = state.entities[state.selectedIndex];
+    refreshCheckpointPreview(player); // выбор мог смениться с чекпоинта или на него
 
     std::string body;
     body += "Поставить по взгляду камеры\n";
@@ -1229,6 +1384,7 @@ void EditorSystem::showActorEdit(IPlayer &player)
         return;
     }
     const EditorEntity &e = state.entities[state.selectedIndex];
+    refreshCheckpointPreview(player); // выбор мог смениться с чекпоинта или на него
 
     std::string body;
     body += "Поставить по взгляду камеры\n";
@@ -1380,6 +1536,7 @@ void EditorSystem::showVehicleEdit(IPlayer &player)
         return;
     }
     const EditorEntity &e = state.entities[state.selectedIndex];
+    refreshCheckpointPreview(player); // выбор мог смениться с чекпоинта или на него
 
     std::string body;
     body += "Поставить по взгляду камеры\n";
@@ -1515,6 +1672,7 @@ void EditorSystem::showPickupEdit(IPlayer &player)
         return;
     }
     const EditorEntity &e = state.entities[state.selectedIndex];
+    refreshCheckpointPreview(player); // выбор мог смениться с чекпоинта или на него
 
     std::string body;
     body += "Поставить по взгляду камеры\n";
@@ -1627,6 +1785,172 @@ void EditorSystem::showPickupEdit(IPlayer &player)
             default:
                 break;
             }
+        });
+}
+
+void EditorSystem::showCheckpointEdit(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    if (!selectedValid(state))
+    {
+        showMain(player);
+        return;
+    }
+    const EditorEntity &e = state.entities[state.selectedIndex];
+    refreshCheckpointPreview(player);
+
+    std::string body;
+    body += "Поставить по взгляду камеры\n";
+    body += fmt::format("Следовать за взглядом: {}\n", state.followCamera ? "ВКЛ" : "выкл");
+    body += "Двигать клавишами (XY)\n";
+    body += "Двигать клавишами (высота)\n";
+    body += "Менять радиус клавишами\n";
+    body += fmt::format("Шаг клавиш: {:.2f}\n", state.keyStep);
+    body += "Снэп к земле (FindZ)\n";
+    body += fmt::format("Дистанция установки: {:.1f}\n", state.placeDistance);
+    body += fmt::format("Позиция: {:.1f} {:.1f} {:.1f}\n", e.position.x, e.position.y, e.position.z);
+    body += fmt::format("Радиус: {:.1f}\n", e.radius);
+    body += "Дублировать\n";
+    body += "Перелететь к чекпоинту\n";
+    body += "Удалить";
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_LIST, fmt::format("Чекпоинт (радиус {:.1f})", e.radius), body, "Выбрать", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            EditorState &state = m_state[playerId];
+            if (response == DialogResponse_Right || !selectedValid(state))
+            {
+                showMain(*player);
+                return;
+            }
+            EditorEntity &entity = state.entities[state.selectedIndex];
+
+            switch (listItem)
+            {
+            case 0:
+                entity.position = placementPoint(*player);
+                applyEntityTransform(entity);
+                refreshCheckpointPreview(*player);
+                if (state.autoGround)
+                {
+                    requestGroundSnap(*player, state.selectedIndex);
+                }
+                showCheckpointEdit(*player);
+                break;
+            case 1:
+                state.followCamera = !state.followCamera;
+                if (state.followCamera)
+                {
+                    player->sendClientMessage(
+                        Colour::White(), u("Чекпоинт следует за взглядом. Летайте, затем /editor чтобы зафиксировать."));
+                }
+                else
+                {
+                    showCheckpointEdit(*player);
+                }
+                break;
+            case 2:
+                state.followCamera = false;
+                state.keyMode = KeyMode::MoveXY;
+                player->sendClientMessage(
+                    Colour::White(), u("Стрелки двигают чекпоинт (Sprint — крупно, Alt — точно). /editor — готово."));
+                break;
+            case 3:
+                state.followCamera = false;
+                state.keyMode = KeyMode::MoveZ;
+                player->sendClientMessage(
+                    Colour::White(), u("Вверх/вниз меняют высоту (Sprint — крупно, Alt — точно). /editor — готово."));
+                break;
+            case 4:
+                state.followCamera = false;
+                state.keyMode = KeyMode::Rotate; // для чекпоинта вращение = радиус
+                player->sendClientMessage(
+                    Colour::White(), u("Влево/вправо меняют радиус (Sprint — крупно, Alt — точно). /editor — готово."));
+                break;
+            case 5:
+                showKeyStepInput(*player);
+                break;
+            case 6:
+                requestGroundSnap(*player, state.selectedIndex);
+                player->sendClientMessage(Colour::White(), u("Ищу землю под чекпоинтом..."));
+                showCheckpointEdit(*player);
+                break;
+            case 7:
+                showDistanceInput(*player);
+                break;
+            case 8:
+                showPositionInput(*player);
+                break;
+            case 9:
+                showRadiusInput(*player);
+                break;
+            case 10:
+                duplicateEntity(*player, state.selectedIndex);
+                showEntityEdit(*player);
+                break;
+            case 11: // перелететь
+                state.cameraPosition = entity.position + Vector3(2.0f, 2.0f, 2.0f);
+                if (state.cameraObjectId >= 0 && m_objects)
+                {
+                    if (IObject *camObject = m_objects->get(state.cameraObjectId))
+                    {
+                        camObject->setPosition(state.cameraPosition);
+                    }
+                }
+                showCheckpointEdit(*player);
+                break;
+            case 12:
+                deleteEntity(*player, state.selectedIndex);
+                player->sendClientMessage(Colour::White(), u("Чекпоинт удалён"));
+                showMain(*player);
+                break;
+            default:
+                break;
+            }
+        });
+}
+
+void EditorSystem::showRadiusInput(IPlayer &player)
+{
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_INPUT, "Радиус чекпоинта",
+                   fmt::format("Введите радиус ({:.1f}-{:.1f})", CheckpointService::MIN_RADIUS,
+                               CheckpointService::MAX_RADIUS),
+                   "OK", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            EditorState &state = m_state[playerId];
+            if (response == DialogResponse_Left && selectedValid(state))
+            {
+                float radius = 0.0f;
+                if (parseFloat(text.to_string(), radius))
+                {
+                    state.entities[state.selectedIndex].radius =
+                        std::clamp(radius, CheckpointService::MIN_RADIUS, CheckpointService::MAX_RADIUS);
+                    applyEntityTransform(state.entities[state.selectedIndex]);
+                    refreshCheckpointPreview(*player);
+                }
+                else
+                {
+                    player->sendClientMessage(Colour::White(), u("Введите корректное число"));
+                }
+            }
+
+            showEntityEdit(*player);
         });
 }
 
@@ -2472,6 +2796,49 @@ void EditorSystem::showPickupList(IPlayer &player)
                          });
 }
 
+void EditorSystem::showCheckpointList(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+
+    std::vector<int> mapping;
+    std::string body;
+    for (size_t i = 0; i < state.entities.size(); ++i)
+    {
+        const EditorEntity &e = state.entities[i];
+        if (e.type != EntityType::Checkpoint)
+        {
+            continue;
+        }
+        body += fmt::format("#{}\tрадиус {:.1f}\t{:.1f} {:.1f} {:.1f}\n", i, e.radius, e.position.x, e.position.y,
+                            e.position.z);
+        mapping.push_back(static_cast<int>(i));
+    }
+    if (body.empty())
+    {
+        body = "Список пуст";
+    }
+
+    m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Чекпоинты на сцене", body, "Выбрать", "Назад"),
+                         [this, playerId = player.getID(), mapping = std::move(mapping)](DialogResponse response,
+                                                                                         int listItem, StringView)
+                         {
+                             IPlayer *player = editorPlayer(playerId);
+                             if (!player)
+                             {
+                                 return;
+                             }
+
+                             if (response != DialogResponse_Left || listItem < 0 || listItem >= (int)mapping.size())
+                             {
+                                 showMain(*player);
+                                 return;
+                             }
+
+                             m_state[playerId].selectedIndex = mapping[listItem];
+                             showCheckpointEdit(*player);
+                         });
+}
+
 void EditorSystem::showLoadList(IPlayer &player)
 {
     std::vector<std::string> files = listMapFiles();
@@ -2602,10 +2969,15 @@ bool EditorSystem::saveToFile(const EditorState &state, const std::string &name,
             out << fmt::format("vehicle {} {:.4f} {:.4f} {:.4f} {:.4f} {} {}\n", e.model, e.position.x, e.position.y,
                                e.position.z, e.rotation.z, e.colour1, e.colour2);
         }
-        else
+        else if (e.type == EntityType::Pickup)
         {
             out << fmt::format("pickup {} {} {:.4f} {:.4f} {:.4f}\n", e.model, e.pickupType, e.position.x,
                                e.position.y, e.position.z);
+        }
+        else
+        {
+            out << fmt::format("checkpoint {:.4f} {:.4f} {:.4f} {:.2f}\n", e.position.x, e.position.y, e.position.z,
+                               e.radius);
         }
     }
 
@@ -2728,6 +3100,23 @@ bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::s
                 continue;
             }
             entity.entityId = pickup->getID();
+            state.entities.push_back(entity);
+            ++loaded;
+        }
+        else if (kind == "checkpoint")
+        {
+            EditorEntity entity;
+            entity.type = EntityType::Checkpoint;
+            if (!(ss >> entity.position.x >> entity.position.y >> entity.position.z >> entity.radius))
+            {
+                continue;
+            }
+            entity.radius = std::clamp(entity.radius, CheckpointService::MIN_RADIUS, CheckpointService::MAX_RADIUS);
+            entity.entityId = m_checkpointService.add(entity.position, entity.radius, nullptr);
+            if (entity.entityId < 0)
+            {
+                continue;
+            }
             state.entities.push_back(entity);
             ++loaded;
         }

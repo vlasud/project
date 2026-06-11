@@ -1,6 +1,7 @@
 #include "Services/ServiceRegister.h"
 
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
+#include "Services/Core/CheckpointService/CheckpointService.h"
 #include "Services/Core/GangZoneService/GangZoneService.h"
 #include "Services/Core/GridService/GridService.h"
 #include "Services/Core/PlayerAnimationService/PlayerAnimationService.h"
@@ -38,6 +39,7 @@ void ServiceRegister::registerServices()
     registerService<GangZoneService>();
     registerService<PickupService>();
     registerService<MapIconService>();
+    registerService<CheckpointService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();

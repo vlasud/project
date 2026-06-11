@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Macro.h"
+#include "Services/Core/CheckpointService/CheckpointService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
@@ -44,7 +45,8 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
         Object,
         Actor,
         Vehicle,
-        Pickup
+        Pickup,
+        Checkpoint
     };
 
     // Кому сейчас принадлежат стрелки: камере или выбранной сущности.
@@ -69,6 +71,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
         int colour1 = -1;     // цвета машины (-1 — случайный)
         int colour2 = -1;
         int pickupType = 1;   // клиентский тип поведения пикапа
+        float radius = 3.0f;  // радиус чекпоинта
     };
 
     struct EditorState
@@ -87,6 +90,11 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
         bool autoGround = true;     // автоснап к земле при установке
         int groundProbe = -1;       // индекс сущности, для которой ищется земля (FindZ)
         int groundProbeTicks = 0;   // тики ожидания ответа клиента
+        int checkpointRefreshCooldown = 0; // троттлинг пересоздания превью чекпоинта в режимах клавиш
+        // кэш последнего показанного превью — пропуск no-op обновлений
+        int previewIndex = -1;
+        Vector3 previewPosition{};
+        float previewRadius = 0.0f;
     };
 
     // --- управление режимом ---
@@ -105,6 +113,10 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void createActorEntity(IPlayer &player, int skin);
     void createVehicleEntity(IPlayer &player, int model);
     void createPickupEntity(IPlayer &player, int model);
+    void createCheckpointEntity(IPlayer &player);
+    // Чекпоинт не имеет мировой сущности: у клиента показывается только один,
+    // поэтому превью получает лишь выбранный (через личный слот CheckpointService).
+    void refreshCheckpointPreview(IPlayer &player);
     IVehicle *spawnVehicle(const EditorEntity &entity); // создать машину по данным сущности
     void duplicateEntity(IPlayer &player, int index);
     void applyEntityTransform(EditorEntity &entity);
@@ -122,12 +134,14 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void showActorEdit(IPlayer &player);
     void showVehicleEdit(IPlayer &player);
     void showPickupEdit(IPlayer &player);
+    void showCheckpointEdit(IPlayer &player);
     void showObjectModelInput(IPlayer &player);
     void showActorSkinInput(IPlayer &player);
     void showVehicleModelInput(IPlayer &player);
     void showVehicleColoursInput(IPlayer &player);
     void showPickupModelInput(IPlayer &player);
     void showPickupTypeInput(IPlayer &player);
+    void showRadiusInput(IPlayer &player);
     void showChangeModelInput(IPlayer &player); // смена модели объекта / скина актора на месте
     void showPositionInput(IPlayer &player);
     void showRotationInput(IPlayer &player); // объект: три угла одной строкой
@@ -146,6 +160,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void showActorList(IPlayer &player);
     void showVehicleList(IPlayer &player);
     void showPickupList(IPlayer &player);
+    void showCheckpointList(IPlayer &player);
 
     // --- файлы ---
     bool saveToFile(const EditorState &state, const std::string &name, std::string &error);
@@ -157,7 +172,8 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
 
     PlayerDialogService &m_dialogService;
     PlayerCommandService &m_commandService;
-    PlayerLocationService &m_locationService; // байпас валидации позиции на время редактора
+    PlayerLocationService &m_locationService;     // байпас валидации позиции на время редактора
+    CheckpointService &m_checkpointService;       // превью выбранного чекпоинта
 
     IObjectsComponent *m_objects = nullptr;
     IActorsComponent *m_actors = nullptr;
