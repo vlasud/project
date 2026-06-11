@@ -56,6 +56,83 @@ constexpr float GROUND_PROBE_Z = 1500.0f;
 constexpr int GROUND_PROBE_WAIT = 10;    // тиков ожидания ответа клиента перед чтением Z
 constexpr float PROBE_PARK_Z = -1000.0f; // куда временно прячем сущность, чтобы FindZ не попал в неё
 
+constexpr int MAX_INTERIOR_ID = 255;
+
+// Известные интерьеры (https://sampwiki.blast.hk/wiki/InteriorIDs): телепорт
+// сразу выставляет нужный interior id и переносит тело с камерой.
+struct InteriorSpot
+{
+    const char *name;
+    int interior;
+    float x, y, z;
+};
+constexpr InteriorSpot INTERIOR_SPOTS[] = {
+    {"24/7 1", 17, -25.8845f, -35.0952f, -3.3979f},
+    {"24/7 2", 10, 6.0912f, -13.1705f, 10.8973f},
+    {"24/7 3", 18, -30.9467f, -39.2296f, -12.9542f},
+    {"24/7 4", 16, -25.1326f, -39.1961f, -14.0429f},
+    {"24/7 5", 4, -27.3123f, -36.9258f, -25.8106f},
+    {"24/7 6", 6, -26.6916f, -37.4347f, -16.2656f},
+    {"Ammunation 1", 1, 286.149f, -40.6444f, 1001.5699f},
+    {"Ammunation 2", 4, 286.801f, -82.5476f, 1001.5400f},
+    {"Ammunation 3", 6, 296.9200f, -108.0720f, 1001.5699f},
+    {"Ammunation 4", 7, 314.8210f, -141.4320f, 999.6620f},
+    {"Ammunation 5", 6, 316.5250f, -167.7070f, 999.6620f},
+    {"Ammunation Booth", 7, 302.2929f, -143.1391f, 1004.0625f},
+    {"Ammunation Range", 7, 280.7951f, -135.2034f, 1004.0625f},
+    {"Burglary House 1", 3, 235.5090f, 1189.1699f, 1080.3400f},
+    {"Burglary House 2", 2, 225.7570f, 1240.0000f, 1082.1499f},
+    {"Burglary House 3", 1, 223.0440f, 1289.2599f, 1082.2000f},
+    {"Burglary House 4", 7, 225.6310f, 1022.4800f, 1084.0699f},
+    {"Burglary House 5", 15, 295.1390f, 1474.4700f, 1080.5199f},
+    {"Burglary House 6", 15, 328.4940f, 1480.5900f, 1084.4500f},
+    {"Burglary House 7", 15, 385.8040f, 1471.7699f, 1080.2100f},
+    {"Atrium", 18, 1726.18f, -1641.00f, 20.23f},
+    {"Big Smoke's Crack Palace", 2, 2567.52f, -1294.59f, 1063.25f},
+    {"Bloodbowl Stadium", 15, -1394.20f, 987.62f, 1023.96f},
+    {"8 Track Stadium", 7, -1395.958f, -208.197f, 1051.170f},
+    {"Dirt Bike Stadium", 4, -1424.9319f, -664.5869f, 1059.8585f},
+    {"Kickstart Stadium", 14, -1410.72f, 1591.16f, 1052.53f},
+    {"Burning Desire House", 5, 2338.32f, -1180.61f, 1027.98f},
+    {"Colonel Furhberger's", 8, 2807.63f, -1170.15f, 1025.57f},
+    {"Crack Den", 5, 318.565f, 1115.210f, 1082.98f},
+    {"Donut Shop (Rusty Brown's)", 17, 376.99f, -191.21f, 1000.63f},
+    {"Francis Int. Airport", 14, -1830.81f, 16.83f, 1061.14f},
+    {"LS Airport Baggage Reclaim", 14, -1870.80f, 59.81f, 1056.25f},
+    {"Shamal cabin", 1, 2.3848f, 33.1034f, 1199.8500f},
+    {"Andromada cargo hold", 9, 315.8562f, 1024.4965f, 1949.7974f},
+    {"Jefferson Motel", 15, 2220.26f, -1148.01f, 1025.80f},
+    {"Golden Bed Motel Room", 9, 2251.85f, -1138.16f, 1050.63f},
+    {"Red Bed Motel Room", 10, 2262.83f, -1137.71f, 1050.63f},
+    {"Liberty City", 1, -750.80f, 491.00f, 1371.70f},
+    {"Pleasure Domes (Jizzy's)", 3, -2637.69f, 1404.24f, 906.46f},
+    {"RC Battlefield", 10, -1079.99f, 1061.58f, 1343.04f},
+    {"Zero's RC Shop", 6, -2240.00f, 131.00f, 1035.40f},
+    {"Ryder's House", 2, 2451.77f, -1699.80f, 1013.51f},
+    {"Sweet's House", 1, 2535.83f, -1674.32f, 1015.50f},
+    {"Johnson's House (CJ)", 3, 2496.65f, -1696.55f, 1014.74f},
+    {"SF Garage Interior", 1, -2042.42f, 178.59f, 28.84f},
+    {"Welcome Pump", 1, 681.66f, -453.32f, -25.61f},
+    {"Woozie's Apartment", 1, -2158.72f, 641.29f, 1052.38f},
+    {"Hashbury House", 10, 2260.76f, -1210.45f, 1049.02f},
+    {"Madd Dogg's Mansion", 5, 1299.14f, -794.77f, 1084.00f},
+    {"Verdant Bluffs Safehouse", 8, 2365.42f, -1131.85f, 1050.88f},
+    {"Unused Safe House", 12, 2324.33f, -1144.79f, 1050.71f},
+    {"SF Police Department", 10, 246.40f, 110.84f, 1003.22f},
+    {"Tattoos", 16, -203.0764f, -24.1658f, 1002.2734f},
+    {"Burger Shot", 10, 363.4129f, -74.5786f, 1001.5078f},
+    {"Well Stacked Pizza", 5, 372.3520f, -131.6510f, 1001.4922f},
+    {"Cluckin' Bell", 9, 365.7158f, -9.8873f, 1001.8516f},
+    {"Caligula's Casino", 1, 2233.8032f, 1712.2303f, 1011.7632f},
+    {"Casino (Redsands West)", 12, 1118.8878f, -10.2737f, 1002.0859f},
+    {"4 Dragons Casino", 10, 2016.2699f, 1017.7790f, 996.8750f},
+    {"Loco Low Co.", 2, 616.7820f, -74.8151f, 997.6350f},
+    {"Wheel Arch Angels", 3, 615.2851f, -124.2390f, 997.6350f},
+    {"Transfender", 1, 617.5380f, -1.9900f, 1000.6829f},
+    {"Dillimore Gas Station", 0, 664.19f, -570.73f, 16.34f},
+};
+constexpr int INTERIOR_SPOT_COUNT = static_cast<int>(sizeof(INTERIOR_SPOTS) / sizeof(INTERIOR_SPOTS[0]));
+
 // Готовые позы NPC: проверенные зацикленные анимации для типовых сценок.
 struct AnimPreset
 {
@@ -301,6 +378,17 @@ void EditorSystem::disableEditor(IPlayer &player)
     m_locationService.setBypass(player.getID(), false);
     player.setCameraBehind();
     player.sendClientMessage(Colour::White(), u("Редактор выключен. Расставленные сущности остались на сцене."));
+}
+
+void EditorSystem::teleportBodyToCamera(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    m_locationService.teleport(player, state.cameraPosition);
+    // Точка выхода из редактора переезжает сюда — телепорт к камере и задуман
+    // как способ переместиться по миру.
+    state.returnPosition = state.cameraPosition;
+    player.sendClientMessage(Colour::White(),
+                             u("Тело телепортировано к камере (упадёт на землю, если камера в воздухе)."));
 }
 
 // ------------------------------------------------------------------ per-tick
@@ -1132,6 +1220,9 @@ void EditorSystem::showMain(IPlayer &player)
     body += fmt::format("Машины ({})\n", vehicleCount);
     body += fmt::format("Пикапы ({})\n", pickupCount);
     body += fmt::format("Чекпоинты ({})\n", checkpointCount);
+    body += "Телепорт тела к камере\n";
+    body += fmt::format("Интерьер: {}\n", m_locationService.getInterior(player.getID()));
+    body += "Телепорт по интерьерам\n";
     body += fmt::format("Автоснап к земле: {}\n", state.autoGround ? "ВКЛ" : "выкл");
     body += fmt::format("Скорость камеры: {:.1f}\n", state.cameraSpeed);
     body += "Сохранить в файл\n";
@@ -1188,24 +1279,34 @@ void EditorSystem::showMain(IPlayer &player)
                                  showCheckpointList(*player);
                                  break;
                              case 10:
-                                 m_state[playerId].autoGround = !m_state[playerId].autoGround;
+                                 teleportBodyToCamera(*player);
                                  showMain(*player);
                                  break;
                              case 11:
-                                 showCameraSpeedInput(*player);
+                                 showInteriorInput(*player);
                                  break;
                              case 12:
-                                 showSaveNameInput(*player);
+                                 showInteriorList(*player);
                                  break;
                              case 13:
-                                 showLoadList(*player);
+                                 m_state[playerId].autoGround = !m_state[playerId].autoGround;
+                                 showMain(*player);
                                  break;
                              case 14:
-                                 showClearConfirm(*player);
+                                 showCameraSpeedInput(*player);
                                  break;
                              case 15:
-                                 break; // летать
+                                 showSaveNameInput(*player);
+                                 break;
                              case 16:
+                                 showLoadList(*player);
+                                 break;
+                             case 17:
+                                 showClearConfirm(*player);
+                                 break;
+                             case 18:
+                                 break; // летать
+                             case 19:
                                  disableEditor(*player);
                                  break;
                              default:
@@ -2423,6 +2524,85 @@ void EditorSystem::showDistanceInput(IPlayer &player)
             }
 
             showEntityEdit(*player);
+        });
+}
+
+void EditorSystem::showInteriorInput(IPlayer &player)
+{
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_INPUT, "Интерьер",
+                   fmt::format("Введите ID интерьера (0-{}). 0 — внешний мир.", MAX_INTERIOR_ID), "OK", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            if (response == DialogResponse_Left)
+            {
+                int interior = 0;
+                if (parseInt(text, interior) && interior >= 0 && interior <= MAX_INTERIOR_ID)
+                {
+                    m_locationService.setInterior(*player, static_cast<unsigned>(interior));
+                }
+                else
+                {
+                    player->sendClientMessage(Colour::White(),
+                                              u(fmt::format("Введите ID от 0 до {}", MAX_INTERIOR_ID)));
+                }
+            }
+
+            showMain(*player);
+        });
+}
+
+void EditorSystem::showInteriorList(IPlayer &player)
+{
+    std::string body;
+    for (const InteriorSpot &spot : INTERIOR_SPOTS)
+    {
+        body += fmt::format("{}\tID {}\n", spot.name, spot.interior);
+    }
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_LIST, "Телепорт по интерьерам", body, "Телепорт", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            if (response != DialogResponse_Left || listItem < 0 || listItem >= INTERIOR_SPOT_COUNT)
+            {
+                showMain(*player);
+                return;
+            }
+
+            const InteriorSpot &spot = INTERIOR_SPOTS[listItem];
+            const Vector3 position(spot.x, spot.y, spot.z);
+
+            EditorState &state = m_state[playerId];
+            // Переносим и тело, и камеру: интерьеры лежат в «виртуальных комнатах»
+            // на высоте ~1000, лететь туда камерой бессмысленно.
+            m_locationService.setInterior(*player, static_cast<unsigned>(spot.interior));
+            m_locationService.teleport(*player, position);
+            state.returnPosition = position;
+            state.cameraPosition = position + Vector3(0.0f, 0.0f, 1.0f);
+            if (state.cameraObjectId >= 0 && m_objects)
+            {
+                if (IObject *camObject = m_objects->get(state.cameraObjectId))
+                {
+                    camObject->setPosition(state.cameraPosition);
+                }
+            }
+
+            player->sendClientMessage(
+                Colour::White(), u(fmt::format("Телепорт: {} (интерьер {}). /editor — меню.", spot.name, spot.interior)));
         });
 }
 

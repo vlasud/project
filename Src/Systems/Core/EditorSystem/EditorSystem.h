@@ -100,6 +100,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     // --- управление режимом ---
     void enableEditor(IPlayer &player);
     void disableEditor(IPlayer &player);
+    void teleportBodyToCamera(IPlayer &player); // и точка выхода из редактора переезжает сюда
 
     // --- per-tick ---
     void processCameraFlight(IPlayer &player);
@@ -142,6 +143,8 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void showPickupModelInput(IPlayer &player);
     void showPickupTypeInput(IPlayer &player);
     void showRadiusInput(IPlayer &player);
+    void showInteriorInput(IPlayer &player);
+    void showInteriorList(IPlayer &player); // телепорт по известным интерьерам
     void showChangeModelInput(IPlayer &player); // смена модели объекта / скина актора на месте
     void showPositionInput(IPlayer &player);
     void showRotationInput(IPlayer &player); // объект: три угла одной строкой
