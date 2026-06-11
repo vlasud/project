@@ -1,5 +1,6 @@
 #include "Systems/Core/GangZoneEditorSystem/GangZoneEditorSystem.h"
 
+#include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <cctype>
@@ -9,6 +10,7 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 
 namespace
 {
@@ -436,7 +438,7 @@ void GangZoneEditorSystem::showMain(IPlayer &player)
                                  showSaveNameInput(*player);
                                  break;
                              case 3:
-                                 showLoadList(*player);
+                                 listZoneFilesAsync(*player); // листинг каталога на воркере
                                  break;
                              case 4:
                                  showClearConfirm(*player);
@@ -711,24 +713,13 @@ void GangZoneEditorSystem::showSaveNameInput(IPlayer &player)
                 return;
             }
 
-            std::string error;
-            if (saveToFile(name, error))
-            {
-                player->sendClientMessage(Colour::White(),
-                                          u(fmt::format("Зоны сохранены: {}/{}.txt", ZONES_DIR, name)));
-            }
-            else
-            {
-                player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
-            }
+            saveToFileAsync(*player, name); // запись на воркере, сообщение придёт из колбэка
             showMain(*player);
         });
 }
 
-void GangZoneEditorSystem::showLoadList(IPlayer &player)
+void GangZoneEditorSystem::showLoadList(IPlayer &player, std::vector<std::string> files)
 {
-    std::vector<std::string> files = listZoneFiles();
-
     std::string body;
     for (const std::string &name : files)
     {
@@ -755,18 +746,7 @@ void GangZoneEditorSystem::showLoadList(IPlayer &player)
                 return;
             }
 
-            std::string error;
-            std::size_t loaded = 0;
-            if (loadFromFile(files[listItem], error, loaded))
-            {
-                player->sendClientMessage(Colour::White(),
-                                          u(fmt::format("Загружено зон: {} из {}", loaded, files[listItem])));
-            }
-            else
-            {
-                player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
-            }
-            showMain(*player);
+            loadFromFileAsync(*player, files[listItem]); // чтение на воркере, итог из колбэка
         });
 }
 
@@ -802,62 +782,144 @@ void GangZoneEditorSystem::showClearConfirm(IPlayer &player)
 }
 
 // ------------------------------------------------------------------ файлы
+// Диск — на воркерах тредпула; сериализация, парсинг и работа с зонами — на
+// главном потоке (SDK не потокобезопасен).
 
-std::vector<std::string> GangZoneEditorSystem::listZoneFiles() const
+std::string GangZoneEditorSystem::serializeZones() const
 {
-    std::vector<std::string> result;
-    std::error_code ec;
-    if (!std::filesystem::exists(ZONES_DIR, ec))
-    {
-        return result;
-    }
-    for (const auto &entry : std::filesystem::directory_iterator(ZONES_DIR, ec))
-    {
-        if (entry.is_regular_file() && entry.path().extension() == ".txt")
-        {
-            result.push_back(entry.path().stem().string());
-        }
-    }
-    return result;
-}
-
-bool GangZoneEditorSystem::saveToFile(const std::string &name, std::string &error)
-{
-    std::error_code ec;
-    std::filesystem::create_directories(ZONES_DIR, ec);
-
-    const std::string path = ZONES_DIR + "/" + name + ".txt";
-    std::ofstream out(path, std::ios::trunc);
-    if (!out)
-    {
-        error = "не удалось открыть файл " + path;
-        return false;
-    }
-
+    std::string out;
     // Строки в порядке приоритета (первая — старшая, обрезает остальных).
     for (const GangZoneService::ZoneInfo &zone : m_gangZoneService.listZones())
     {
-        out << fmt::format("zone {:.2f} {:.2f} {:.2f} {:.2f} {}\n", zone.rect.min.x, zone.rect.min.y, zone.rect.max.x,
+        out += fmt::format("zone {:.2f} {:.2f} {:.2f} {:.2f} {}\n", zone.rect.min.x, zone.rect.min.y, zone.rect.max.x,
                            zone.rect.max.y, colourToHex(zone.colour));
     }
-
-    return true;
+    return out;
 }
 
-bool GangZoneEditorSystem::loadFromFile(const std::string &name, std::string &error, std::size_t &loaded)
+void GangZoneEditorSystem::saveToFileAsync(IPlayer &player, const std::string &name)
 {
     const std::string path = ZONES_DIR + "/" + name + ".txt";
-    std::ifstream in(path);
-    if (!in)
-    {
-        error = "не удалось открыть файл " + path;
-        return false;
-    }
 
+    ThreadPool::Task<bool> task;
+    task.func = [path, content = serializeZones()]()
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(ZONES_DIR, ec);
+        std::ofstream out(path, std::ios::trunc);
+        if (!out)
+        {
+            throw std::runtime_error("не удалось открыть файл " + path);
+        }
+        out << content;
+        if (!out.good())
+        {
+            throw std::runtime_error("ошибка записи " + path);
+        }
+        return true;
+    };
+    task.callback = [this, playerId = player.getID(), path](bool)
+    {
+        if (IPlayer *player = onlinePlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Зоны сохранены: " + path));
+        }
+    };
+    task.errorCallback = [this, playerId = player.getID()](const std::string &error)
+    {
+        if (IPlayer *player = onlinePlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+void GangZoneEditorSystem::loadFromFileAsync(IPlayer &player, const std::string &name)
+{
+    const std::string path = ZONES_DIR + "/" + name + ".txt";
+
+    ThreadPool::Task<std::string> task;
+    task.func = [path]()
+    {
+        std::ifstream in(path);
+        if (!in)
+        {
+            throw std::runtime_error("не удалось открыть файл " + path);
+        }
+        std::ostringstream content;
+        content << in.rdbuf();
+        return content.str();
+    };
+    task.callback = [this, playerId = player.getID(), name](std::string content)
+    {
+        // Зоны глобальные — применяем независимо от инициатора; очистка старого
+        // набора происходит только после успешного чтения файла.
+        const std::size_t loaded = loadFromContent(content);
+
+        IPlayer *player = onlinePlayer(playerId);
+        if (!player)
+        {
+            return;
+        }
+        if (loaded > 0)
+        {
+            player->sendClientMessage(Colour::White(), u(fmt::format("Загружено зон: {} из {}", loaded, name)));
+        }
+        else
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка загрузки: в файле нет валидных зон"));
+        }
+        showMain(*player);
+    };
+    task.errorCallback = [this, playerId = player.getID()](const std::string &error)
+    {
+        if (IPlayer *player = onlinePlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
+            showMain(*player);
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+void GangZoneEditorSystem::listZoneFilesAsync(IPlayer &player)
+{
+    ThreadPool::Task<std::vector<std::string>> task;
+    task.func = []()
+    {
+        std::vector<std::string> result;
+        std::error_code ec;
+        if (!std::filesystem::exists(ZONES_DIR, ec))
+        {
+            return result;
+        }
+        for (const auto &entry : std::filesystem::directory_iterator(ZONES_DIR, ec))
+        {
+            if (entry.is_regular_file() && entry.path().extension() == ".txt")
+            {
+                result.push_back(entry.path().stem().string());
+            }
+        }
+        return result;
+    };
+    task.callback = [this, playerId = player.getID()](std::vector<std::string> files)
+    {
+        if (IPlayer *player = onlinePlayer(playerId))
+        {
+            showLoadList(*player, std::move(files));
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+std::size_t GangZoneEditorSystem::loadFromContent(const std::string &content)
+{
     // Загрузка заменяет текущий набор: порядок строк восстанавливает приоритеты.
     m_gangZoneService.clearZones();
-    loaded = 0;
+    std::size_t loaded = 0;
 
+    std::istringstream in(content);
     std::string line;
     while (std::getline(in, line))
     {
@@ -888,10 +950,5 @@ bool GangZoneEditorSystem::loadFromFile(const std::string &name, std::string &er
         }
     }
 
-    if (loaded == 0)
-    {
-        error = "в файле нет валидных зон";
-        return false;
-    }
-    return true;
+    return loaded;
 }

@@ -81,12 +81,14 @@ class TextDrawEditorSystem : public BaseSystem, public PlayerUpdateEventHandler,
     void showPreviewRotationInput(IPlayer &player);
     void showPreviewZoomInput(IPlayer &player);
     void showSaveNameInput(IPlayer &player);
-    void showLoadList(IPlayer &player);
+    void showLoadList(IPlayer &player, std::vector<std::string> files);
 
-    // --- файлы ---
-    bool saveToFile(IPlayer &player, const std::string &name, std::string &error);
-    bool loadFromFile(IPlayer &player, const std::string &name, std::string &error);
-    std::vector<std::string> listTextDrawFiles() const;
+    // --- файлы (диск — в тредпуле, колбэки на главном потоке) ---
+    std::string serializeItems(IPlayer &player);
+    void saveToFileAsync(IPlayer &player, const std::string &name);
+    void loadFromFileAsync(IPlayer &player, const std::string &name);
+    std::size_t loadFromContent(IPlayer &player, const std::string &content);
+    void listTextDrawFilesAsync(IPlayer &player);
 
     Session &sessionOf(const IPlayer &player);
     IPlayer *editorPlayer(int playerId); // игрок, если онлайн и редактор включён

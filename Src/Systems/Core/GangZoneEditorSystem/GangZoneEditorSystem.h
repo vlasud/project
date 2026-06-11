@@ -63,13 +63,15 @@ class GangZoneEditorSystem : public BaseSystem, public PlayerUpdateEventHandler,
     void showRectInput(IPlayer &player);
     void showKeyStepInput(IPlayer &player);
     void showSaveNameInput(IPlayer &player);
-    void showLoadList(IPlayer &player);
+    void showLoadList(IPlayer &player, std::vector<std::string> files);
     void showClearConfirm(IPlayer &player);
 
-    // --- файлы ---
-    bool saveToFile(const std::string &name, std::string &error);
-    bool loadFromFile(const std::string &name, std::string &error, std::size_t &loaded);
-    std::vector<std::string> listZoneFiles() const;
+    // --- файлы (диск — в тредпуле, колбэки на главном потоке) ---
+    std::string serializeZones() const;
+    void saveToFileAsync(IPlayer &player, const std::string &name);
+    void loadFromFileAsync(IPlayer &player, const std::string &name);
+    std::size_t loadFromContent(const std::string &content); // заменяет текущий набор зон
+    void listZoneFilesAsync(IPlayer &player);
 
     Session &sessionOf(const IPlayer &player);
     IPlayer *onlinePlayer(int playerId);

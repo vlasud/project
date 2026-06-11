@@ -1,5 +1,6 @@
 #include "Systems/Core/EditorSystem/EditorSystem.h"
 
+#include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
 #include "anim.hpp"
 #include "component.hpp"
@@ -10,6 +11,7 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 
 namespace
 {
@@ -241,7 +243,8 @@ EditorSystem::EditorSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_commandService(serviceRegister.getService<PlayerCommandService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
-      m_checkpointService(serviceRegister.getService<CheckpointService>())
+      m_checkpointService(serviceRegister.getService<CheckpointService>()),
+      m_vehicleService(serviceRegister.getService<VehicleService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
@@ -313,6 +316,8 @@ void EditorSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reas
 
     // Сущности остаются в мире — но зондируемая запаркована под картой, вернём её.
     cancelGroundProbe(state);
+    // Машины сцены остаются — снять с них редакторский байпас античита.
+    setVehicleEditBypasses(state, false);
 
     if (state.cameraObjectId >= 0 && m_objects)
     {
@@ -372,6 +377,9 @@ void EditorSystem::disableEditor(IPlayer &player)
     state.keyMode = KeyMode::Camera;
     state.selectedIndex = -1;
     refreshCheckpointPreview(player); // снять превью чекпоинта
+
+    // Машины сцены становятся обычными мировыми — античит снова их охраняет.
+    setVehicleEditBypasses(state, false);
 
     // Возвращаем тело в точку входа: зонды и слепой бег растаскали его по карте.
     m_locationService.teleport(player, state.returnPosition);
@@ -668,6 +676,17 @@ void EditorSystem::createActorEntity(IPlayer &player, int skin)
     }
 }
 
+void EditorSystem::setVehicleEditBypasses(EditorState &state, bool enable)
+{
+    for (const EditorEntity &entity : state.entities)
+    {
+        if (entity.type == EntityType::Vehicle)
+        {
+            m_vehicleService.setEditBypass(entity.entityId, enable);
+        }
+    }
+}
+
 IVehicle *EditorSystem::spawnVehicle(const EditorEntity &entity)
 {
     if (!m_vehicles)
@@ -703,6 +722,9 @@ void EditorSystem::createVehicleEntity(IPlayer &player, int model)
         return;
     }
     entity.entityId = vehicle->getID();
+    // Редактор двигает машину серверно, а тело редактора далеко от камеры —
+    // её unoccupied-синк не валидируем, иначе античит кикнет самого маппера.
+    m_vehicleService.setEditBypass(entity.entityId, true);
 
     state.entities.push_back(entity);
     state.selectedIndex = static_cast<int>(state.entities.size()) - 1;
@@ -844,6 +866,7 @@ void EditorSystem::duplicateEntity(IPlayer &player, int index)
             return;
         }
         copy.entityId = vehicle->getID();
+        m_vehicleService.setEditBypass(copy.entityId, true);
     }
     else if (copy.type == EntityType::Pickup)
     {
@@ -1299,7 +1322,7 @@ void EditorSystem::showMain(IPlayer &player)
                                  showSaveNameInput(*player);
                                  break;
                              case 16:
-                                 showLoadList(*player);
+                                 listMapFilesAsync(*player); // листинг каталога на воркере
                                  break;
                              case 17:
                                  showClearConfirm(*player);
@@ -2347,6 +2370,7 @@ void EditorSystem::showChangeModelInput(IPlayer &player)
                     if (IVehicle *vehicle = spawnVehicle(entity))
                     {
                         entity.entityId = vehicle->getID();
+                        m_vehicleService.setEditBypass(entity.entityId, true);
                         if (m_vehicles)
                         {
                             m_vehicles->release(oldId);
@@ -2759,16 +2783,7 @@ void EditorSystem::showSaveNameInput(IPlayer &player)
                                  return;
                              }
 
-                             std::string error;
-                             if (saveToFile(m_state[playerId], name, error))
-                             {
-                                 player->sendClientMessage(
-                                     Colour::White(), u(fmt::format("Карта сохранена: {}/{}.txt", MAPS_DIR, name)));
-                             }
-                             else
-                             {
-                                 player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
-                             }
+                             saveToFileAsync(*player, name); // запись на воркере, сообщение придёт из колбэка
                              showMain(*player);
                          });
 }
@@ -3019,10 +3034,8 @@ void EditorSystem::showCheckpointList(IPlayer &player)
                          });
 }
 
-void EditorSystem::showLoadList(IPlayer &player)
+void EditorSystem::showLoadList(IPlayer &player, std::vector<std::string> files)
 {
-    std::vector<std::string> files = listMapFiles();
-
     std::string body;
     for (const std::string &name : files)
     {
@@ -3072,68 +3085,28 @@ void EditorSystem::showLoadModeChoice(IPlayer &player, std::string fileName)
 
             if (response != DialogResponse_Left || listItem < 0 || listItem > 1)
             {
-                showLoadList(*player);
+                listMapFilesAsync(*player);
                 return;
             }
 
-            if (listItem == 0)
-            {
-                clearScene(*player);
-            }
-
-            std::string error;
-            std::size_t loaded = 0;
-            if (loadFromFile(*player, fileName, error, loaded))
-            {
-                player->sendClientMessage(Colour::White(),
-                                          u(fmt::format("Карта загружена: {} (сущностей: {})", fileName, loaded)));
-            }
-            else
-            {
-                player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
-            }
-            showMain(*player);
+            // Чтение на воркере; очистка сцены при замене — только после
+            // успешного чтения (в колбэке), чтобы битый файл не стёр работу.
+            loadFromFileAsync(*player, fileName, listItem == 0);
         });
 }
 
 // ------------------------------------------------------------------ файлы
+// Диск (запись, чтение, листинг каталога) — на воркерах тредпула; сериализация,
+// парсинг и создание сущностей — на главном потоке (SDK не потокобезопасен).
 
-std::vector<std::string> EditorSystem::listMapFiles() const
+std::string EditorSystem::serializeScene(const EditorState &state) const
 {
-    std::vector<std::string> result;
-    std::error_code ec;
-    if (!std::filesystem::exists(MAPS_DIR, ec))
-    {
-        return result;
-    }
-    for (const auto &entry : std::filesystem::directory_iterator(MAPS_DIR, ec))
-    {
-        if (entry.is_regular_file() && entry.path().extension() == ".txt")
-        {
-            result.push_back(entry.path().stem().string());
-        }
-    }
-    return result;
-}
-
-bool EditorSystem::saveToFile(const EditorState &state, const std::string &name, std::string &error)
-{
-    std::error_code ec;
-    std::filesystem::create_directories(MAPS_DIR, ec);
-
-    const std::string path = MAPS_DIR + "/" + name + ".txt";
-    std::ofstream out(path, std::ios::trunc);
-    if (!out)
-    {
-        error = "не удалось открыть файл " + path;
-        return false;
-    }
-
+    std::string out;
     for (const EditorEntity &e : state.entities)
     {
         if (e.type == EntityType::Object)
         {
-            out << fmt::format("object {} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f}\n", e.model, e.position.x,
+            out += fmt::format("object {} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f}\n", e.model, e.position.x,
                                e.position.y, e.position.z, e.rotation.x, e.rotation.y, e.rotation.z);
         }
         else if (e.type == EntityType::Actor)
@@ -3141,42 +3114,153 @@ bool EditorSystem::saveToFile(const EditorState &state, const std::string &name,
             const std::string lib = e.animLib.empty() ? "-" : e.animLib;
             const std::string anim = e.animName.empty() ? "-" : e.animName;
             // Последний токен — режим анимации; старые файлы без него читаются как loop.
-            out << fmt::format("actor {} {:.4f} {:.4f} {:.4f} {:.4f} {} {} {}\n", e.model, e.position.x, e.position.y,
+            out += fmt::format("actor {} {:.4f} {:.4f} {:.4f} {:.4f} {} {} {}\n", e.model, e.position.x, e.position.y,
                                e.position.z, e.rotation.z, lib, anim, e.animLoop ? "loop" : "freeze");
         }
         else if (e.type == EntityType::Vehicle)
         {
-            out << fmt::format("vehicle {} {:.4f} {:.4f} {:.4f} {:.4f} {} {}\n", e.model, e.position.x, e.position.y,
+            out += fmt::format("vehicle {} {:.4f} {:.4f} {:.4f} {:.4f} {} {}\n", e.model, e.position.x, e.position.y,
                                e.position.z, e.rotation.z, e.colour1, e.colour2);
         }
         else if (e.type == EntityType::Pickup)
         {
-            out << fmt::format("pickup {} {} {:.4f} {:.4f} {:.4f}\n", e.model, e.pickupType, e.position.x,
+            out += fmt::format("pickup {} {} {:.4f} {:.4f} {:.4f}\n", e.model, e.pickupType, e.position.x,
                                e.position.y, e.position.z);
         }
         else
         {
-            out << fmt::format("checkpoint {:.4f} {:.4f} {:.4f} {:.2f}\n", e.position.x, e.position.y, e.position.z,
+            out += fmt::format("checkpoint {:.4f} {:.4f} {:.4f} {:.2f}\n", e.position.x, e.position.y, e.position.z,
                                e.radius);
         }
     }
-
-    return true;
+    return out;
 }
 
-bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::string &error, std::size_t &loaded)
+void EditorSystem::saveToFileAsync(IPlayer &player, const std::string &name)
 {
     const std::string path = MAPS_DIR + "/" + name + ".txt";
-    std::ifstream in(path);
-    if (!in)
+
+    ThreadPool::Task<bool> task;
+    task.func = [path, content = serializeScene(stateOf(player))]()
     {
-        error = "не удалось открыть файл " + path;
-        return false;
-    }
+        std::error_code ec;
+        std::filesystem::create_directories(MAPS_DIR, ec);
+        std::ofstream out(path, std::ios::trunc);
+        if (!out)
+        {
+            throw std::runtime_error("не удалось открыть файл " + path);
+        }
+        out << content;
+        if (!out.good())
+        {
+            throw std::runtime_error("ошибка записи " + path);
+        }
+        return true;
+    };
+    task.callback = [this, playerId = player.getID(), path](bool)
+    {
+        if (IPlayer *player = editorPlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Карта сохранена: " + path));
+        }
+    };
+    task.errorCallback = [this, playerId = player.getID()](const std::string &error)
+    {
+        if (IPlayer *player = editorPlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
 
+void EditorSystem::loadFromFileAsync(IPlayer &player, const std::string &name, bool replace)
+{
+    const std::string path = MAPS_DIR + "/" + name + ".txt";
+
+    ThreadPool::Task<std::string> task;
+    task.func = [path]()
+    {
+        std::ifstream in(path);
+        if (!in)
+        {
+            throw std::runtime_error("не удалось открыть файл " + path);
+        }
+        std::ostringstream content;
+        content << in.rdbuf();
+        return content.str();
+    };
+    task.callback = [this, playerId = player.getID(), name, replace](std::string content)
+    {
+        IPlayer *player = editorPlayer(playerId);
+        if (!player)
+        {
+            return; // вышел из редактора, пока читали — сцену не трогаем
+        }
+
+        if (replace)
+        {
+            clearScene(*player); // только после успешного чтения файла
+        }
+        const std::size_t loaded = loadFromContent(*player, content);
+        if (loaded > 0)
+        {
+            player->sendClientMessage(Colour::White(),
+                                      u(fmt::format("Карта загружена: {} (сущностей: {})", name, loaded)));
+        }
+        else
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка загрузки: в файле нет валидных сущностей"));
+        }
+        showMain(*player);
+    };
+    task.errorCallback = [this, playerId = player.getID()](const std::string &error)
+    {
+        if (IPlayer *player = editorPlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
+            showMain(*player);
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+void EditorSystem::listMapFilesAsync(IPlayer &player)
+{
+    ThreadPool::Task<std::vector<std::string>> task;
+    task.func = []()
+    {
+        std::vector<std::string> result;
+        std::error_code ec;
+        if (!std::filesystem::exists(MAPS_DIR, ec))
+        {
+            return result;
+        }
+        for (const auto &entry : std::filesystem::directory_iterator(MAPS_DIR, ec))
+        {
+            if (entry.is_regular_file() && entry.path().extension() == ".txt")
+            {
+                result.push_back(entry.path().stem().string());
+            }
+        }
+        return result;
+    };
+    task.callback = [this, playerId = player.getID()](std::vector<std::string> files)
+    {
+        if (IPlayer *player = editorPlayer(playerId))
+        {
+            showLoadList(*player, std::move(files));
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+std::size_t EditorSystem::loadFromContent(IPlayer &player, const std::string &content)
+{
     EditorState &state = stateOf(player);
-    loaded = 0;
+    std::size_t loaded = 0;
 
+    std::istringstream in(content);
     std::string line;
     while (std::getline(in, line))
     {
@@ -3258,6 +3342,7 @@ bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::s
                 continue;
             }
             entity.entityId = vehicle->getID();
+            m_vehicleService.setEditBypass(entity.entityId, true);
             state.entities.push_back(entity);
             ++loaded;
         }
@@ -3302,10 +3387,5 @@ bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::s
         }
     }
 
-    if (loaded == 0)
-    {
-        error = "в файле нет валидных сущностей";
-        return false;
-    }
-    return true;
+    return loaded;
 }

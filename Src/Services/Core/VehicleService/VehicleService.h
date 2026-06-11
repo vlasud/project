@@ -45,6 +45,13 @@ class VehicleService final : public IService
     void setEngine(IVehicle &vehicle, bool on);
     void setLocked(IVehicle &vehicle, bool locked);
 
+    // Байпас валидации unoccupied-синка для машины, которую легально двигает
+    // сервер (редактор мира): телепорты машины — серверная правда, а
+    // редактирующий игрок (репортер синка) может быть телом далеко от камеры.
+    // Включается редактором на время жизни сущности, сбрасывается при
+    // уничтожении машины.
+    void setEditBypass(int vehicleId, bool enable);
+
     // Серверный тюнинг (бизнес-логика тюнинг-салонов, /nitro и т.п.).
     // Клиентские заявки на моды валидируются в validateMod: вне мод-шопа — чит.
     void addComponent(IVehicle &vehicle, int component);
@@ -85,6 +92,7 @@ class VehicleService final : public IService
         bool exists = false;
         float health = 1000.0f; // серверное HP
         int driverId = -1;      // обратный индекс «машина -> водитель»
+        bool editBypass = false; // машину двигает сервер (редактор) — синк не валидируем
         TimePoint lastChange;   // грейс после серверного изменения
         TimePoint lastFlag;     // rate limit нарушений
     };

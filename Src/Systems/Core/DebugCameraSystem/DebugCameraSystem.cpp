@@ -1,5 +1,6 @@
 #include "Systems/Core/DebugCameraSystem/DebugCameraSystem.h"
 
+#include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
 #include "glm/geometric.hpp"
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 
 namespace
 {
@@ -444,7 +446,7 @@ void DebugCameraSystem::showMain(IPlayer &player)
                                  showSaveNameInput(*player);
                                  break;
                              case 7:
-                                 showLoadList(*player);
+                                 listPathFilesAsync(*player); // листинг каталога на воркере
                                  break;
                              case 8:
                                  m_state[playerId].points.clear();
@@ -597,24 +599,13 @@ void DebugCameraSystem::showSaveNameInput(IPlayer &player)
                 return;
             }
 
-            std::string error;
-            if (savePathToFile(m_state[playerId], name, error))
-            {
-                player->sendClientMessage(Colour::White(),
-                                          u(fmt::format("Путь сохранён: {}/{}.txt", PATHS_DIR, name)));
-            }
-            else
-            {
-                player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
-            }
+            savePathToFileAsync(*player, name); // запись на воркере, сообщение придёт из колбэка
             showMain(*player);
         });
 }
 
-void DebugCameraSystem::showLoadList(IPlayer &player)
+void DebugCameraSystem::showLoadList(IPlayer &player, std::vector<std::string> files)
 {
-    std::vector<std::string> files = listPathFiles();
-
     std::string body;
     for (const std::string &name : files)
     {
@@ -641,18 +632,7 @@ void DebugCameraSystem::showLoadList(IPlayer &player)
                 return;
             }
 
-            std::string error;
-            if (loadPathFromFile(m_state[playerId], files[listItem], error))
-            {
-                player->sendClientMessage(
-                    Colour::White(), u(fmt::format("Путь загружен: {} (точек: {}). /cplay — проиграть.",
-                                                   files[listItem], m_state[playerId].points.size())));
-            }
-            else
-            {
-                player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
-            }
-            showMain(*player);
+            loadPathFromFileAsync(*player, files[listItem]); // чтение на воркере, итог из колбэка
         });
 }
 
@@ -691,62 +671,142 @@ void DebugCameraSystem::showSegmentTimeInput(IPlayer &player)
 }
 
 // ------------------------------------------------------------------ файлы
+// Диск — на воркерах тредпула; сериализация/парсинг и состояние камеры — на
+// главном потоке.
 
-std::vector<std::string> DebugCameraSystem::listPathFiles() const
+std::string DebugCameraSystem::serializePath(const CameraState &state) const
 {
-    std::vector<std::string> result;
-    std::error_code ec;
-    if (!std::filesystem::exists(PATHS_DIR, ec))
-    {
-        return result;
-    }
-    for (const auto &entry : std::filesystem::directory_iterator(PATHS_DIR, ec))
-    {
-        if (entry.is_regular_file() && entry.path().extension() == ".txt")
-        {
-            result.push_back(entry.path().stem().string());
-        }
-    }
-    return result;
-}
-
-bool DebugCameraSystem::savePathToFile(const CameraState &state, const std::string &name, std::string &error)
-{
-    std::error_code ec;
-    std::filesystem::create_directories(PATHS_DIR, ec);
-
-    const std::string path = PATHS_DIR + "/" + name + ".txt";
-    std::ofstream out(path, std::ios::trunc);
-    if (!out)
-    {
-        error = "не удалось открыть файл " + path;
-        return false;
-    }
-
-    out << fmt::format("settings {} {}\n", state.segmentTimeMs, state.loop ? 1 : 0);
+    std::string out = fmt::format("settings {} {}\n", state.segmentTimeMs, state.loop ? 1 : 0);
     for (const CameraPoint &p : state.points)
     {
-        out << fmt::format("point {:.4f} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f}\n", p.position.x, p.position.y,
+        out += fmt::format("point {:.4f} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f}\n", p.position.x, p.position.y,
                            p.position.z, p.lookAt.x, p.lookAt.y, p.lookAt.z);
     }
-
-    return true;
+    return out;
 }
 
-bool DebugCameraSystem::loadPathFromFile(CameraState &state, const std::string &name, std::string &error)
+void DebugCameraSystem::savePathToFileAsync(IPlayer &player, const std::string &name)
 {
     const std::string path = PATHS_DIR + "/" + name + ".txt";
-    std::ifstream in(path);
-    if (!in)
-    {
-        error = "не удалось открыть файл " + path;
-        return false;
-    }
 
+    ThreadPool::Task<bool> task;
+    task.func = [path, content = serializePath(stateOf(player))]()
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(PATHS_DIR, ec);
+        std::ofstream out(path, std::ios::trunc);
+        if (!out)
+        {
+            throw std::runtime_error("не удалось открыть файл " + path);
+        }
+        out << content;
+        if (!out.good())
+        {
+            throw std::runtime_error("ошибка записи " + path);
+        }
+        return true;
+    };
+    task.callback = [this, playerId = player.getID(), path](bool)
+    {
+        if (IPlayer *player = cameraPlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Путь сохранён: " + path));
+        }
+    };
+    task.errorCallback = [this, playerId = player.getID()](const std::string &error)
+    {
+        if (IPlayer *player = cameraPlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+void DebugCameraSystem::loadPathFromFileAsync(IPlayer &player, const std::string &name)
+{
+    const std::string path = PATHS_DIR + "/" + name + ".txt";
+
+    ThreadPool::Task<std::string> task;
+    task.func = [path]()
+    {
+        std::ifstream in(path);
+        if (!in)
+        {
+            throw std::runtime_error("не удалось открыть файл " + path);
+        }
+        std::ostringstream content;
+        content << in.rdbuf();
+        return content.str();
+    };
+    task.callback = [this, playerId = player.getID(), name](std::string content)
+    {
+        IPlayer *player = cameraPlayer(playerId);
+        if (!player)
+        {
+            return; // камера выключена, пока читали — путь не трогаем
+        }
+
+        if (loadPathFromContent(stateOf(*player), content))
+        {
+            player->sendClientMessage(Colour::White(),
+                                      u(fmt::format("Путь загружен: {} (точек: {}). /cplay — проиграть.", name,
+                                                    stateOf(*player).points.size())));
+        }
+        else
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка загрузки: в файле нет валидных точек"));
+        }
+        showMain(*player);
+    };
+    task.errorCallback = [this, playerId = player.getID()](const std::string &error)
+    {
+        if (IPlayer *player = cameraPlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
+            showMain(*player);
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+void DebugCameraSystem::listPathFilesAsync(IPlayer &player)
+{
+    ThreadPool::Task<std::vector<std::string>> task;
+    task.func = []()
+    {
+        std::vector<std::string> result;
+        std::error_code ec;
+        if (!std::filesystem::exists(PATHS_DIR, ec))
+        {
+            return result;
+        }
+        for (const auto &entry : std::filesystem::directory_iterator(PATHS_DIR, ec))
+        {
+            if (entry.is_regular_file() && entry.path().extension() == ".txt")
+            {
+                result.push_back(entry.path().stem().string());
+            }
+        }
+        return result;
+    };
+    task.callback = [this, playerId = player.getID()](std::vector<std::string> files)
+    {
+        if (IPlayer *player = cameraPlayer(playerId))
+        {
+            showLoadList(*player, std::move(files));
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+bool DebugCameraSystem::loadPathFromContent(CameraState &state, const std::string &content)
+{
     std::vector<CameraPoint> points;
     int segmentTimeMs = state.segmentTimeMs;
     bool loop = state.loop;
 
+    std::istringstream in(content);
     std::string line;
     while (std::getline(in, line) && points.size() < MAX_POINTS)
     {
@@ -777,7 +837,6 @@ bool DebugCameraSystem::loadPathFromFile(CameraState &state, const std::string &
 
     if (points.empty())
     {
-        error = "в файле нет валидных точек";
         return false;
     }
 

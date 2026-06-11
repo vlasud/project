@@ -80,12 +80,14 @@ class DebugCameraSystem : public BaseSystem, public PlayerUpdateEventHandler, pu
     void showSegmentTimeInput(IPlayer &player);
     void showSpeedInput(IPlayer &player);
     void showSaveNameInput(IPlayer &player);
-    void showLoadList(IPlayer &player);
+    void showLoadList(IPlayer &player, std::vector<std::string> files);
 
-    // --- файлы ---
-    bool savePathToFile(const CameraState &state, const std::string &name, std::string &error);
-    bool loadPathFromFile(CameraState &state, const std::string &name, std::string &error);
-    std::vector<std::string> listPathFiles() const;
+    // --- файлы (диск — в тредпуле, колбэки на главном потоке) ---
+    std::string serializePath(const CameraState &state) const;
+    void savePathToFileAsync(IPlayer &player, const std::string &name);
+    void loadPathFromFileAsync(IPlayer &player, const std::string &name);
+    bool loadPathFromContent(CameraState &state, const std::string &content);
+    void listPathFilesAsync(IPlayer &player);
 
     CameraState &stateOf(const IPlayer &player);
     IPlayer *cameraPlayer(int playerId); // игрок, если онлайн и камера включена

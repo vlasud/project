@@ -1,5 +1,6 @@
 #include "Systems/Core/TextDrawEditorSystem/TextDrawEditorSystem.h"
 
+#include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <cctype>
@@ -8,6 +9,7 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 
 namespace
 {
@@ -514,7 +516,7 @@ void TextDrawEditorSystem::showMain(IPlayer &player)
                                  showSaveNameInput(*player);
                                  break;
                              case 5:
-                                 showLoadList(*player);
+                                 listTextDrawFilesAsync(*player); // листинг каталога на воркере
                                  break;
                              case 6:
                                  deleteAllItems(*player);
@@ -1278,24 +1280,13 @@ void TextDrawEditorSystem::showSaveNameInput(IPlayer &player)
                 return;
             }
 
-            std::string error;
-            if (saveToFile(*player, name, error))
-            {
-                player->sendClientMessage(Colour::White(),
-                                          u(fmt::format("Сохранено: {}/{}.txt", TEXTDRAWS_DIR, name)));
-            }
-            else
-            {
-                player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
-            }
+            saveToFileAsync(*player, name); // запись на воркере, сообщение придёт из колбэка
             showMain(*player);
         });
 }
 
-void TextDrawEditorSystem::showLoadList(IPlayer &player)
+void TextDrawEditorSystem::showLoadList(IPlayer &player, std::vector<std::string> files)
 {
-    std::vector<std::string> files = listTextDrawFiles();
-
     std::string body;
     for (const std::string &name : files)
     {
@@ -1322,52 +1313,17 @@ void TextDrawEditorSystem::showLoadList(IPlayer &player)
                 return;
             }
 
-            std::string error;
-            if (loadFromFile(*player, files[listItem], error))
-            {
-                player->sendClientMessage(Colour::White(), u("Загружено: " + files[listItem]));
-            }
-            else
-            {
-                player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
-            }
-            showMain(*player);
+            loadFromFileAsync(*player, files[listItem]); // чтение на воркере, итог из колбэка
         });
 }
 
 // ------------------------------------------------------------------ файлы
+// Диск — на воркерах тредпула; сериализация (чтение свойств textdraw), парсинг
+// и создание — на главном потоке (SDK не потокобезопасен).
 
-std::vector<std::string> TextDrawEditorSystem::listTextDrawFiles() const
+std::string TextDrawEditorSystem::serializeItems(IPlayer &player)
 {
-    std::vector<std::string> result;
-    std::error_code ec;
-    if (!std::filesystem::exists(TEXTDRAWS_DIR, ec))
-    {
-        return result;
-    }
-    for (const auto &entry : std::filesystem::directory_iterator(TEXTDRAWS_DIR, ec))
-    {
-        if (entry.is_regular_file() && entry.path().extension() == ".txt")
-        {
-            result.push_back(entry.path().stem().string());
-        }
-    }
-    return result;
-}
-
-bool TextDrawEditorSystem::saveToFile(IPlayer &player, const std::string &name, std::string &error)
-{
-    std::error_code ec;
-    std::filesystem::create_directories(TEXTDRAWS_DIR, ec);
-
-    const std::string path = TEXTDRAWS_DIR + "/" + name + ".txt";
-    std::ofstream out(path, std::ios::trunc);
-    if (!out)
-    {
-        error = "не удалось открыть файл " + path;
-        return false;
-    }
-
+    std::string out;
     Session &session = sessionOf(player);
     for (const Item &item : session.items)
     {
@@ -1382,7 +1338,7 @@ bool TextDrawEditorSystem::saveToFile(IPlayer &player, const std::string &name, 
         const Vector2 pos = textDraw->getPosition();
 
         // Текст — последним «жадным» полем до конца строки (может содержать пробелы).
-        out << fmt::format("td {:.2f} {:.2f} {} {} {:.4f} {:.4f} {:.2f} {:.2f} {} {} {} {} {} {} {} {} {} {:.2f} "
+        out += fmt::format("td {:.2f} {:.2f} {} {} {:.4f} {:.4f} {:.2f} {:.2f} {} {} {} {} {} {} {} {} {} {:.2f} "
                            "{:.2f} {:.2f} {:.3f} {} {} {}\n",
                            pos.x, pos.y, (int)p.alignment, (int)p.style, p.letterSize.x, p.letterSize.y, p.textSize.x,
                            p.textSize.y, colourToHex(p.letterColour), colourToHex(p.boxColour),
@@ -1391,23 +1347,129 @@ bool TextDrawEditorSystem::saveToFile(IPlayer &player, const std::string &name, 
                            p.previewRotation.y, p.previewRotation.z, p.previewZoom, p.previewVehicleColour1,
                            p.previewVehicleColour2, textDraw->getText().to_string());
     }
-
-    return true;
+    return out;
 }
 
-bool TextDrawEditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::string &error)
+void TextDrawEditorSystem::saveToFileAsync(IPlayer &player, const std::string &name)
 {
     const std::string path = TEXTDRAWS_DIR + "/" + name + ".txt";
-    std::ifstream in(path);
-    if (!in)
-    {
-        error = "не удалось открыть файл " + path;
-        return false;
-    }
 
+    ThreadPool::Task<bool> task;
+    task.func = [path, content = serializeItems(player)]()
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(TEXTDRAWS_DIR, ec);
+        std::ofstream out(path, std::ios::trunc);
+        if (!out)
+        {
+            throw std::runtime_error("не удалось открыть файл " + path);
+        }
+        out << content;
+        if (!out.good())
+        {
+            throw std::runtime_error("ошибка записи " + path);
+        }
+        return true;
+    };
+    task.callback = [this, playerId = player.getID(), path](bool)
+    {
+        if (IPlayer *player = editorPlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Сохранено: " + path));
+        }
+    };
+    task.errorCallback = [this, playerId = player.getID()](const std::string &error)
+    {
+        if (IPlayer *player = editorPlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+void TextDrawEditorSystem::loadFromFileAsync(IPlayer &player, const std::string &name)
+{
+    const std::string path = TEXTDRAWS_DIR + "/" + name + ".txt";
+
+    ThreadPool::Task<std::string> task;
+    task.func = [path]()
+    {
+        std::ifstream in(path);
+        if (!in)
+        {
+            throw std::runtime_error("не удалось открыть файл " + path);
+        }
+        std::ostringstream content;
+        content << in.rdbuf();
+        return content.str();
+    };
+    task.callback = [this, playerId = player.getID(), name](std::string content)
+    {
+        IPlayer *player = editorPlayer(playerId);
+        if (!player)
+        {
+            return;
+        }
+
+        const std::size_t loaded = loadFromContent(*player, content);
+        if (loaded > 0)
+        {
+            player->sendClientMessage(Colour::White(), u(fmt::format("Загружено: {} ({})", name, loaded)));
+        }
+        else
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка загрузки: в файле нет валидных текстдравов"));
+        }
+        showMain(*player);
+    };
+    task.errorCallback = [this, playerId = player.getID()](const std::string &error)
+    {
+        if (IPlayer *player = editorPlayer(playerId))
+        {
+            player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
+            showMain(*player);
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+void TextDrawEditorSystem::listTextDrawFilesAsync(IPlayer &player)
+{
+    ThreadPool::Task<std::vector<std::string>> task;
+    task.func = []()
+    {
+        std::vector<std::string> result;
+        std::error_code ec;
+        if (!std::filesystem::exists(TEXTDRAWS_DIR, ec))
+        {
+            return result;
+        }
+        for (const auto &entry : std::filesystem::directory_iterator(TEXTDRAWS_DIR, ec))
+        {
+            if (entry.is_regular_file() && entry.path().extension() == ".txt")
+            {
+                result.push_back(entry.path().stem().string());
+            }
+        }
+        return result;
+    };
+    task.callback = [this, playerId = player.getID()](std::vector<std::string> files)
+    {
+        if (IPlayer *player = editorPlayer(playerId))
+        {
+            showLoadList(*player, std::move(files));
+        }
+    };
+    ThreadPool::addTask(std::move(task));
+}
+
+std::size_t TextDrawEditorSystem::loadFromContent(IPlayer &player, const std::string &content)
+{
     Session &session = sessionOf(player);
     std::size_t loaded = 0;
 
+    std::istringstream in(content);
     std::string line;
     while (std::getline(in, line) && session.items.size() < MAX_FILE_ITEMS)
     {
@@ -1459,10 +1521,5 @@ bool TextDrawEditorSystem::loadFromFile(IPlayer &player, const std::string &name
         }
     }
 
-    if (loaded == 0)
-    {
-        error = "в файле нет валидных текстдравов";
-        return false;
-    }
-    return true;
+    return loaded;
 }

@@ -229,6 +229,12 @@ VehicleService::Outcome VehicleService::validateUnoccupied(IVehicle &vehicle, IP
     Outcome outcome;
     VehicleState &st = m_vehicleState[vehicle.getID()];
 
+    // Машину двигает сервер (редактор): её телепорты и дальний репортер легальны.
+    if (st.editBypass)
+    {
+        return outcome;
+    }
+
     const auto reject = [&](std::string detail)
     {
         if (!rateLimited(st.lastFlag, timeNow))
@@ -348,6 +354,15 @@ void VehicleService::onModShop(IPlayer &player, TimePoint timeNow)
     {
         sanctionRepair(occupant.vehicleId, timeNow);
     }
+}
+
+void VehicleService::setEditBypass(int vehicleId, bool enable)
+{
+    if (vehicleId < 0 || vehicleId >= static_cast<int>(m_vehicleState.size()))
+    {
+        return;
+    }
+    m_vehicleState[vehicleId].editBypass = enable;
 }
 
 void VehicleService::onVehicleCreated(IVehicle &vehicle)

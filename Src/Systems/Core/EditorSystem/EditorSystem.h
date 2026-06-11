@@ -2,6 +2,7 @@
 
 #include "Macro.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
+#include "Services/Core/VehicleService/VehicleService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
@@ -113,6 +114,9 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void createObjectEntity(IPlayer &player, int model);
     void createActorEntity(IPlayer &player, int skin);
     void createVehicleEntity(IPlayer &player, int model);
+    // Снять/вернуть античит-байпас всем редакторским машинам сцены (на выходе
+    // из редактора они становятся обычными мировыми машинами).
+    void setVehicleEditBypasses(EditorState &state, bool enable);
     void createPickupEntity(IPlayer &player, int model);
     void createCheckpointEntity(IPlayer &player);
     // Чекпоинт не имеет мировой сущности: у клиента показывается только один,
@@ -156,7 +160,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void showAnimLibInput(IPlayer &player);
     void showAnimNameInput(IPlayer &player, std::string animLib);
     void showSaveNameInput(IPlayer &player);
-    void showLoadList(IPlayer &player);
+    void showLoadList(IPlayer &player, std::vector<std::string> files);
     void showLoadModeChoice(IPlayer &player, std::string fileName); // заменить сцену или добавить
     void showClearConfirm(IPlayer &player);
     void showObjectList(IPlayer &player);
@@ -165,10 +169,12 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void showPickupList(IPlayer &player);
     void showCheckpointList(IPlayer &player);
 
-    // --- файлы ---
-    bool saveToFile(const EditorState &state, const std::string &name, std::string &error);
-    bool loadFromFile(IPlayer &player, const std::string &name, std::string &error, std::size_t &loaded);
-    std::vector<std::string> listMapFiles() const;
+    // --- файлы (диск — в тредпуле, колбэки на главном потоке) ---
+    std::string serializeScene(const EditorState &state) const;
+    void saveToFileAsync(IPlayer &player, const std::string &name);
+    void loadFromFileAsync(IPlayer &player, const std::string &name, bool replace);
+    std::size_t loadFromContent(IPlayer &player, const std::string &content); // парсинг + создание сущностей
+    void listMapFilesAsync(IPlayer &player); // в колбэке откроет showLoadList
 
     EditorState &stateOf(const IPlayer &player);
     IPlayer *editorPlayer(int playerId); // игрок, если онлайн и редактор включён
@@ -177,6 +183,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     PlayerCommandService &m_commandService;
     PlayerLocationService &m_locationService;     // байпас валидации позиции на время редактора
     CheckpointService &m_checkpointService;       // превью выбранного чекпоинта
+    VehicleService &m_vehicleService;             // байпас unoccupied-валидации редакторских машин
 
     IObjectsComponent *m_objects = nullptr;
     IActorsComponent *m_actors = nullptr;
