@@ -1,12 +1,13 @@
 #pragma once
 
-#include "Services/PlayerAuthService/PlayerAuthService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
+#include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
+#include "Services/PlayerAuthService/PlayerAuthService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 #include <Server/Components/Classes/classes.hpp>
@@ -69,6 +70,7 @@ class PlayerAuthSystem : public BaseSystem,
     PlayerLocationService &m_locationService;
     PlayerStateService &m_stateService;
     PlayerWeaponService &m_weaponService;
+    PlayerMoneyService &m_moneyService;
 
     std::array<LoginData, MAX_PLAYERS> m_loginData;
     std::array<RegistrationData, MAX_PLAYERS> m_registrationData;

@@ -14,6 +14,7 @@
 #include "Systems/Core/PlayerDialogSystem/PlayerDialogSystem.h"
 #include "Systems/Core/PlayerHealthSystem/PlayerHealthSystem.h"
 #include "Systems/Core/PlayerLocationSystem/PlayerLocationSystem.h"
+#include "Systems/Core/PlayerMoneySystem/PlayerMoneySystem.h"
 #include "Systems/Core/PlayerStateSystem/PlayerStateSystem.h"
 #include "Systems/Core/PlayerVelocitySystem/PlayerVelocitySystem.h"
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
@@ -45,6 +46,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // отбрасывается до регистрации bullet sync в health — не легализует give-damage.
     m_systems.push_back(std::make_unique<PlayerWeaponSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerHealthSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PlayerMoneySystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<DebugCameraSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<EditorSystem>(core, serviceRegister));

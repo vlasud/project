@@ -2,9 +2,10 @@
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
+#include "Server/Components/Dialogs/dialogs.hpp"
+#include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
-#include "Server/Components/Dialogs/dialogs.hpp"
 #include "core.hpp"
 #include "mysqlx/xdevapi.h"
 #include "sodium/crypto_pwhash.h"
@@ -19,7 +20,8 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
       m_stateService(serviceRegister.getService<PlayerStateService>()),
-      m_weaponService(serviceRegister.getService<PlayerWeaponService>())
+      m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
+      m_moneyService(serviceRegister.getService<PlayerMoneyService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
@@ -80,6 +82,7 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
         m_locationService.teleport(player, {1762.1505, -1896.2495, 13.5621});
         m_weaponService.giveWeapon(player, 24, 100);
         m_weaponService.giveWeapon(player, 31, 100);
+        m_moneyService.setMoney(player, 1500);
         return;
     }
 
