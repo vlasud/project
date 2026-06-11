@@ -26,6 +26,7 @@
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
+#include "Services/Core/SpectateService/SpectateService.h"
 #include "Services/Core/StreamerService/StreamerService.h"
 #include "Services/Core/TextDrawService/TextDrawService.h"
 #include "Services/Core/TextLabelService/TextLabelService.h"
@@ -59,6 +60,7 @@ void ServiceRegister::registerServices()
     registerService<AudioService>();
     registerService<CameraService>();
     registerService<GameTextService>();
+    registerService<SpectateService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();

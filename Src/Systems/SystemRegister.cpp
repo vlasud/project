@@ -31,6 +31,7 @@
 #include "Systems/Core/PlayerStateSystem/PlayerStateSystem.h"
 #include "Systems/Core/PlayerVelocitySystem/PlayerVelocitySystem.h"
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
+#include "Systems/Core/SpectateSystem/SpectateSystem.h"
 #include "Systems/Core/StreamerSystem/StreamerSystem.h"
 #include "Systems/Core/TextDrawEditorSystem/TextDrawEditorSystem.h"
 #include "Systems/Core/TextDrawSystem/TextDrawSystem.h"
@@ -94,6 +95,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // точки спавна, затем auth навешивает экипировку.
     m_systems.push_back(std::make_unique<ClassSelectionSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerSpawnSystem>(core, serviceRegister));
+    // SpectateSystem после SpawnSystem: возврат из спектейта перекрывает
+    // интерьер/мир точки спавна своим сохранённым местом.
+    m_systems.push_back(std::make_unique<SpectateSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
     // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до
     // того, как /camera начнёт им пользоваться.
