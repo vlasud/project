@@ -9,6 +9,7 @@
 #include "Systems/Core/GridDebugSystem/GridDebugSystem.h"
 #include "Systems/Core/GridSystem/GridSystem.h"
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
+#include "Systems/Core/MapIconSystem/MapIconSystem.h"
 #include "Systems/Core/PickupSystem/PickupSystem.h"
 #include "Systems/Core/PlayerAnimationSystem/PlayerAnimationSystem.h"
 #include "Systems/PlayerAuthSystem/PlayerAuthSystem.h"
@@ -47,6 +48,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // PickupSystem после StreamerSystem: маршрутизация подбора опирается на
     // пикапы, созданные стримером.
     m_systems.push_back(std::make_unique<PickupSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));
     // m_systems.push_back(std::make_unique<GridDebugSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<LocationDebugSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<VehicleDebugSystem>(core, serviceRegister));

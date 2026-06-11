@@ -8,6 +8,7 @@
 #include "Services/Core/PlayerChatService/PlayerChatService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
+#include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/PickupService/PickupService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerHealthService/PlayerHealthService.h"
@@ -36,6 +37,7 @@ void ServiceRegister::registerServices()
     registerService<TextDrawService>();
     registerService<GangZoneService>();
     registerService<PickupService>();
+    registerService<MapIconService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
