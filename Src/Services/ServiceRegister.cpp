@@ -5,6 +5,7 @@
 #include "Services/Core/ClassSelectionService/ClassSelectionService.h"
 #include "Services/Core/GangZoneService/GangZoneService.h"
 #include "Services/Core/GridService/GridService.h"
+#include "Services/Core/PlayerActivityService/PlayerActivityService.h"
 #include "Services/Core/PlayerAnimationService/PlayerAnimationService.h"
 #include "Services/PlayerAuthService/PlayerAuthService.h"
 #include "Services/PlayerSpawnService/PlayerSpawnService.h"
@@ -49,6 +50,7 @@ void ServiceRegister::registerServices()
     registerService<PlayerKeyService>();
     registerService<TextLabelService>();
     registerService<WorldService>();
+    registerService<PlayerActivityService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();

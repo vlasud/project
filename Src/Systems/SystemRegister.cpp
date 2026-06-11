@@ -13,6 +13,7 @@
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 #include "Systems/Core/MapIconSystem/MapIconSystem.h"
 #include "Systems/Core/PickupSystem/PickupSystem.h"
+#include "Systems/Core/PlayerActivitySystem/PlayerActivitySystem.h"
 #include "Systems/Core/PlayerAnimationSystem/PlayerAnimationSystem.h"
 #include "Systems/PlayerAuthSystem/PlayerAuthSystem.h"
 #include "Systems/PlayerSpawnSystem/PlayerSpawnSystem.h"
@@ -56,6 +57,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<PickupSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<TextLabelSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<WorldSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PlayerActivitySystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<CheckpointSystem>(core, serviceRegister));
     // m_systems.push_back(std::make_unique<GridDebugSystem>(core, serviceRegister));
