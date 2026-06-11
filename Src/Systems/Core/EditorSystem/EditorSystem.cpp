@@ -1,6 +1,7 @@
 #include "Systems/Core/EditorSystem/EditorSystem.h"
 
 #include "Utils/Encoding/Encoding.h"
+#include "anim.hpp"
 #include "component.hpp"
 #include "glm/geometric.hpp"
 #include <algorithm>
@@ -12,13 +13,67 @@
 
 namespace
 {
-constexpr float FREE_CAM_SPEED = 1.0f;
 const std::string MAPS_DIR = "maps";
+
+// Биты PlayerKeyData::keys (классические значения SA).
+constexpr uint32_t KEY_CROUCH = 2;
+constexpr uint32_t KEY_SPRINT = 8;
+constexpr uint32_t KEY_JUMP = 32;
+constexpr uint32_t KEY_WALK = 1024;
+
+constexpr float SPRINT_MULTIPLIER = 5.0f; // крупный шаг / быстрый полёт
+constexpr float WALK_MULTIPLIER = 0.2f;   // точный шаг
+constexpr float ROTATE_DEG_PER_STEP = 20.0f; // градусов вращения на метр шага клавиш
+
+constexpr float CAMERA_SPEED_MIN = 0.1f;
+constexpr float CAMERA_SPEED_MAX = 10.0f;
+constexpr float KEY_STEP_MIN = 0.01f;
+constexpr float KEY_STEP_MAX = 10.0f;
+
+constexpr int MAX_OBJECT_MODEL = 19999;
+constexpr int MAX_ACTOR_SKIN = 311;
+constexpr int MIN_VEHICLE_MODEL = 400;
+constexpr int MAX_VEHICLE_MODEL = 611;
+constexpr int MAX_VEHICLE_COLOUR = 255;
+
+// Зонд FindZ читает позицию стоящего игрока, а это его туловище (~центр педа),
+// не ноги: прочитанный Z = уровень земли + PED_ORIGIN_HEIGHT. Объект ставим на
+// саму землю, актора — на ту же высоту туловища (его origin такой же), машину —
+// чуть выше земли, дальше её усадит клиентская физика.
+constexpr float PED_ORIGIN_HEIGHT = 1.0f;     // от ног стоящего педа до его origin
+constexpr float VEHICLE_GROUND_OFFSET = 0.5f; // полколеса над землёй
 
 // Высота, с которой клиент ищет землю (выше самой высокой точки карты ~ г. Чилиад).
 constexpr float GROUND_PROBE_Z = 1500.0f;
 constexpr int GROUND_PROBE_WAIT = 10;    // тиков ожидания ответа клиента перед чтением Z
 constexpr float PROBE_PARK_Z = -1000.0f; // куда временно прячем сущность, чтобы FindZ не попал в неё
+
+// Готовые позы NPC: проверенные зацикленные анимации для типовых сценок.
+struct AnimPreset
+{
+    const char *lib;
+    const char *name;
+    const char *label; // utf-8, конвертируется при сборке диалога
+};
+constexpr AnimPreset ANIM_PRESETS[] = {
+    {"DEALER", "DEALER_IDLE", "Стоит, торгует"},
+    {"COP_AMBIENT", "Coplook_loop", "Стоит, осматривается"},
+    {"GANGS", "leanIDLE", "Прислонился к стене"},
+    {"SMOKING", "M_smklean_loop", "Курит, прислонившись"},
+    {"PED", "phone_talk", "Говорит по телефону"},
+    {"BEACH", "ParkSit_M_loop", "Сидит на земле (м)"},
+    {"BEACH", "ParkSit_W_loop", "Сидит на земле (ж)"},
+    {"SUNBATHE", "Lay_Bac_Loop", "Лежит на спине"},
+    {"DANCING", "dnce_M_a", "Танцует"},
+    {"DANCING", "DAN_Down_A", "Танцует (низко)"},
+    {"BAR", "Barserve_loop", "Бармен за стойкой"},
+    {"CASINO", "cards_loop", "Играет в карты (сидя)"},
+    {"CRIB", "PED_Console_Loop", "Играет в приставку (сидя)"},
+    {"MISC", "Plyrlean_loop", "Облокотился"},
+    {"PED", "WOMAN_idlestance", "Стоит (женская поза)"},
+    {"SWEET", "Sweet_injuredloop", "Лежит раненый"},
+};
+constexpr int ANIM_PRESET_COUNT = static_cast<int>(sizeof(ANIM_PRESETS) / sizeof(ANIM_PRESETS[0]));
 
 std::string u(const std::string &text)
 {
@@ -68,6 +123,33 @@ bool parseVec3(const std::string &text, Vector3 &out)
     std::istringstream ss(text);
     return static_cast<bool>(ss >> out.x >> out.y >> out.z);
 }
+
+float wrapDegrees(float angle)
+{
+    while (angle < 0.0f)
+    {
+        angle += 360.0f;
+    }
+    while (angle >= 360.0f)
+    {
+        angle -= 360.0f;
+    }
+    return angle;
+}
+
+// Множитель шага по зажатым модификаторам: Sprint — крупно, Alt (walk) — точно.
+float stepMultiplier(const PlayerKeyData &keys)
+{
+    if (keys.keys & KEY_SPRINT)
+    {
+        return SPRINT_MULTIPLIER;
+    }
+    if (keys.keys & KEY_WALK)
+    {
+        return WALK_MULTIPLIER;
+    }
+    return 1.0f;
+}
 } // namespace
 
 EditorSystem::EditorSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -79,28 +161,35 @@ EditorSystem::EditorSystem(ICore &core, const ServiceRegister &serviceRegister)
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
 
     m_commandService.add("editor", {},
-                         [this](IPlayer &player, ...)
+                         [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
                          {
                              EditorState &state = stateOf(player);
 
                              if (!state.enabled)
                              {
                                  enableEditor(player);
-                                 showMain(player);
-                                 return true;
+                                 if (stateOf(player).enabled)
+                                 {
+                                     showMain(player);
+                                 }
+                                 return;
                              }
 
-                             // В режиме следования /editor фиксирует сущность и возвращает в её редактирование.
-                             if (state.followCamera && state.selectedIndex >= 0 &&
-                                 state.selectedIndex < (int)state.entities.size())
+                             // Из «ручных» режимов /editor фиксирует сущность и возвращает в её меню.
+                             if (state.keyMode != KeyMode::Camera)
+                             {
+                                 state.keyMode = KeyMode::Camera;
+                                 showEntityEdit(player);
+                                 return;
+                             }
+                             if (state.followCamera && selectedValid(state))
                              {
                                  state.followCamera = false;
                                  showEntityEdit(player);
+                                 return;
                              }
-                             else
-                             {
-                                 showMain(player);
-                             }
+
+                             showMain(player);
                          });
 }
 
@@ -108,6 +197,7 @@ void EditorSystem::initialize(IComponentList *components)
 {
     m_objects = components->queryComponent<IObjectsComponent>();
     m_actors = components->queryComponent<IActorsComponent>();
+    m_vehicles = components->queryComponent<IVehiclesComponent>();
 }
 
 EditorSystem::EditorState &EditorSystem::stateOf(const IPlayer &player)
@@ -125,16 +215,26 @@ IPlayer *EditorSystem::editorPlayer(int playerId)
     return player;
 }
 
+bool EditorSystem::selectedValid(const EditorState &state) const
+{
+    return state.selectedIndex >= 0 && state.selectedIndex < (int)state.entities.size();
+}
+
 void EditorSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)
 {
     EditorState &state = stateOf(player);
+
+    // Сущности остаются в мире — но зондируемая запаркована под картой, вернём её.
+    cancelGroundProbe(state);
+
     if (state.cameraObjectId >= 0 && m_objects)
     {
         m_objects->release(state.cameraObjectId);
     }
-    // Расставленные объекты/акторы остаются в мире, но сессия редактора слота сбрасывается.
     state = EditorState{};
 }
+
+// ------------------------------------------------------------------ режим
 
 void EditorSystem::enableEditor(IPlayer &player)
 {
@@ -145,25 +245,35 @@ void EditorSystem::enableEditor(IPlayer &player)
     }
 
     EditorState &state = stateOf(player);
-    state.enabled = true;
-    state.cameraPosition = m_locationService.getPosition(player.getID()) + Vector3(0.0f, 0.0f, 5.0f);
-
-    // FindZ-пробы редактора легально двигают игрока — отключаем валидацию позиции.
-    m_locationService.setBypass(player.getID(), true);
+    state.returnPosition = m_locationService.getPosition(player.getID());
+    state.cameraPosition = state.returnPosition + Vector3(0.0f, 0.0f, 5.0f);
 
     IObject *camObject = m_objects->create(0, state.cameraPosition, Vector3(0.0f, 0.0f, 0.0f));
-    if (camObject)
+    if (!camObject)
     {
-        state.cameraObjectId = camObject->getID();
-        player.attachCameraToObject(*camObject);
+        player.sendClientMessage(Colour::White(), u("Не удалось создать объект камеры (лимит пула)"));
+        return;
     }
 
-    player.sendClientMessage(Colour::White(), u("Редактор включён. WASD — полёт камеры, /editor — открыть меню."));
+    state.enabled = true;
+    state.cameraObjectId = camObject->getID();
+    player.attachCameraToObject(*camObject);
+
+    // Замораживать тело нельзя: у замороженного клиента блокируется вращение
+    // камеры и синк падает до ~1 Гц (ступенчатое движение). Тело свободно бегает
+    // вслепую — валидацию позиции отключаем (FindZ-зонды тоже таскают его по
+    // карте), а на выходе вернём его в точку входа.
+    m_locationService.setBypass(player.getID(), true);
+
+    player.sendClientMessage(Colour::White(),
+                             u("Редактор включён. WASD — полёт, Jump/C — вверх/вниз, Sprint — быстрее. /editor — меню."));
 }
 
 void EditorSystem::disableEditor(IPlayer &player)
 {
     EditorState &state = stateOf(player);
+
+    cancelGroundProbe(state); // вернуть запаркованную зондом сущность
 
     if (state.cameraObjectId >= 0 && m_objects)
     {
@@ -172,11 +282,14 @@ void EditorSystem::disableEditor(IPlayer &player)
     state.cameraObjectId = -1;
     state.enabled = false;
     state.followCamera = false;
-    state.groundProbe = -1;
+    state.keyMode = KeyMode::Camera;
+    state.selectedIndex = -1;
 
+    // Возвращаем тело в точку входа: зонды и слепой бег растаскали его по карте.
+    m_locationService.teleport(player, state.returnPosition);
     m_locationService.setBypass(player.getID(), false);
     player.setCameraBehind();
-    player.sendClientMessage(Colour::White(), u("Редактор выключен. Расставленные объекты остались на сцене."));
+    player.sendClientMessage(Colour::White(), u("Редактор выключен. Расставленные сущности остались на сцене."));
 }
 
 // ------------------------------------------------------------------ per-tick
@@ -191,20 +304,47 @@ bool EditorSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
 
     processGroundProbe(player);
 
+    // В «ручных» режимах стрелки отданы сущности — камера стоит на месте.
+    if (state.keyMode != KeyMode::Camera)
+    {
+        processKeyMode(player);
+        return true;
+    }
+
+    processCameraFlight(player);
+
+    // Привязанная к взгляду сущность следует за камерой.
+    if (state.followCamera && selectedValid(state))
+    {
+        EditorEntity &entity = state.entities[state.selectedIndex];
+        entity.position = placementPoint(player);
+        applyEntityTransform(entity);
+    }
+
+    return true;
+}
+
+void EditorSystem::processCameraFlight(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+
     const PlayerAimData &aim = player.getAimData();
     Vector3 forward = aim.camFrontVector;
     const float len = glm::length(forward);
     if (len < 0.0001f)
     {
-        return true;
+        return;
     }
     forward /= len;
 
     const PlayerKeyData &keyData = player.getKeyData();
+    const float speed = state.cameraSpeed * ((keyData.keys & KEY_SPRINT) ? SPRINT_MULTIPLIER : 1.0f);
+    bool moved = false;
 
     if (keyData.upDown)
     {
-        state.cameraPosition += forward * (keyData.upDown > 0 ? -FREE_CAM_SPEED : FREE_CAM_SPEED);
+        state.cameraPosition += forward * (keyData.upDown > 0 ? -speed : speed);
+        moved = true;
     }
 
     if (keyData.leftRight)
@@ -214,27 +354,117 @@ bool EditorSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
         if (rlen > 0.0001f)
         {
             right /= rlen;
-            state.cameraPosition += right * (keyData.leftRight > 0 ? FREE_CAM_SPEED : -FREE_CAM_SPEED);
+            state.cameraPosition += right * (keyData.leftRight > 0 ? speed : -speed);
+            moved = true;
         }
     }
 
-    if (state.cameraObjectId >= 0 && m_objects)
+    if (keyData.keys & KEY_JUMP)
+    {
+        state.cameraPosition.z += speed;
+        moved = true;
+    }
+    if (keyData.keys & KEY_CROUCH)
+    {
+        state.cameraPosition.z -= speed;
+        moved = true;
+    }
+
+    if (moved && state.cameraObjectId >= 0 && m_objects)
     {
         if (IObject *camObject = m_objects->get(state.cameraObjectId))
         {
             camObject->setPosition(state.cameraPosition);
         }
     }
+}
 
-    // Привязанная к взгляду сущность следует за камерой.
-    if (state.followCamera && state.selectedIndex >= 0 && state.selectedIndex < (int)state.entities.size())
+void EditorSystem::processKeyMode(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    if (!selectedValid(state))
     {
-        EditorEntity &entity = state.entities[state.selectedIndex];
-        entity.position = placementPoint(player);
-        applyEntityTransform(entity);
+        state.keyMode = KeyMode::Camera;
+        return;
     }
 
-    return true;
+    const PlayerKeyData &keyData = player.getKeyData();
+    const float step = state.keyStep * stepMultiplier(keyData);
+    EditorEntity &entity = state.entities[state.selectedIndex];
+    bool changed = false;
+
+    switch (state.keyMode)
+    {
+    case KeyMode::MoveXY:
+    {
+        // Движение относительно взгляда: «вперёд» — куда смотрит камера (по горизонтали).
+        Vector3 forward = player.getAimData().camFrontVector;
+        forward.z = 0.0f;
+        const float len = glm::length(forward);
+        if (len < 0.0001f)
+        {
+            break;
+        }
+        forward /= len;
+        const Vector3 right{forward.y, -forward.x, 0.0f};
+
+        if (keyData.upDown < 0)
+        {
+            entity.position += forward * step;
+            changed = true;
+        }
+        else if (keyData.upDown > 0)
+        {
+            entity.position -= forward * step;
+            changed = true;
+        }
+        if (keyData.leftRight > 0)
+        {
+            entity.position += right * step;
+            changed = true;
+        }
+        else if (keyData.leftRight < 0)
+        {
+            entity.position -= right * step;
+            changed = true;
+        }
+        break;
+    }
+    case KeyMode::MoveZ:
+        if (keyData.upDown < 0)
+        {
+            entity.position.z += step;
+            changed = true;
+        }
+        else if (keyData.upDown > 0)
+        {
+            entity.position.z -= step;
+            changed = true;
+        }
+        break;
+    case KeyMode::Rotate:
+    {
+        const float rotStep = step * ROTATE_DEG_PER_STEP;
+        if (keyData.leftRight > 0)
+        {
+            entity.rotation.z = wrapDegrees(entity.rotation.z - rotStep);
+            changed = true;
+        }
+        else if (keyData.leftRight < 0)
+        {
+            entity.rotation.z = wrapDegrees(entity.rotation.z + rotStep);
+            changed = true;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+
+    if (changed)
+    {
+        applyEntityTransform(entity);
+    }
 }
 
 Vector3 EditorSystem::placementPoint(IPlayer &player) const
@@ -252,7 +482,7 @@ Vector3 EditorSystem::placementPoint(IPlayer &player) const
     return aim.camPos + forward * state.placeDistance;
 }
 
-// ------------------------------------------------------------------ entities
+// ------------------------------------------------------------------ сущности
 
 void EditorSystem::createObjectEntity(IPlayer &player, int model)
 {
@@ -271,7 +501,6 @@ void EditorSystem::createObjectEntity(IPlayer &player, int model)
     entity.entityId = object->getID();
     entity.model = model;
     entity.position = pos;
-    entity.rotation = Vector3(0.0f, 0.0f, 0.0f);
 
     state.entities.push_back(entity);
     state.selectedIndex = static_cast<int>(state.entities.size()) - 1;
@@ -300,7 +529,6 @@ void EditorSystem::createActorEntity(IPlayer &player, int skin)
     entity.entityId = actor->getID();
     entity.model = skin;
     entity.position = pos;
-    entity.rotation = Vector3(0.0f, 0.0f, 0.0f);
 
     state.entities.push_back(entity);
     state.selectedIndex = static_cast<int>(state.entities.size()) - 1;
@@ -310,6 +538,100 @@ void EditorSystem::createActorEntity(IPlayer &player, int skin)
     {
         requestGroundSnap(player, state.selectedIndex);
     }
+}
+
+IVehicle *EditorSystem::spawnVehicle(const EditorEntity &entity)
+{
+    if (!m_vehicles)
+    {
+        return nullptr;
+    }
+
+    VehicleSpawnData data;
+    data.respawnDelay = Seconds(-1); // расставленные редактором машины не респавнятся
+    data.modelID = entity.model;
+    data.position = entity.position;
+    data.zRotation = entity.rotation.z;
+    data.colour1 = entity.colour1;
+    data.colour2 = entity.colour2;
+    data.siren = false;
+    data.interior = 0;
+    return m_vehicles->create(data);
+}
+
+void EditorSystem::createVehicleEntity(IPlayer &player, int model)
+{
+    EditorState &state = stateOf(player);
+
+    EditorEntity entity;
+    entity.type = EntityType::Vehicle;
+    entity.model = model;
+    entity.position = placementPoint(player);
+
+    IVehicle *vehicle = spawnVehicle(entity);
+    if (!vehicle)
+    {
+        player.sendClientMessage(Colour::White(), u("Не удалось создать машину (нет компонента или лимит)"));
+        return;
+    }
+    entity.entityId = vehicle->getID();
+
+    state.entities.push_back(entity);
+    state.selectedIndex = static_cast<int>(state.entities.size()) - 1;
+    state.followCamera = false;
+
+    if (state.autoGround)
+    {
+        requestGroundSnap(player, state.selectedIndex);
+    }
+}
+
+void EditorSystem::duplicateEntity(IPlayer &player, int index)
+{
+    EditorState &state = stateOf(player);
+    if (index < 0 || index >= (int)state.entities.size())
+    {
+        return;
+    }
+
+    EditorEntity copy = state.entities[index];
+    copy.position += Vector3(1.0f, 1.0f, 0.0f); // рядом, чтобы копия не слилась с оригиналом
+
+    if (copy.type == EntityType::Object)
+    {
+        IObject *object = m_objects ? m_objects->create(copy.model, copy.position, copy.rotation) : nullptr;
+        if (!object)
+        {
+            player.sendClientMessage(Colour::White(), u("Не удалось создать копию объекта"));
+            return;
+        }
+        copy.entityId = object->getID();
+    }
+    else if (copy.type == EntityType::Actor)
+    {
+        IActor *actor = m_actors ? m_actors->create(copy.model, copy.position, copy.rotation.z) : nullptr;
+        if (!actor)
+        {
+            player.sendClientMessage(Colour::White(), u("Не удалось создать копию актора"));
+            return;
+        }
+        copy.entityId = actor->getID();
+    }
+    else
+    {
+        IVehicle *vehicle = spawnVehicle(copy);
+        if (!vehicle)
+        {
+            player.sendClientMessage(Colour::White(), u("Не удалось создать копию машины"));
+            return;
+        }
+        copy.entityId = vehicle->getID();
+    }
+
+    state.entities.push_back(copy);
+    state.selectedIndex = static_cast<int>(state.entities.size()) - 1;
+    state.followCamera = false;
+    applyEntityAnimation(state.entities.back());
 }
 
 void EditorSystem::applyEntityTransform(EditorEntity &entity)
@@ -322,7 +644,7 @@ void EditorSystem::applyEntityTransform(EditorEntity &entity)
             object->setRotation(GTAQuat(entity.rotation));
         }
     }
-    else
+    else if (entity.type == EntityType::Actor)
     {
         if (IActor *actor = m_actors ? m_actors->get(entity.entityId) : nullptr)
         {
@@ -330,6 +652,45 @@ void EditorSystem::applyEntityTransform(EditorEntity &entity)
             actor->setRotation(GTAQuat(entity.rotation));
         }
     }
+    else
+    {
+        if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(entity.entityId) : nullptr)
+        {
+            vehicle->setPosition(entity.position);
+            vehicle->setZAngle(entity.rotation.z);
+        }
+    }
+}
+
+void EditorSystem::applyEntityAnimation(EditorEntity &entity)
+{
+    if (entity.type != EntityType::Actor || entity.animLib.empty() || entity.animName.empty())
+    {
+        return;
+    }
+    if (IActor *actor = m_actors ? m_actors->get(entity.entityId) : nullptr)
+    {
+        // Зацикленная — крутится вечно; стоп-поза — проигрывается один раз и
+        // замирает на последнем кадре (сидит, лежит и т.п.).
+        const bool loop = entity.animLoop;
+        actor->applyAnimation(AnimationData(4.1f, loop, true, true, !loop, 0, entity.animLib, entity.animName));
+    }
+}
+
+bool EditorSystem::setActorAnimation(IPlayer &player, EditorEntity &entity, std::string lib, std::string name,
+                                     bool loop)
+{
+    if (!animationNameValid(lib, name))
+    {
+        player.sendClientMessage(Colour::White(), u(fmt::format("Анимации {}:{} не существует", lib, name)));
+        return false;
+    }
+
+    entity.animLib = std::move(lib);
+    entity.animName = std::move(name);
+    entity.animLoop = loop;
+    applyEntityAnimation(entity);
+    return true;
 }
 
 void EditorSystem::deleteEntity(IPlayer &player, int index)
@@ -340,6 +701,9 @@ void EditorSystem::deleteEntity(IPlayer &player, int index)
         return;
     }
 
+    // Индексы сдвинутся — сперва вернуть запаркованную зондом сущность и снять зонд.
+    cancelGroundProbe(state);
+
     EditorEntity &entity = state.entities[index];
     if (entity.type == EntityType::Object)
     {
@@ -348,18 +712,54 @@ void EditorSystem::deleteEntity(IPlayer &player, int index)
             m_objects->release(entity.entityId);
         }
     }
-    else
+    else if (entity.type == EntityType::Actor)
     {
         if (m_actors)
         {
             m_actors->release(entity.entityId);
         }
     }
+    else if (m_vehicles)
+    {
+        m_vehicles->release(entity.entityId);
+    }
 
     state.entities.erase(state.entities.begin() + index);
     state.selectedIndex = -1;
     state.followCamera = false;
-    state.groundProbe = -1; // индексы сдвинулись — отменяем активный зонд
+    state.keyMode = KeyMode::Camera;
+}
+
+void EditorSystem::clearScene(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    cancelGroundProbe(state);
+
+    for (const EditorEntity &entity : state.entities)
+    {
+        if (entity.type == EntityType::Object)
+        {
+            if (m_objects)
+            {
+                m_objects->release(entity.entityId);
+            }
+        }
+        else if (entity.type == EntityType::Actor)
+        {
+            if (m_actors)
+            {
+                m_actors->release(entity.entityId);
+            }
+        }
+        else if (m_vehicles)
+        {
+            m_vehicles->release(entity.entityId);
+        }
+    }
+    state.entities.clear();
+    state.selectedIndex = -1;
+    state.followCamera = false;
+    state.keyMode = KeyMode::Camera;
 }
 
 // Запускает асинхронный поиск земли: телепортирует невидимое тело игрока в (x, y, высоко),
@@ -383,24 +783,40 @@ void EditorSystem::requestGroundSnap(IPlayer &player, int index)
 
     // Убираем саму сущность из пути рейкаста FindZ, иначе клиент «приземлит» тело игрока на её
     // собственную коллизию и Z будет расти с каждым снапом (объект карабкается сам по себе).
+    const Vector3 parkPosition(target.x, target.y, PROBE_PARK_Z);
     if (entity.type == EntityType::Object)
     {
         if (IObject *object = m_objects ? m_objects->get(entity.entityId) : nullptr)
         {
-            object->setPosition(Vector3(target.x, target.y, PROBE_PARK_Z));
+            object->setPosition(parkPosition);
         }
     }
-    else
+    else if (entity.type == EntityType::Actor)
     {
         if (IActor *actor = m_actors ? m_actors->get(entity.entityId) : nullptr)
         {
-            actor->setPosition(Vector3(target.x, target.y, PROBE_PARK_Z));
+            actor->setPosition(parkPosition);
         }
+    }
+    else if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(entity.entityId) : nullptr)
+    {
+        vehicle->setPosition(parkPosition);
     }
 
     state.groundProbe = index;
     state.groundProbeTicks = 0;
     player.setPositionFindZ(Vector3(target.x, target.y, GROUND_PROBE_Z));
+}
+
+void EditorSystem::cancelGroundProbe(EditorState &state)
+{
+    if (state.groundProbe >= 0 && state.groundProbe < (int)state.entities.size())
+    {
+        // Зондируемая сущность запаркована на PROBE_PARK_Z — вернуть на сохранённую позицию.
+        applyEntityTransform(state.entities[state.groundProbe]);
+    }
+    state.groundProbe = -1;
+    state.groundProbeTicks = 0;
 }
 
 void EditorSystem::processGroundProbe(IPlayer &player)
@@ -430,7 +846,21 @@ void EditorSystem::processGroundProbe(IPlayer &player)
 
     if (z < GROUND_PROBE_Z - 1.0f)
     {
-        entity.position.z = z; // нашли землю
+        // Нашли землю. z — это туловище стоящего игрока, уровень земли ниже на
+        // PED_ORIGIN_HEIGHT.
+        const float groundZ = z - PED_ORIGIN_HEIGHT;
+        switch (entity.type)
+        {
+        case EntityType::Object:
+            entity.position.z = groundZ; // origin большинства объектов — у основания
+            break;
+        case EntityType::Actor:
+            entity.position.z = groundZ + PED_ORIGIN_HEIGHT; // origin актора — такое же туловище
+            break;
+        case EntityType::Vehicle:
+            entity.position.z = groundZ + VEHICLE_GROUND_OFFSET;
+            break;
+        }
     }
     else
     {
@@ -443,7 +873,7 @@ void EditorSystem::processGroundProbe(IPlayer &player)
     state.groundProbe = -1;
 }
 
-// ------------------------------------------------------------------ dialog screens
+// ------------------------------------------------------------------ экраны диалогов
 
 void EditorSystem::showMain(IPlayer &player)
 {
@@ -451,19 +881,35 @@ void EditorSystem::showMain(IPlayer &player)
 
     size_t objectCount = 0;
     size_t actorCount = 0;
+    size_t vehicleCount = 0;
     for (const EditorEntity &e : state.entities)
     {
-        (e.type == EntityType::Object ? objectCount : actorCount)++;
+        switch (e.type)
+        {
+        case EntityType::Object:
+            ++objectCount;
+            break;
+        case EntityType::Actor:
+            ++actorCount;
+            break;
+        case EntityType::Vehicle:
+            ++vehicleCount;
+            break;
+        }
     }
 
     std::string body;
     body += "Создать объект\n";
-    body += "Создать актора\n";
+    body += "Создать актора (NPC)\n";
+    body += "Создать машину\n";
     body += fmt::format("Объекты ({})\n", objectCount);
     body += fmt::format("Акторы ({})\n", actorCount);
+    body += fmt::format("Машины ({})\n", vehicleCount);
     body += fmt::format("Автоснап к земле: {}\n", state.autoGround ? "ВКЛ" : "выкл");
+    body += fmt::format("Скорость камеры: {:.1f}\n", state.cameraSpeed);
     body += "Сохранить в файл\n";
     body += "Загрузить из файла\n";
+    body += "Очистить сцену\n";
     body += "Закрыть меню (летать)\n";
     body += "Выйти из редактора";
 
@@ -490,24 +936,36 @@ void EditorSystem::showMain(IPlayer &player)
                                  showActorSkinInput(*player);
                                  break;
                              case 2:
-                                 showObjectList(*player);
+                                 showVehicleModelInput(*player);
                                  break;
                              case 3:
-                                 showActorList(*player);
+                                 showObjectList(*player);
                                  break;
                              case 4:
+                                 showActorList(*player);
+                                 break;
+                             case 5:
+                                 showVehicleList(*player);
+                                 break;
+                             case 6:
                                  m_state[playerId].autoGround = !m_state[playerId].autoGround;
                                  showMain(*player);
                                  break;
-                             case 5:
+                             case 7:
+                                 showCameraSpeedInput(*player);
+                                 break;
+                             case 8:
                                  showSaveNameInput(*player);
                                  break;
-                             case 6:
+                             case 9:
                                  showLoadList(*player);
                                  break;
-                             case 7:
+                             case 10:
+                                 showClearConfirm(*player);
+                                 break;
+                             case 11:
                                  break; // летать
-                             case 8:
+                             case 12:
                                  disableEditor(*player);
                                  break;
                              default:
@@ -519,26 +977,30 @@ void EditorSystem::showMain(IPlayer &player)
 void EditorSystem::showEntityEdit(IPlayer &player)
 {
     EditorState &state = stateOf(player);
-    if (state.selectedIndex < 0 || state.selectedIndex >= (int)state.entities.size())
+    if (!selectedValid(state))
     {
         showMain(player);
         return;
     }
 
-    if (state.entities[state.selectedIndex].type == EntityType::Actor)
+    switch (state.entities[state.selectedIndex].type)
     {
+    case EntityType::Actor:
         showActorEdit(player);
-    }
-    else
-    {
+        break;
+    case EntityType::Vehicle:
+        showVehicleEdit(player);
+        break;
+    default:
         showObjectEdit(player);
+        break;
     }
 }
 
 void EditorSystem::showObjectEdit(IPlayer &player)
 {
     EditorState &state = stateOf(player);
-    if (state.selectedIndex < 0 || state.selectedIndex >= (int)state.entities.size())
+    if (!selectedValid(state))
     {
         showMain(player);
         return;
@@ -547,13 +1009,18 @@ void EditorSystem::showObjectEdit(IPlayer &player)
 
     std::string body;
     body += "Поставить по взгляду камеры\n";
-    body += "Снэп к земле (FindZ)\n";
     body += fmt::format("Следовать за взглядом: {}\n", state.followCamera ? "ВКЛ" : "выкл");
+    body += "Двигать клавишами (XY)\n";
+    body += "Двигать клавишами (высота)\n";
+    body += "Вращать клавишами (Z)\n";
+    body += fmt::format("Шаг клавиш: {:.2f}\n", state.keyStep);
+    body += "Снэп к земле (FindZ)\n";
     body += fmt::format("Дистанция установки: {:.1f}\n", state.placeDistance);
-    body += fmt::format("Поворот X: {:.1f}\n", e.rotation.x);
-    body += fmt::format("Поворот Y: {:.1f}\n", e.rotation.y);
-    body += fmt::format("Поворот Z: {:.1f}\n", e.rotation.z);
-    body += "Задать позицию (X Y Z)\n";
+    body += fmt::format("Позиция: {:.1f} {:.1f} {:.1f}\n", e.position.x, e.position.y, e.position.z);
+    body += fmt::format("Поворот: {:.1f} {:.1f} {:.1f}\n", e.rotation.x, e.rotation.y, e.rotation.z);
+    body += fmt::format("Сменить модель ({})\n", e.model);
+    body += "Дублировать\n";
+    body += "Перелететь к объекту\n";
     body += "Удалить";
 
     m_dialogService.show(
@@ -567,8 +1034,7 @@ void EditorSystem::showObjectEdit(IPlayer &player)
             }
 
             EditorState &state = m_state[playerId];
-            if (response == DialogResponse_Right || state.selectedIndex < 0 ||
-                state.selectedIndex >= (int)state.entities.size())
+            if (response == DialogResponse_Right || !selectedValid(state))
             {
                 showMain(*player);
                 return;
@@ -586,12 +1052,7 @@ void EditorSystem::showObjectEdit(IPlayer &player)
                 }
                 showObjectEdit(*player);
                 break;
-            case 1: // снэп к земле
-                requestGroundSnap(*player, state.selectedIndex);
-                player->sendClientMessage(Colour::White(), u("Ищу землю под объектом..."));
-                showObjectEdit(*player);
-                break;
-            case 2: // следовать за взглядом
+            case 1: // следовать за взглядом
                 state.followCamera = !state.followCamera;
                 if (state.followCamera)
                 {
@@ -603,22 +1064,60 @@ void EditorSystem::showObjectEdit(IPlayer &player)
                     showObjectEdit(*player);
                 }
                 break;
+            case 2:
+                state.followCamera = false;
+                state.keyMode = KeyMode::MoveXY;
+                player->sendClientMessage(Colour::White(),
+                                          u("Стрелки двигают объект (Sprint — крупно, Alt — точно). /editor — готово."));
+                break;
             case 3:
-                showDistanceInput(*player);
+                state.followCamera = false;
+                state.keyMode = KeyMode::MoveZ;
+                player->sendClientMessage(
+                    Colour::White(), u("Вверх/вниз меняют высоту (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
             case 4:
-                showRotateInput(*player, 0);
+                state.followCamera = false;
+                state.keyMode = KeyMode::Rotate;
+                player->sendClientMessage(
+                    Colour::White(), u("Влево/вправо вращают объект (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
             case 5:
-                showRotateInput(*player, 1);
+                showKeyStepInput(*player);
                 break;
-            case 6:
-                showRotateInput(*player, 2);
+            case 6: // снэп к земле
+                requestGroundSnap(*player, state.selectedIndex);
+                player->sendClientMessage(Colour::White(), u("Ищу землю под объектом..."));
+                showObjectEdit(*player);
                 break;
             case 7:
-                showPosInput(*player);
+                showDistanceInput(*player);
                 break;
             case 8:
+                showPositionInput(*player);
+                break;
+            case 9:
+                showRotationInput(*player);
+                break;
+            case 10:
+                showChangeModelInput(*player);
+                break;
+            case 11:
+                duplicateEntity(*player, state.selectedIndex);
+                showEntityEdit(*player);
+                break;
+            case 12: // перелететь
+                state.cameraPosition = entity.position + Vector3(2.0f, 2.0f, 2.0f);
+                if (state.cameraObjectId >= 0 && m_objects)
+                {
+                    if (IObject *camObject = m_objects->get(state.cameraObjectId))
+                    {
+                        camObject->setPosition(state.cameraPosition);
+                    }
+                }
+                showObjectEdit(*player);
+                break;
+            case 13:
                 deleteEntity(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Объект удалён"));
                 showMain(*player);
@@ -632,7 +1131,7 @@ void EditorSystem::showObjectEdit(IPlayer &player)
 void EditorSystem::showActorEdit(IPlayer &player)
 {
     EditorState &state = stateOf(player);
-    if (state.selectedIndex < 0 || state.selectedIndex >= (int)state.entities.size())
+    if (!selectedValid(state))
     {
         showMain(player);
         return;
@@ -641,12 +1140,21 @@ void EditorSystem::showActorEdit(IPlayer &player)
 
     std::string body;
     body += "Поставить по взгляду камеры\n";
-    body += "Снэп к земле (FindZ)\n";
     body += fmt::format("Следовать за взглядом: {}\n", state.followCamera ? "ВКЛ" : "выкл");
+    body += "Двигать клавишами (XY)\n";
+    body += "Двигать клавишами (высота)\n";
+    body += "Вращать клавишами (угол)\n";
+    body += fmt::format("Шаг клавиш: {:.2f}\n", state.keyStep);
+    body += "Снэп к земле (FindZ)\n";
     body += fmt::format("Дистанция установки: {:.1f}\n", state.placeDistance);
-    body += fmt::format("Поворот (угол): {:.1f}\n", e.rotation.z);
-    body += "Задать анимацию\n";
+    body += fmt::format("Позиция: {:.1f} {:.1f} {:.1f}\n", e.position.x, e.position.y, e.position.z);
+    body += fmt::format("Угол: {:.1f}\n", e.rotation.z);
+    body += fmt::format("Сменить скин ({})\n", e.model);
+    body += fmt::format("Анимация: {}\n", e.animLib.empty() ? "нет" : e.animLib + ":" + e.animName);
+    body += fmt::format("Режим анимации: {}\n", e.animLoop ? "зациклена" : "стоп-поза");
     body += "Очистить анимацию\n";
+    body += "Дублировать\n";
+    body += "Перелететь к актору\n";
     body += "Удалить";
 
     m_dialogService.show(
@@ -660,8 +1168,7 @@ void EditorSystem::showActorEdit(IPlayer &player)
             }
 
             EditorState &state = m_state[playerId];
-            if (response == DialogResponse_Right || state.selectedIndex < 0 ||
-                state.selectedIndex >= (int)state.entities.size())
+            if (response == DialogResponse_Right || !selectedValid(state))
             {
                 showMain(*player);
                 return;
@@ -680,11 +1187,6 @@ void EditorSystem::showActorEdit(IPlayer &player)
                 showActorEdit(*player);
                 break;
             case 1:
-                requestGroundSnap(*player, state.selectedIndex);
-                player->sendClientMessage(Colour::White(), u("Ищу землю под актором..."));
-                showActorEdit(*player);
-                break;
-            case 2:
                 state.followCamera = !state.followCamera;
                 if (state.followCamera)
                 {
@@ -696,16 +1198,53 @@ void EditorSystem::showActorEdit(IPlayer &player)
                     showActorEdit(*player);
                 }
                 break;
+            case 2:
+                state.followCamera = false;
+                state.keyMode = KeyMode::MoveXY;
+                player->sendClientMessage(Colour::White(),
+                                          u("Стрелки двигают актора (Sprint — крупно, Alt — точно). /editor — готово."));
+                break;
             case 3:
-                showDistanceInput(*player);
+                state.followCamera = false;
+                state.keyMode = KeyMode::MoveZ;
+                player->sendClientMessage(
+                    Colour::White(), u("Вверх/вниз меняют высоту (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
             case 4:
-                showRotateInput(*player, 2);
+                state.followCamera = false;
+                state.keyMode = KeyMode::Rotate;
+                player->sendClientMessage(
+                    Colour::White(), u("Влево/вправо вращают актора (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
             case 5:
-                showAnimLibInput(*player);
+                showKeyStepInput(*player);
                 break;
             case 6:
+                requestGroundSnap(*player, state.selectedIndex);
+                player->sendClientMessage(Colour::White(), u("Ищу землю под актором..."));
+                showActorEdit(*player);
+                break;
+            case 7:
+                showDistanceInput(*player);
+                break;
+            case 8:
+                showPositionInput(*player);
+                break;
+            case 9:
+                showAngleInput(*player);
+                break;
+            case 10:
+                showChangeModelInput(*player);
+                break;
+            case 11:
+                showAnimationMenu(*player);
+                break;
+            case 12: // переключить режим анимации
+                entity.animLoop = !entity.animLoop;
+                applyEntityAnimation(entity);
+                showActorEdit(*player);
+                break;
+            case 13:
                 entity.animLib.clear();
                 entity.animName.clear();
                 if (IActor *actor = m_actors ? m_actors->get(entity.entityId) : nullptr)
@@ -714,9 +1253,159 @@ void EditorSystem::showActorEdit(IPlayer &player)
                 }
                 showActorEdit(*player);
                 break;
-            case 7:
+            case 14:
+                duplicateEntity(*player, state.selectedIndex);
+                showEntityEdit(*player);
+                break;
+            case 15: // перелететь
+                state.cameraPosition = entity.position + Vector3(2.0f, 2.0f, 2.0f);
+                if (state.cameraObjectId >= 0 && m_objects)
+                {
+                    if (IObject *camObject = m_objects->get(state.cameraObjectId))
+                    {
+                        camObject->setPosition(state.cameraPosition);
+                    }
+                }
+                showActorEdit(*player);
+                break;
+            case 16:
                 deleteEntity(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Актор удалён"));
+                showMain(*player);
+                break;
+            default:
+                break;
+            }
+        });
+}
+
+void EditorSystem::showVehicleEdit(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    if (!selectedValid(state))
+    {
+        showMain(player);
+        return;
+    }
+    const EditorEntity &e = state.entities[state.selectedIndex];
+
+    std::string body;
+    body += "Поставить по взгляду камеры\n";
+    body += fmt::format("Следовать за взглядом: {}\n", state.followCamera ? "ВКЛ" : "выкл");
+    body += "Двигать клавишами (XY)\n";
+    body += "Двигать клавишами (высота)\n";
+    body += "Вращать клавишами (угол)\n";
+    body += fmt::format("Шаг клавиш: {:.2f}\n", state.keyStep);
+    body += "Снэп к земле (FindZ)\n";
+    body += fmt::format("Дистанция установки: {:.1f}\n", state.placeDistance);
+    body += fmt::format("Позиция: {:.1f} {:.1f} {:.1f}\n", e.position.x, e.position.y, e.position.z);
+    body += fmt::format("Угол: {:.1f}\n", e.rotation.z);
+    body += fmt::format("Сменить модель ({})\n", e.model);
+    body += fmt::format("Цвета: {} {}\n", e.colour1, e.colour2);
+    body += "Дублировать\n";
+    body += "Перелететь к машине\n";
+    body += "Удалить";
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_LIST, fmt::format("Машина (модель {})", e.model), body, "Выбрать", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            EditorState &state = m_state[playerId];
+            if (response == DialogResponse_Right || !selectedValid(state))
+            {
+                showMain(*player);
+                return;
+            }
+            EditorEntity &entity = state.entities[state.selectedIndex];
+
+            switch (listItem)
+            {
+            case 0:
+                entity.position = placementPoint(*player);
+                applyEntityTransform(entity);
+                if (state.autoGround)
+                {
+                    requestGroundSnap(*player, state.selectedIndex);
+                }
+                showVehicleEdit(*player);
+                break;
+            case 1:
+                state.followCamera = !state.followCamera;
+                if (state.followCamera)
+                {
+                    player->sendClientMessage(
+                        Colour::White(), u("Машина следует за взглядом. Летайте, затем /editor чтобы зафиксировать."));
+                }
+                else
+                {
+                    showVehicleEdit(*player);
+                }
+                break;
+            case 2:
+                state.followCamera = false;
+                state.keyMode = KeyMode::MoveXY;
+                player->sendClientMessage(Colour::White(),
+                                          u("Стрелки двигают машину (Sprint — крупно, Alt — точно). /editor — готово."));
+                break;
+            case 3:
+                state.followCamera = false;
+                state.keyMode = KeyMode::MoveZ;
+                player->sendClientMessage(
+                    Colour::White(), u("Вверх/вниз меняют высоту (Sprint — крупно, Alt — точно). /editor — готово."));
+                break;
+            case 4:
+                state.followCamera = false;
+                state.keyMode = KeyMode::Rotate;
+                player->sendClientMessage(
+                    Colour::White(), u("Влево/вправо вращают машину (Sprint — крупно, Alt — точно). /editor — готово."));
+                break;
+            case 5:
+                showKeyStepInput(*player);
+                break;
+            case 6:
+                requestGroundSnap(*player, state.selectedIndex);
+                player->sendClientMessage(Colour::White(), u("Ищу землю под машиной..."));
+                showVehicleEdit(*player);
+                break;
+            case 7:
+                showDistanceInput(*player);
+                break;
+            case 8:
+                showPositionInput(*player);
+                break;
+            case 9:
+                showAngleInput(*player);
+                break;
+            case 10:
+                showChangeModelInput(*player);
+                break;
+            case 11:
+                showVehicleColoursInput(*player);
+                break;
+            case 12:
+                duplicateEntity(*player, state.selectedIndex);
+                showEntityEdit(*player);
+                break;
+            case 13: // перелететь
+                state.cameraPosition = entity.position + Vector3(2.0f, 2.0f, 2.0f);
+                if (state.cameraObjectId >= 0 && m_objects)
+                {
+                    if (IObject *camObject = m_objects->get(state.cameraObjectId))
+                    {
+                        camObject->setPosition(state.cameraPosition);
+                    }
+                }
+                showVehicleEdit(*player);
+                break;
+            case 14:
+                deleteEntity(*player, state.selectedIndex);
+                player->sendClientMessage(Colour::White(), u("Машина удалена"));
                 showMain(*player);
                 break;
             default:
@@ -744,9 +1433,10 @@ void EditorSystem::showObjectModelInput(IPlayer &player)
             }
 
             int model = 0;
-            if (!parseInt(text, model))
+            if (!parseInt(text, model) || model < 0 || model > MAX_OBJECT_MODEL)
             {
-                player->sendClientMessage(Colour::White(), u("Введите корректный числовой ID модели"));
+                player->sendClientMessage(Colour::White(),
+                                          u(fmt::format("Введите ID модели от 0 до {}", MAX_OBJECT_MODEL)));
                 showObjectModelInput(*player);
                 return;
             }
@@ -758,72 +1448,207 @@ void EditorSystem::showObjectModelInput(IPlayer &player)
 
 void EditorSystem::showActorSkinInput(IPlayer &player)
 {
-    m_dialogService.show(player,
-                         makeDialog(DialogStyle_INPUT, "Создать актора", "Введите ID скина актора", "Создать", "Назад"),
-                         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
-                         {
-                             IPlayer *player = editorPlayer(playerId);
-                             if (!player)
-                             {
-                                 return;
-                             }
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_INPUT, "Создать актора", "Введите ID скина актора", "Создать", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
 
-                             if (response == DialogResponse_Right)
-                             {
-                                 showMain(*player);
-                                 return;
-                             }
+            if (response == DialogResponse_Right)
+            {
+                showMain(*player);
+                return;
+            }
 
-                             int skin = 0;
-                             if (!parseInt(text, skin))
-                             {
-                                 player->sendClientMessage(Colour::White(), u("Введите корректный числовой ID скина"));
-                                 showActorSkinInput(*player);
-                                 return;
-                             }
+            int skin = 0;
+            if (!parseInt(text, skin) || skin < 0 || skin > MAX_ACTOR_SKIN)
+            {
+                player->sendClientMessage(Colour::White(),
+                                          u(fmt::format("Введите ID скина от 0 до {}", MAX_ACTOR_SKIN)));
+                showActorSkinInput(*player);
+                return;
+            }
 
-                             createActorEntity(*player, skin);
-                             showEntityEdit(*player);
-                         });
+            createActorEntity(*player, skin);
+            showEntityEdit(*player);
+        });
 }
 
-void EditorSystem::showRotateInput(IPlayer &player, int axis)
+void EditorSystem::showVehicleModelInput(IPlayer &player)
 {
-    static const char *axisNames[3] = {"X", "Y", "Z"};
-    const std::string title = fmt::format("Поворот {}", axisNames[axis]);
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_INPUT, "Создать машину",
+                   fmt::format("Введите ID модели машины ({}-{})", MIN_VEHICLE_MODEL, MAX_VEHICLE_MODEL), "Создать",
+                   "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
 
-    m_dialogService.show(player,
-                         makeDialog(DialogStyle_INPUT, title, "Введите угол поворота в градусах", "OK", "Назад"),
-                         [this, playerId = player.getID(), axis](DialogResponse response, int, StringView text)
-                         {
-                             IPlayer *player = editorPlayer(playerId);
-                             if (!player)
-                             {
-                                 return;
-                             }
+            if (response == DialogResponse_Right)
+            {
+                showMain(*player);
+                return;
+            }
 
-                             EditorState &state = m_state[playerId];
+            int model = 0;
+            if (!parseInt(text, model) || model < MIN_VEHICLE_MODEL || model > MAX_VEHICLE_MODEL)
+            {
+                player->sendClientMessage(
+                    Colour::White(), u(fmt::format("Введите ID модели от {} до {}", MIN_VEHICLE_MODEL, MAX_VEHICLE_MODEL)));
+                showVehicleModelInput(*player);
+                return;
+            }
 
-                             if (response == DialogResponse_Left && state.selectedIndex >= 0 &&
-                                 state.selectedIndex < (int)state.entities.size())
-                             {
-                                 float angle = 0.0f;
-                                 if (parseFloat(text.to_string(), angle))
-                                 {
-                                     state.entities[state.selectedIndex].rotation[axis] = angle;
-                                     applyEntityTransform(state.entities[state.selectedIndex]);
-                                 }
-                                 else
-                                 {
-                                     player->sendClientMessage(Colour::White(), u("Введите корректный угол"));
-                                 }
-                             }
-
-                             showEntityEdit(*player);
-                         });
+            createVehicleEntity(*player, model);
+            showEntityEdit(*player);
+        });
 }
 
-void EditorSystem::showPosInput(IPlayer &player)
+void EditorSystem::showVehicleColoursInput(IPlayer &player)
+{
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_INPUT, "Цвета машины", "Введите два ID цвета: первый второй (-1 — случайный)", "OK",
+                   "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            EditorState &state = m_state[playerId];
+            if (response == DialogResponse_Left && selectedValid(state))
+            {
+                EditorEntity &entity = state.entities[state.selectedIndex];
+
+                int colour1 = 0;
+                int colour2 = 0;
+                std::istringstream ss(text.to_string());
+                if (!(ss >> colour1 >> colour2) || colour1 < -1 || colour1 > MAX_VEHICLE_COLOUR || colour2 < -1 ||
+                    colour2 > MAX_VEHICLE_COLOUR)
+                {
+                    player->sendClientMessage(
+                        Colour::White(), u(fmt::format("Введите два числа от -1 до {}", MAX_VEHICLE_COLOUR)));
+                    showVehicleColoursInput(*player);
+                    return;
+                }
+
+                entity.colour1 = colour1;
+                entity.colour2 = colour2;
+                if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(entity.entityId) : nullptr)
+                {
+                    vehicle->setColour(colour1, colour2);
+                }
+            }
+
+            showEntityEdit(*player);
+        });
+}
+
+void EditorSystem::showChangeModelInput(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    if (!selectedValid(state))
+    {
+        showMain(player);
+        return;
+    }
+    const EntityType type = state.entities[state.selectedIndex].type;
+    const bool isActor = type == EntityType::Actor;
+
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_INPUT, isActor ? "Сменить скин" : "Сменить модель",
+                   isActor ? "Введите новый ID скина" : "Введите новый ID модели", "OK", "Назад"),
+        [this, playerId = player.getID(), type](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            EditorState &state = m_state[playerId];
+            if (response == DialogResponse_Left && selectedValid(state))
+            {
+                EditorEntity &entity = state.entities[state.selectedIndex];
+
+                int minModel = 0;
+                int maxModel = MAX_OBJECT_MODEL;
+                if (type == EntityType::Actor)
+                {
+                    maxModel = MAX_ACTOR_SKIN;
+                }
+                else if (type == EntityType::Vehicle)
+                {
+                    minModel = MIN_VEHICLE_MODEL;
+                    maxModel = MAX_VEHICLE_MODEL;
+                }
+
+                int model = 0;
+                if (!parseInt(text, model) || model < minModel || model > maxModel)
+                {
+                    player->sendClientMessage(Colour::White(),
+                                              u(fmt::format("Введите ID от {} до {}", minModel, maxModel)));
+                    showChangeModelInput(*player);
+                    return;
+                }
+
+                if (entity.type == EntityType::Object)
+                {
+                    entity.model = model;
+                    if (IObject *object = m_objects ? m_objects->get(entity.entityId) : nullptr)
+                    {
+                        object->setModel(model);
+                    }
+                }
+                else if (entity.type == EntityType::Actor)
+                {
+                    entity.model = model;
+                    if (IActor *actor = m_actors ? m_actors->get(entity.entityId) : nullptr)
+                    {
+                        actor->setSkin(model);
+                        applyEntityAnimation(entity); // смена скина сбрасывает анимацию на клиенте
+                    }
+                }
+                else
+                {
+                    // У машин модель не меняется на месте — пересоздаём с тем же трансформом.
+                    const int oldModel = entity.model;
+                    const int oldId = entity.entityId;
+                    entity.model = model;
+                    if (IVehicle *vehicle = spawnVehicle(entity))
+                    {
+                        entity.entityId = vehicle->getID();
+                        if (m_vehicles)
+                        {
+                            m_vehicles->release(oldId);
+                        }
+                    }
+                    else
+                    {
+                        entity.model = oldModel;
+                        player->sendClientMessage(Colour::White(), u("Не удалось пересоздать машину"));
+                    }
+                }
+            }
+
+            showEntityEdit(*player);
+        });
+}
+
+void EditorSystem::showPositionInput(IPlayer &player)
 {
     m_dialogService.show(player, makeDialog(DialogStyle_INPUT, "Позиция", "Введите координаты: X Y Z", "OK", "Назад"),
                          [this, playerId = player.getID()](DialogResponse response, int, StringView text)
@@ -836,8 +1661,7 @@ void EditorSystem::showPosInput(IPlayer &player)
 
                              EditorState &state = m_state[playerId];
 
-                             if (response == DialogResponse_Left && state.selectedIndex >= 0 &&
-                                 state.selectedIndex < (int)state.entities.size())
+                             if (response == DialogResponse_Left && selectedValid(state))
                              {
                                  Vector3 pos;
                                  if (parseVec3(text.to_string(), pos))
@@ -853,6 +1677,101 @@ void EditorSystem::showPosInput(IPlayer &player)
 
                              showEntityEdit(*player);
                          });
+}
+
+void EditorSystem::showRotationInput(IPlayer &player)
+{
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_INPUT, "Поворот", "Введите углы в градусах: X Y Z", "OK", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            EditorState &state = m_state[playerId];
+
+            if (response == DialogResponse_Left && selectedValid(state))
+            {
+                Vector3 rotation;
+                if (parseVec3(text.to_string(), rotation))
+                {
+                    state.entities[state.selectedIndex].rotation = rotation;
+                    applyEntityTransform(state.entities[state.selectedIndex]);
+                }
+                else
+                {
+                    player->sendClientMessage(Colour::White(), u("Введите три числа: X Y Z"));
+                }
+            }
+
+            showEntityEdit(*player);
+        });
+}
+
+void EditorSystem::showAngleInput(IPlayer &player)
+{
+    m_dialogService.show(player, makeDialog(DialogStyle_INPUT, "Угол", "Введите угол поворота в градусах", "OK", "Назад"),
+                         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+                         {
+                             IPlayer *player = editorPlayer(playerId);
+                             if (!player)
+                             {
+                                 return;
+                             }
+
+                             EditorState &state = m_state[playerId];
+
+                             if (response == DialogResponse_Left && selectedValid(state))
+                             {
+                                 float angle = 0.0f;
+                                 if (parseFloat(text.to_string(), angle))
+                                 {
+                                     state.entities[state.selectedIndex].rotation.z = wrapDegrees(angle);
+                                     applyEntityTransform(state.entities[state.selectedIndex]);
+                                 }
+                                 else
+                                 {
+                                     player->sendClientMessage(Colour::White(), u("Введите корректный угол"));
+                                 }
+                             }
+
+                             showEntityEdit(*player);
+                         });
+}
+
+void EditorSystem::showKeyStepInput(IPlayer &player)
+{
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_INPUT, "Шаг клавиш",
+                   fmt::format("Введите шаг перемещения в метрах за тик ({}-{})", KEY_STEP_MIN, KEY_STEP_MAX), "OK",
+                   "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            if (response == DialogResponse_Left)
+            {
+                float step = 0.0f;
+                if (parseFloat(text.to_string(), step))
+                {
+                    m_state[playerId].keyStep = std::clamp(step, KEY_STEP_MIN, KEY_STEP_MAX);
+                }
+                else
+                {
+                    player->sendClientMessage(Colour::White(), u("Введите корректное число"));
+                }
+            }
+
+            showEntityEdit(*player);
+        });
 }
 
 void EditorSystem::showDistanceInput(IPlayer &player)
@@ -884,6 +1803,76 @@ void EditorSystem::showDistanceInput(IPlayer &player)
         });
 }
 
+void EditorSystem::showCameraSpeedInput(IPlayer &player)
+{
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_INPUT, "Скорость камеры",
+                   fmt::format("Введите скорость полёта ({}-{})", CAMERA_SPEED_MIN, CAMERA_SPEED_MAX), "OK", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            if (response == DialogResponse_Left)
+            {
+                float speed = 0.0f;
+                if (parseFloat(text.to_string(), speed))
+                {
+                    m_state[playerId].cameraSpeed = std::clamp(speed, CAMERA_SPEED_MIN, CAMERA_SPEED_MAX);
+                }
+                else
+                {
+                    player->sendClientMessage(Colour::White(), u("Введите корректное число"));
+                }
+            }
+
+            showMain(*player);
+        });
+}
+
+void EditorSystem::showAnimationMenu(IPlayer &player)
+{
+    std::string body;
+    for (const AnimPreset &preset : ANIM_PRESETS)
+    {
+        body += fmt::format("{}\t{}:{}\n", preset.label, preset.lib, preset.name);
+    }
+    body += "Ввести вручную (библиотека и название)";
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_LIST, "Анимация NPC", body, "Выбрать", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            EditorState &state = m_state[playerId];
+            if (response != DialogResponse_Left || !selectedValid(state))
+            {
+                showEntityEdit(*player);
+                return;
+            }
+
+            if (listItem >= 0 && listItem < ANIM_PRESET_COUNT)
+            {
+                const AnimPreset &preset = ANIM_PRESETS[listItem];
+                setActorAnimation(*player, state.entities[state.selectedIndex], preset.lib, preset.name,
+                                  state.entities[state.selectedIndex].animLoop);
+                showEntityEdit(*player);
+                return;
+            }
+
+            showAnimLibInput(*player);
+        });
+}
+
 void EditorSystem::showAnimLibInput(IPlayer &player)
 {
     m_dialogService.show(player,
@@ -899,7 +1888,7 @@ void EditorSystem::showAnimLibInput(IPlayer &player)
 
                              if (response == DialogResponse_Right)
                              {
-                                 showEntityEdit(*player);
+                                 showAnimationMenu(*player);
                                  return;
                              }
 
@@ -923,17 +1912,17 @@ void EditorSystem::showAnimNameInput(IPlayer &player, std::string animLib)
 
             EditorState &state = m_state[playerId];
 
-            if (response == DialogResponse_Left && state.selectedIndex >= 0 &&
-                state.selectedIndex < (int)state.entities.size())
+            if (response == DialogResponse_Right || !selectedValid(state))
             {
-                EditorEntity &entity = state.entities[state.selectedIndex];
-                entity.animLib = animLib;
-                entity.animName = text.to_string();
-                if (IActor *actor = m_actors ? m_actors->get(entity.entityId) : nullptr)
-                {
-                    actor->applyAnimation(
-                        AnimationData(4.1f, true, true, true, false, 0, entity.animLib, entity.animName));
-                }
+                showAnimationMenu(*player);
+                return;
+            }
+
+            EditorEntity &entity = state.entities[state.selectedIndex];
+            if (!setActorAnimation(*player, entity, animLib, text.to_string(), entity.animLoop))
+            {
+                showAnimNameInput(*player, animLib); // имя не нашлось — дать поправить
+                return;
             }
 
             showEntityEdit(*player);
@@ -979,6 +1968,37 @@ void EditorSystem::showSaveNameInput(IPlayer &player)
                              }
                              showMain(*player);
                          });
+}
+
+void EditorSystem::showClearConfirm(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    if (state.entities.empty())
+    {
+        showMain(player);
+        return;
+    }
+
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_MSGBOX, "Очистить сцену",
+                   fmt::format("Удалить все сущности ({})? Несохранённое будет потеряно.", state.entities.size()),
+                   "Удалить", "Отмена"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            if (response == DialogResponse_Left)
+            {
+                clearScene(*player);
+                player->sendClientMessage(Colour::White(), u("Сцена очищена"));
+            }
+            showMain(*player);
+        });
 }
 
 void EditorSystem::showObjectList(IPlayer &player)
@@ -1067,6 +2087,49 @@ void EditorSystem::showActorList(IPlayer &player)
                          });
 }
 
+void EditorSystem::showVehicleList(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+
+    std::vector<int> mapping;
+    std::string body;
+    for (size_t i = 0; i < state.entities.size(); ++i)
+    {
+        const EditorEntity &e = state.entities[i];
+        if (e.type != EntityType::Vehicle)
+        {
+            continue;
+        }
+        body +=
+            fmt::format("#{}\tмодель {}\t{:.1f} {:.1f} {:.1f}\n", i, e.model, e.position.x, e.position.y, e.position.z);
+        mapping.push_back(static_cast<int>(i));
+    }
+    if (body.empty())
+    {
+        body = "Список пуст";
+    }
+
+    m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Машины на сцене", body, "Выбрать", "Назад"),
+                         [this, playerId = player.getID(), mapping = std::move(mapping)](DialogResponse response,
+                                                                                         int listItem, StringView)
+                         {
+                             IPlayer *player = editorPlayer(playerId);
+                             if (!player)
+                             {
+                                 return;
+                             }
+
+                             if (response != DialogResponse_Left || listItem < 0 || listItem >= (int)mapping.size())
+                             {
+                                 showMain(*player);
+                                 return;
+                             }
+
+                             m_state[playerId].selectedIndex = mapping[listItem];
+                             showVehicleEdit(*player);
+                         });
+}
+
 void EditorSystem::showLoadList(IPlayer &player)
 {
     std::vector<std::string> files = listMapFiles();
@@ -1082,7 +2145,7 @@ void EditorSystem::showLoadList(IPlayer &player)
     }
 
     m_dialogService.show(
-        player, makeDialog(DialogStyle_LIST, "Загрузить карту", body, "Загрузить", "Назад"),
+        player, makeDialog(DialogStyle_LIST, "Загрузить карту", body, "Выбрать", "Назад"),
         [this, playerId = player.getID(), files = std::move(files)](DialogResponse response, int listItem, StringView)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -1097,10 +2160,44 @@ void EditorSystem::showLoadList(IPlayer &player)
                 return;
             }
 
-            std::string error;
-            if (loadFromFile(*player, files[listItem], error))
+            showLoadModeChoice(*player, files[listItem]);
+        });
+}
+
+void EditorSystem::showLoadModeChoice(IPlayer &player, std::string fileName)
+{
+    std::string body;
+    body += "Заменить сцену (текущие сущности удалить)\n";
+    body += "Добавить к текущей сцене";
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_LIST, fmt::format("Загрузка: {}", fileName), body, "Загрузить", "Назад"),
+        [this, playerId = player.getID(), fileName = std::move(fileName)](DialogResponse response, int listItem,
+                                                                          StringView)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
             {
-                player->sendClientMessage(Colour::White(), u("Карта загружена: " + files[listItem]));
+                return;
+            }
+
+            if (response != DialogResponse_Left || listItem < 0 || listItem > 1)
+            {
+                showLoadList(*player);
+                return;
+            }
+
+            if (listItem == 0)
+            {
+                clearScene(*player);
+            }
+
+            std::string error;
+            std::size_t loaded = 0;
+            if (loadFromFile(*player, fileName, error, loaded))
+            {
+                player->sendClientMessage(Colour::White(),
+                                          u(fmt::format("Карта загружена: {} (сущностей: {})", fileName, loaded)));
             }
             else
             {
@@ -1110,7 +2207,7 @@ void EditorSystem::showLoadList(IPlayer &player)
         });
 }
 
-// ------------------------------------------------------------------ files
+// ------------------------------------------------------------------ файлы
 
 std::vector<std::string> EditorSystem::listMapFiles() const
 {
@@ -1150,19 +2247,25 @@ bool EditorSystem::saveToFile(const EditorState &state, const std::string &name,
             out << fmt::format("object {} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f} {:.4f}\n", e.model, e.position.x,
                                e.position.y, e.position.z, e.rotation.x, e.rotation.y, e.rotation.z);
         }
-        else
+        else if (e.type == EntityType::Actor)
         {
             const std::string lib = e.animLib.empty() ? "-" : e.animLib;
             const std::string anim = e.animName.empty() ? "-" : e.animName;
-            out << fmt::format("actor {} {:.4f} {:.4f} {:.4f} {:.4f} {} {}\n", e.model, e.position.x, e.position.y,
-                               e.position.z, e.rotation.z, lib, anim);
+            // Последний токен — режим анимации; старые файлы без него читаются как loop.
+            out << fmt::format("actor {} {:.4f} {:.4f} {:.4f} {:.4f} {} {} {}\n", e.model, e.position.x, e.position.y,
+                               e.position.z, e.rotation.z, lib, anim, e.animLoop ? "loop" : "freeze");
+        }
+        else
+        {
+            out << fmt::format("vehicle {} {:.4f} {:.4f} {:.4f} {:.4f} {} {}\n", e.model, e.position.x, e.position.y,
+                               e.position.z, e.rotation.z, e.colour1, e.colour2);
         }
     }
 
     return true;
 }
 
-bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::string &error)
+bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::string &error, std::size_t &loaded)
 {
     const std::string path = MAPS_DIR + "/" + name + ".txt";
     std::ifstream in(path);
@@ -1173,6 +2276,7 @@ bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::s
     }
 
     EditorState &state = stateOf(player);
+    loaded = 0;
 
     std::string line;
     while (std::getline(in, line))
@@ -1201,6 +2305,7 @@ bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::s
             entity.position = pos;
             entity.rotation = rot;
             state.entities.push_back(entity);
+            ++loaded;
         }
         else if (kind == "actor")
         {
@@ -1212,6 +2317,9 @@ bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::s
             {
                 continue;
             }
+            std::string mode; // опциональный токен (старые файлы без него — loop)
+            ss >> mode;
+
             IActor *actor = m_actors ? m_actors->create(skin, pos, angle) : nullptr;
             if (!actor)
             {
@@ -1223,15 +2331,43 @@ bool EditorSystem::loadFromFile(IPlayer &player, const std::string &name, std::s
             entity.model = skin;
             entity.position = pos;
             entity.rotation = Vector3(0.0f, 0.0f, angle);
+            entity.animLoop = mode != "freeze";
             if (lib != "-" && anim != "-")
             {
                 entity.animLib = lib;
                 entity.animName = anim;
-                actor->applyAnimation(AnimationData(4.1f, true, true, true, false, 0, lib, anim));
             }
             state.entities.push_back(entity);
+            applyEntityAnimation(state.entities.back());
+            ++loaded;
+        }
+        else if (kind == "vehicle")
+        {
+            EditorEntity entity;
+            entity.type = EntityType::Vehicle;
+            float angle = 0.0f;
+            if (!(ss >> entity.model >> entity.position.x >> entity.position.y >> entity.position.z >> angle >>
+                  entity.colour1 >> entity.colour2))
+            {
+                continue;
+            }
+            entity.rotation = Vector3(0.0f, 0.0f, angle);
+
+            IVehicle *vehicle = spawnVehicle(entity);
+            if (!vehicle)
+            {
+                continue;
+            }
+            entity.entityId = vehicle->getID();
+            state.entities.push_back(entity);
+            ++loaded;
         }
     }
 
+    if (loaded == 0)
+    {
+        error = "в файле нет валидных сущностей";
+        return false;
+    }
     return true;
 }

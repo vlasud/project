@@ -239,9 +239,11 @@ void TextDrawEditorSystem::disableEditor(IPlayer &player)
 
 void TextDrawEditorSystem::startMoveMode(IPlayer &player)
 {
+    // Замораживать игрока нельзя: у замороженного клиента синк клавиш падает до
+    // ~1 Гц и движение становится ступенчатым. Персонаж будет бегать — это цена
+    // плавного перемещения textdraw.
     Session &session = sessionOf(player);
     session.moveMode = true;
-    player.setControllable(false); // стрелки двигают textdraw, а не персонажа
     player.sendClientMessage(Colour::White(),
                              u("Двигайте textdraw стрелками/WASD, Shift — быстрее. /td — зафиксировать."));
 }
@@ -249,12 +251,7 @@ void TextDrawEditorSystem::startMoveMode(IPlayer &player)
 void TextDrawEditorSystem::stopMoveMode(IPlayer &player)
 {
     Session &session = sessionOf(player);
-    if (!session.moveMode)
-    {
-        return;
-    }
     session.moveMode = false;
-    player.setControllable(true);
 }
 
 void TextDrawEditorSystem::startPicking(IPlayer &player)
