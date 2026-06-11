@@ -47,6 +47,21 @@ class WorldService final : public IService
     void showClock(bool visible);
     bool isClockVisible() const;
 
+    // --- глобальные настройки мира (флаги InitGame) ---
+    // Стант-бонусы: клиент начисляет за трюки деньги МИМО PlayerMoneyService —
+    // дыра в источнике правды о деньгах; WorldSystem выключает их при старте.
+    // Применяется и к подключённым, и к новым.
+    void setStuntBonuses(bool enable);
+    bool stuntBonusesEnabled() const;
+
+    // Нейм-теги и маркеры игроков на радаре клиент читает ОДИН РАЗ в InitGame:
+    // смена на лету подействует только на новые подключения — задавайте при
+    // старте сервера.
+    void setNameTags(bool show);
+    bool nameTagsEnabled() const;
+    void setPlayerMarkerMode(PlayerMarkerMode mode);
+    PlayerMarkerMode playerMarkerMode() const;
+
   private:
     // Вызываются WorldSystem.
     void initialize(ICore *core, TimerService *timers);

@@ -7,6 +7,11 @@ WorldSystem::WorldSystem(ICore &core, const ServiceRegister &serviceRegister)
     core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
 
     m_worldService.initialize(&core, &serviceRegister.getService<TimerService>());
+
+    // Стант-бонусы выключены всегда: клиент начисляет за трюки деньги мимо
+    // PlayerMoneyService — это дыра в источнике правды о деньгах (money-валидатор
+    // считал бы их читерским ростом или, хуже, легализовал бы).
+    m_worldService.setStuntBonuses(false);
 }
 
 void WorldSystem::onPlayerSpawn(IPlayer &player)

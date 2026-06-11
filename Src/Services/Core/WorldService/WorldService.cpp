@@ -103,6 +103,84 @@ bool WorldService::isClockVisible() const
     return m_clockVisible;
 }
 
+// ------------------------------------------------------------------ флаги InitGame
+
+void WorldService::setStuntBonuses(bool enable)
+{
+    if (!m_core)
+    {
+        return;
+    }
+    // Конфиг — для InitGame новых подключений, useStuntBonuses — рассылка текущим.
+    if (bool *value = m_core->getConfig().getBool("game.use_stunt_bonuses"))
+    {
+        *value = enable;
+    }
+    m_core->useStuntBonuses(enable);
+}
+
+bool WorldService::stuntBonusesEnabled() const
+{
+    if (!m_core)
+    {
+        return true; // дефолт ядра
+    }
+    const bool *value = const_cast<ICore *>(m_core)->getConfig().getBool("game.use_stunt_bonuses");
+    return value ? *value : true;
+}
+
+void WorldService::setNameTags(bool show)
+{
+    if (!m_core)
+    {
+        return;
+    }
+    if (bool *value = m_core->getConfig().getBool("game.use_nametags"))
+    {
+        *value = show;
+    }
+}
+
+bool WorldService::nameTagsEnabled() const
+{
+    if (!m_core)
+    {
+        return true;
+    }
+    const bool *value = const_cast<ICore *>(m_core)->getConfig().getBool("game.use_nametags");
+    return value ? *value : true;
+}
+
+void WorldService::setPlayerMarkerMode(PlayerMarkerMode mode)
+{
+    if (!m_core)
+    {
+        return;
+    }
+    if (mode < PlayerMarkerMode_Off || mode > PlayerMarkerMode_Streamed)
+    {
+        mode = PlayerMarkerMode_Global;
+    }
+    if (int *value = m_core->getConfig().getInt("game.player_marker_mode"))
+    {
+        *value = static_cast<int>(mode);
+    }
+}
+
+PlayerMarkerMode WorldService::playerMarkerMode() const
+{
+    if (!m_core)
+    {
+        return PlayerMarkerMode_Global;
+    }
+    const int *value = const_cast<ICore *>(m_core)->getConfig().getInt("game.player_marker_mode");
+    if (!value || *value < PlayerMarkerMode_Off || *value > PlayerMarkerMode_Streamed)
+    {
+        return PlayerMarkerMode_Global;
+    }
+    return static_cast<PlayerMarkerMode>(*value);
+}
+
 // ------------------------------------------------------------------ вызовы WorldSystem
 
 void WorldService::initialize(ICore *core, TimerService *timers)
