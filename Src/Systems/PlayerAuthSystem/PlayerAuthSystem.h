@@ -9,6 +9,7 @@
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/PlayerSkinService/PlayerSkinService.h"
 #include "Services/PlayerAuthService/PlayerAuthService.h"
+#include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/PlayerSpawnService/PlayerSpawnService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
@@ -39,6 +40,7 @@ class PlayerAuthSystem : public BaseSystem,
     struct LoginData
     {
         int loginAttempts = 0;
+        PlayerSessionService::AccountId accountId = PlayerSessionService::NO_ACCOUNT;
         std::string passwordHash;
     };
 
@@ -69,6 +71,7 @@ class PlayerAuthSystem : public BaseSystem,
     PlayerMoneyService &m_moneyService;
     PlayerSpawnService &m_spawnService;
     PlayerSkinService &m_skinService;
+    PlayerSessionService &m_sessionService;
 
     std::array<LoginData, MAX_PLAYERS> m_loginData;
     std::array<RegistrationData, MAX_PLAYERS> m_registrationData;

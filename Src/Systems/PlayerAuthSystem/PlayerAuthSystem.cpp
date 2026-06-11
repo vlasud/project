@@ -23,7 +23,8 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
       m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
       m_spawnService(serviceRegister.getService<PlayerSpawnService>()),
-      m_skinService(serviceRegister.getService<PlayerSkinService>())
+      m_skinService(serviceRegister.getService<PlayerSkinService>()),
+      m_sessionService(serviceRegister.getService<PlayerSessionService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
@@ -110,6 +111,7 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
             }
 
             mysqlx::Row row = result.fetchOne();
+            m_loginData[playerId].accountId = row.get(0).get<std::int64_t>();
             m_loginData[playerId].passwordHash = row.get(1).get<std::string>();
             runLogin(playerId);
         },
@@ -231,6 +233,16 @@ void PlayerAuthSystem::showLoginDialog(IPlayer &player)
                                      return;
                                  }
 
+                                 // Сессия — после пароля: до проверки нельзя раскрывать,
+                                 // что аккаунт в сети (это уже информация о владельце).
+                                 if (!m_sessionService.start(*player, m_loginData[playerId].accountId))
+                                 {
+                                     player->sendClientMessage(
+                                         Colour::White(), Encoding::utf8Tocp1251("Этот аккаунт уже в игре"));
+                                     player->kick();
+                                     return;
+                                 }
+
                                  finalize(*player);
                              };
 
@@ -333,10 +345,12 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
 {
     std::string name = player.getName().to_string();
     std::string password = std::move(m_registrationData[player.getID()].password);
+    const int requestConnectionVersion = m_connectionVersionService.getVersion(player.getID());
 
-    DatabaseManager::throwQuery(
-        [name = std::move(name), password = std::move(password),
-         sex = m_registrationData[player.getID()].sex](mysqlx::Schema schema)
+    // Insert и чтение id — одним заданием на воркере: сессии нужен id аккаунта,
+    // fire-and-forget insert его не даёт.
+    DatabaseManager::selectQuery(
+        [name, password = std::move(password), sex = m_registrationData[player.getID()].sex](mysqlx::Schema schema)
         {
             char hash[crypto_pwhash_STRBYTES] = {0};
             crypto_pwhash_str(hash, password.c_str(), password.size(), crypto_pwhash_OPSLIMIT_INTERACTIVE,
@@ -346,9 +360,50 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
                 .insert("name", "password_hash", "sex")
                 .values(name, hash, static_cast<uint8_t>(sex))
                 .execute();
-        });
 
-    finalize(player);
+            return schema.getTable("player").select("id").where("name = :name").limit(1).bind("name", name).execute();
+        },
+        [this, requestConnectionVersion, playerId = player.getID()](mysqlx::RowResult result)
+        {
+            if (m_connectionVersionService.getVersion(playerId) != requestConnectionVersion)
+            {
+                return; // в слоте уже другое подключение
+            }
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+            {
+                return;
+            }
+            if (result.count() == 0)
+            {
+                player->sendClientMessage(Colour::White(),
+                                          Encoding::utf8Tocp1251("Ошибка сервера. Попробуйте зайти позже"));
+                player->kick();
+                return;
+            }
+
+            const auto accountId = result.fetchOne().get(0).get<std::int64_t>();
+            if (!m_sessionService.start(*player, accountId))
+            {
+                player->sendClientMessage(Colour::White(), Encoding::utf8Tocp1251("Этот аккаунт уже в игре"));
+                player->kick();
+                return;
+            }
+            finalize(*player);
+        },
+        [this, requestConnectionVersion, playerId = player.getID()](const std::string &)
+        {
+            if (m_connectionVersionService.getVersion(playerId) != requestConnectionVersion)
+            {
+                return;
+            }
+            if (IPlayer *player = m_core.getPlayers().get(playerId))
+            {
+                player->sendClientMessage(Colour::White(),
+                                          Encoding::utf8Tocp1251("Ошибка сервера. Попробуйте зайти позже"));
+                player->kick();
+            }
+        });
 }
 
 void PlayerAuthSystem::finalize(IPlayer &player)

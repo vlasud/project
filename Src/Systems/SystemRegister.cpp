@@ -23,6 +23,7 @@
 #include "Systems/Core/PlayerActivitySystem/PlayerActivitySystem.h"
 #include "Systems/Core/PlayerAnimationSystem/PlayerAnimationSystem.h"
 #include "Systems/PlayerAuthSystem/PlayerAuthSystem.h"
+#include "Systems/PlayerSessionSystem/PlayerSessionSystem.h"
 #include "Systems/PlayerSpawnSystem/PlayerSpawnSystem.h"
 #include "Systems/Core/PlayerCommandSystem/PlayerCommandSystem.h"
 #include "Systems/Core/PlayerConnectionVersionSystem/PlayerConnectionVersionSystem.h"
@@ -51,6 +52,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // TimerSystem первым: его initialize() передаёт сервису компонент таймеров
     // раньше, чем другие системы смогут ставить таймеры в своих initialize().
     m_systems.push_back(std::make_unique<TimerSystem>(core, serviceRegister));
+    // PlayerSessionSystem раньше всех бизнес- и core-систем: конец сессии (и
+    // сохранение у подписчиков) должен отстрелить на дисконнекте ДО того, как
+    // чужие обработчики начнут чистить состояние игрока.
+    m_systems.push_back(std::make_unique<PlayerSessionSystem>(core, serviceRegister));
     // NicknameSystem максимально рано: невалидный ник отсекается на входящем
     // подключении, до того как остальные системы заведут на игрока состояние.
     m_systems.push_back(std::make_unique<NicknameSystem>(core, serviceRegister));

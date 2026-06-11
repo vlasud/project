@@ -12,6 +12,7 @@
 #include "Services/Core/PlayerActivityService/PlayerActivityService.h"
 #include "Services/Core/PlayerAnimationService/PlayerAnimationService.h"
 #include "Services/PlayerAuthService/PlayerAuthService.h"
+#include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/PlayerSpawnService/PlayerSpawnService.h"
 #include "Services/Core/PlayerChatService/PlayerChatService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
@@ -76,5 +77,6 @@ void ServiceRegister::registerServices()
     registerService<PlayerHealthService>();
     registerService<PlayerMoneyService>();
     registerService<PlayerSpawnService>();
+    registerService<PlayerSessionService>();
     registerService<PlayerAuthService>();
 }
