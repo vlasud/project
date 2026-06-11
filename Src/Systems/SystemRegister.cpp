@@ -1,6 +1,7 @@
 #include "Systems/SystemRegister.h"
 
 #include "Systems/Core/AntiCheatSystem/AntiCheatSystem.h"
+#include "Systems/Core/AttachmentSystem/AttachmentSystem.h"
 #include "Systems/Core/AudioSystem/AudioSystem.h"
 #include "Systems/Core/CameraSystem/CameraSystem.h"
 #include "Systems/Core/ChatSystem/ChatSystem.h"
@@ -70,6 +71,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<ObjectEditSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MovingObjectSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerSkinSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<AttachmentSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AudioSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<GameTextSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));

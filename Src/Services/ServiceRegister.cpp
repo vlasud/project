@@ -1,6 +1,7 @@
 #include "Services/ServiceRegister.h"
 
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
+#include "Services/Core/AttachmentService/AttachmentService.h"
 #include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/CameraService/CameraService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
@@ -65,6 +66,7 @@ void ServiceRegister::registerServices()
     registerService<SpectateService>();
     registerService<MovingObjectService>();
     registerService<PlayerSkinService>();
+    registerService<AttachmentService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
