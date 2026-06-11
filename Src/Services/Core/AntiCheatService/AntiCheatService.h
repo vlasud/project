@@ -32,6 +32,7 @@ class AntiCheatService final : public IService
         VehicleHack,           // repair hack / фейковый unoccupied-trailer sync
         PickupHack,            // подбор пикапа с неправдоподобной дистанции / из чужого мира
         CheckpointHack,        // вход в чекпоинт с неправдоподобной дистанции
+        SpawnHack,             // запрос класса/спавна вне легального контекста (телепорт+хил респауном)
     };
 
     struct Violation

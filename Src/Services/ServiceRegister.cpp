@@ -2,16 +2,19 @@
 
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
+#include "Services/Core/ClassSelectionService/ClassSelectionService.h"
 #include "Services/Core/GangZoneService/GangZoneService.h"
 #include "Services/Core/GridService/GridService.h"
 #include "Services/Core/PlayerAnimationService/PlayerAnimationService.h"
 #include "Services/PlayerAuthService/PlayerAuthService.h"
+#include "Services/PlayerSpawnService/PlayerSpawnService.h"
 #include "Services/Core/PlayerChatService/PlayerChatService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/PickupService/PickupService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
+#include "Services/Core/PlayerKeyService/PlayerKeyService.h"
 #include "Services/Core/PlayerHealthService/PlayerHealthService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
@@ -40,11 +43,14 @@ void ServiceRegister::registerServices()
     registerService<PickupService>();
     registerService<MapIconService>();
     registerService<CheckpointService>();
+    registerService<ClassSelectionService>();
+    registerService<PlayerKeyService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
     registerService<PlayerChatService>();
     registerService<PlayerHealthService>();
     registerService<PlayerMoneyService>();
+    registerService<PlayerSpawnService>();
     registerService<PlayerAuthService>();
 }

@@ -21,17 +21,12 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
       m_stateService(serviceRegister.getService<PlayerStateService>()),
       m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
-      m_moneyService(serviceRegister.getService<PlayerMoneyService>())
+      m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
+      m_spawnService(serviceRegister.getService<PlayerSpawnService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
-}
-
-void PlayerAuthSystem::initialize(IComponentList *components)
-{
-    IClassesComponent *component = components->queryComponent<IClassesComponent>();
-    component->getEventDispatcher().addEventHandler(this);
 }
 
 void PlayerAuthSystem::onPlayerConnect(IPlayer &player)
@@ -60,46 +55,15 @@ void PlayerAuthSystem::onPlayerKeyStateChange(IPlayer &player, uint32_t newKeys,
     // static std::array<int, 5> skins = {1, 2, 3, 4, 5};
 }
 
-bool PlayerAuthSystem::onPlayerRequestClass(IPlayer &player, unsigned int classId)
-{
-    // Дефолтные кнопки класс-селекшна (стрелки ◄ ►) полностью заблокированы:
-    // первый запрос — автоматический вход клиента, всё после него — кнопки.
-    if (m_classSelectionEntered[player.getID()])
-    {
-        player.sendClientMessage(Colour::White(),
-                                 Encoding::utf8Tocp1251("Эти кнопки не работают. Вы не должны были их увидеть"));
-        return false;
-    }
-    m_classSelectionEntered[player.getID()] = true;
-
-    if (m_authService.getAuthState(player.getID()) != PlayerAuthService::EAuthState::AUTHORIZING)
-    {
-        return false;
-    }
-
-    player.spawn();
-    return true;
-}
-
-bool PlayerAuthSystem::onPlayerRequestSpawn(IPlayer &player)
-{
-    // Кнопка Spawn класс-селекшна. Клиентский запрос спавна нелегитимен всегда:
-    // спавнит только сервер (player.spawn() / выход из спектейта — они через
-    // этот хук не проходят).
-    player.sendClientMessage(Colour::White(),
-                             Encoding::utf8Tocp1251("Эти кнопки не работают. Вы не должны были их увидеть"));
-    return false;
-}
-
 void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
 {
     // Респаун после finalize (выход из спектейта): сервисы уже отработали свой
     // onSpawn (порядок регистрации систем), теперь экипировка не будет сброшена.
+    // Позицию/скин/интерьер применил PlayerSpawnService (источник правды о
+    // спавне) — здесь только экипировка.
     if (m_pendingSpawnSetup[player.getID()])
     {
         m_pendingSpawnSetup[player.getID()] = false;
-        player.setSkin(22); // респаун сбрасывает скин на классовый
-        m_locationService.teleport(player, {1762.1505, -1896.2495, 13.5621});
         m_weaponService.giveWeapon(player, 24, 100);
         m_weaponService.giveWeapon(player, 31, 100);
         m_moneyService.setMoney(player, 1500);
@@ -171,7 +135,6 @@ void PlayerAuthSystem::resetState(int playerId)
     m_loginData[playerId] = {};
     m_registrationData[playerId] = {};
     m_pendingSpawnSetup[playerId] = false;
-    m_classSelectionEntered[playerId] = false;
 }
 
 void PlayerAuthSystem::runRegistration(int playerId)
@@ -391,9 +354,16 @@ void PlayerAuthSystem::finalize(IPlayer &player)
 {
     m_authService.setPlayerAuthenticated(player.getID(), PlayerAuthService::EAuthState::AUTHENTICATED);
 
-    // Выход из спектейта = респаун. Скин, телепорт и оружие нельзя выдавать
-    // здесь: событие спавна придёт позже и сбросит их (инвентарь чистится на
-    // спавне, ожидание телепорта отменяется). Настройка — в onPlayerSpawn.
+    // Точка появления после входа — через единый источник правды о спавне:
+    // выход из спектейта вызовет респаун ровно в неё (и в неё же — все
+    // последующие смерти, пока бизнес-логика не переустановит спавн).
+    SpawnPoint spawn;
+    spawn.position = {1762.1505f, -1896.2495f, 13.5621f};
+    spawn.skin = 22;
+    m_spawnService.setSpawn(player, spawn);
+
+    // Оружие и деньги нельзя выдавать здесь: событие спавна придёт позже и
+    // сбросит их (инвентарь чистится на спавне). Экипировка — в onPlayerSpawn.
     m_pendingSpawnSetup[player.getID()] = true;
     m_stateService.setSpectating(player, false);
 }

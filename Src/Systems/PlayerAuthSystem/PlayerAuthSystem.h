@@ -8,30 +8,24 @@
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/PlayerAuthService/PlayerAuthService.h"
+#include "Services/PlayerSpawnService/PlayerSpawnService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
-#include <Server/Components/Classes/classes.hpp>
 #include <cstdint>
 
 class PlayerAuthSystem : public BaseSystem,
                          public PlayerConnectEventHandler,
                          public PlayerChangeEventHandler,
-                         public ClassEventHandler,
                          public PlayerSpawnEventHandler
 {
   public:
     PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRegister);
-
-    void initialize(IComponentList *components) override;
 
     void onPlayerConnect(IPlayer &player) override;
     void onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason) override;
 
     void onPlayerKeyStateChange(IPlayer &player, uint32_t newKeys, uint32_t oldKeys) override;
 
-    bool onPlayerRequestClass(IPlayer &player, unsigned int classId) override;
-
-    bool onPlayerRequestSpawn(IPlayer &player) override;
     void onPlayerSpawn(IPlayer &player) override;
 
   private:
@@ -72,6 +66,7 @@ class PlayerAuthSystem : public BaseSystem,
     PlayerStateService &m_stateService;
     PlayerWeaponService &m_weaponService;
     PlayerMoneyService &m_moneyService;
+    PlayerSpawnService &m_spawnService;
 
     std::array<LoginData, MAX_PLAYERS> m_loginData;
     std::array<RegistrationData, MAX_PLAYERS> m_registrationData;
@@ -80,8 +75,4 @@ class PlayerAuthSystem : public BaseSystem,
     // нельзя делать до его события спавна — сервисы на спавне сбрасывают
     // инвентарь и ожидание телепорта. Флаг переносит настройку в onPlayerSpawn.
     std::array<bool, MAX_PLAYERS> m_pendingSpawnSetup{};
-
-    // Первый onPlayerRequestClass — автоматический вход клиента в класс-селекшн;
-    // все последующие — нажатия дефолтных стрелок ◄ ► внизу экрана.
-    std::array<bool, MAX_PLAYERS> m_classSelectionEntered{};
 };

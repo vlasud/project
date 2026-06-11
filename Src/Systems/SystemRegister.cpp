@@ -3,6 +3,7 @@
 #include "Systems/Core/AntiCheatSystem/AntiCheatSystem.h"
 #include "Systems/Core/ChatSystem/ChatSystem.h"
 #include "Systems/Core/CheckpointSystem/CheckpointSystem.h"
+#include "Systems/Core/ClassSelectionSystem/ClassSelectionSystem.h"
 #include "Systems/Core/DebugCameraSystem/DebugCameraSystem.h"
 #include "Systems/Core/EditorSystem/EditorSystem.h"
 #include "Systems/Core/GangZoneEditorSystem/GangZoneEditorSystem.h"
@@ -14,10 +15,12 @@
 #include "Systems/Core/PickupSystem/PickupSystem.h"
 #include "Systems/Core/PlayerAnimationSystem/PlayerAnimationSystem.h"
 #include "Systems/PlayerAuthSystem/PlayerAuthSystem.h"
+#include "Systems/PlayerSpawnSystem/PlayerSpawnSystem.h"
 #include "Systems/Core/PlayerCommandSystem/PlayerCommandSystem.h"
 #include "Systems/Core/PlayerConnectionVersionSystem/PlayerConnectionVersionSystem.h"
 #include "Systems/Core/PlayerDialogSystem/PlayerDialogSystem.h"
 #include "Systems/Core/PlayerHealthSystem/PlayerHealthSystem.h"
+#include "Systems/Core/PlayerKeySystem/PlayerKeySystem.h"
 #include "Systems/Core/PlayerLocationSystem/PlayerLocationSystem.h"
 #include "Systems/Core/PlayerMoneySystem/PlayerMoneySystem.h"
 #include "Systems/Core/PlayerStateSystem/PlayerStateSystem.h"
@@ -56,6 +59,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<VehicleDebugSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerDialogSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerCommandSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PlayerKeySystem>(core, serviceRegister));
     // TextDrawSystem раньше редактора: роутер кликов должен существовать до того,
     // как редактор начнёт регистрировать обработчики.
     m_systems.push_back(std::make_unique<TextDrawSystem>(core, serviceRegister));
@@ -71,6 +75,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<PlayerWeaponSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerHealthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerMoneySystem>(core, serviceRegister));
+    // SpawnSystem раньше AuthSystem: на спавне сперва применяются интерьер/мир
+    // точки спавна, затем auth навешивает экипировку.
+    m_systems.push_back(std::make_unique<ClassSelectionSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PlayerSpawnSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<DebugCameraSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<EditorSystem>(core, serviceRegister));
