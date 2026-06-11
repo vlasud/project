@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Macro.h"
+#include "Services/Core/CameraService/CameraService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
@@ -31,11 +32,7 @@ class DebugCameraSystem : public BaseSystem, public PlayerUpdateEventHandler, pu
     void onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason) override;
 
   private:
-    struct CameraPoint
-    {
-        Vector3 position{}; // позиция камеры
-        Vector3 lookAt{};   // точка, куда камера смотрит
-    };
+    using CameraPoint = CameraPathPoint; // структура точки общая с CameraService
 
     struct CameraState
     {
@@ -48,12 +45,9 @@ class DebugCameraSystem : public BaseSystem, public PlayerUpdateEventHandler, pu
         std::vector<CameraPoint> points;
         int selectedPoint = -1; // точка, выбранная в меню
 
-        // --- проигрывание ---
-        bool playing = false;
+        // настройки проигрывания (само проигрывание — в CameraService)
         bool loop = false;
         int segmentTimeMs = 3000; // время одного перелёта между соседними точками
-        int segmentIndex = 0;     // активный сегмент: points[i] -> points[(i+1) % n]
-        TimePoint segmentEnd{};   // когда сегмент закончится и пора запускать следующий
     };
 
     // --- управление режимом ---
@@ -65,13 +59,11 @@ class DebugCameraSystem : public BaseSystem, public PlayerUpdateEventHandler, pu
     bool createCameraObject(IPlayer &player); // создать носитель в state.position и привязать камеру
     void releaseCameraObject(CameraState &state);
 
-    // --- точки и проигрывание ---
+    // --- точки и проигрывание (само проигрывание делает CameraService) ---
     void savePoint(IPlayer &player);
     Vector3 lookAtPoint(IPlayer &player) const; // точка в 10 м по направлению взгляда
-    void startPlayback(IPlayer &player, TimePoint now);
-    void advanceSegment(IPlayer &player, TimePoint now); // сегмент закончился — следующий или стоп
+    void startPlayback(IPlayer &player);
     void stopPlayback(IPlayer &player, const Vector3 &restPosition); // вернуть полёт в указанной точке
-    void interpolateSegment(IPlayer &player, const CameraPoint &from, const CameraPoint &to);
 
     // --- экраны диалогов ---
     void showMain(IPlayer &player);
@@ -95,6 +87,7 @@ class DebugCameraSystem : public BaseSystem, public PlayerUpdateEventHandler, pu
     PlayerCommandService &m_commandService;
     PlayerDialogService &m_dialogService;
     PlayerLocationService &m_locationService;
+    CameraService &m_cameraService;
 
     IObjectsComponent *m_objects = nullptr;
 

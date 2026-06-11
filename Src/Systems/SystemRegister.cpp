@@ -2,6 +2,7 @@
 
 #include "Systems/Core/AntiCheatSystem/AntiCheatSystem.h"
 #include "Systems/Core/AudioSystem/AudioSystem.h"
+#include "Systems/Core/CameraSystem/CameraSystem.h"
 #include "Systems/Core/ChatSystem/ChatSystem.h"
 #include "Systems/Core/CheckpointSystem/CheckpointSystem.h"
 #include "Systems/Core/ClassSelectionSystem/ClassSelectionSystem.h"
@@ -92,6 +93,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<ClassSelectionSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerSpawnSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
+    // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до
+    // того, как /camera начнёт им пользоваться.
+    m_systems.push_back(std::make_unique<CameraSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<DebugCameraSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<EditorSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ChatSystemSystem>(core, serviceRegister));

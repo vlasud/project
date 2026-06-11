@@ -65,7 +65,8 @@ bool parseFloat(const std::string &text, float &out)
 DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_commandService(serviceRegister.getService<PlayerCommandService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
-      m_locationService(serviceRegister.getService<PlayerLocationService>())
+      m_locationService(serviceRegister.getService<PlayerLocationService>()),
+      m_cameraService(serviceRegister.getService<CameraService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
@@ -85,12 +86,13 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
                                  return;
                              }
 
-                             if (state.playing)
+                             if (m_cameraService.isPlaying(player.getID()))
                              {
                                  // Остановка: полёт продолжается из точки-цели текущего сегмента.
                                  const int n = static_cast<int>(state.points.size());
-                                 const Vector3 rest = n >= 2 ? state.points[(state.segmentIndex + 1) % n].position
-                                                             : state.position;
+                                 const Vector3 rest =
+                                     n >= 2 ? state.points[(m_cameraService.segmentIndex(player.getID()) + 1) % n].position
+                                            : state.position;
                                  stopPlayback(player, rest);
                              }
 
@@ -101,7 +103,7 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
                          [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
                          {
                              CameraState &state = stateOf(player);
-                             if (!state.enabled || state.playing)
+                             if (!state.enabled || m_cameraService.isPlaying(player.getID()))
                              {
                                  player.sendClientMessage(
                                      Colour::White(), u("Сначала включите камеру: /camera (и не во время проигрывания)"));
@@ -119,11 +121,11 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
                                  player.sendClientMessage(Colour::White(), u("Сначала включите камеру: /camera"));
                                  return;
                              }
-                             if (state.playing)
+                             if (m_cameraService.isPlaying(player.getID()))
                              {
                                  return; // уже играет
                              }
-                             startPlayback(player, Time::now());
+                             startPlayback(player);
                          });
 }
 
@@ -183,7 +185,7 @@ void DebugCameraSystem::disableCamera(IPlayer &player)
 {
     CameraState &state = stateOf(player);
 
-    state.playing = false;
+    m_cameraService.stop(player, false); // setCameraBehind ниже сделаем сами
     releaseCameraObject(state);
     state.enabled = false;
     state.selectedPoint = -1;
@@ -226,12 +228,9 @@ bool DebugCameraSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
         return true;
     }
 
-    if (state.playing)
+    // Проигрыванием рулит CameraService (таймеры) — клавиши полёта не мешают.
+    if (m_cameraService.isPlaying(player.getID()))
     {
-        if (now >= state.segmentEnd)
-        {
-            advanceSegment(player, now);
-        }
         return true;
     }
 
@@ -322,7 +321,7 @@ void DebugCameraSystem::savePoint(IPlayer &player)
                              u(fmt::format("Точка #{} сохранена. /cplay — проиграть.", state.points.size() - 1)));
 }
 
-void DebugCameraSystem::startPlayback(IPlayer &player, TimePoint now)
+void DebugCameraSystem::startPlayback(IPlayer &player)
 {
     CameraState &state = stateOf(player);
     if (state.points.size() < 2)
@@ -334,57 +333,37 @@ void DebugCameraSystem::startPlayback(IPlayer &player, TimePoint now)
     // Камера должна быть свободна: привязка к объекту перебивает интерполяцию.
     releaseCameraObject(state);
 
-    state.playing = true;
-    state.segmentIndex = 0;
-    interpolateSegment(player, state.points[0], state.points[1]);
-    state.segmentEnd = now + std::chrono::milliseconds(state.segmentTimeMs);
+    CameraPath path;
+    path.points = state.points;
+    path.segmentTime = Milliseconds(state.segmentTimeMs);
+    path.loop = state.loop;
+
+    m_cameraService.play(player, path,
+                         [this, playerId = player.getID()](IPlayer &p)
+                         {
+                             // Незацикленный путь дошёл до конца — полёт из последней точки.
+                             CameraState &state = m_state[playerId];
+                             if (!state.enabled)
+                             {
+                                 return;
+                             }
+                             stopPlayback(p, state.points.empty() ? state.position : state.points.back().position);
+                             p.sendClientMessage(Colour::White(), u("Перелёт завершён. Камера в последней точке."));
+                         });
 
     player.sendClientMessage(Colour::White(), u("Проигрывание пути. /camera — остановить."));
-}
-
-void DebugCameraSystem::advanceSegment(IPlayer &player, TimePoint now)
-{
-    CameraState &state = stateOf(player);
-    const int n = static_cast<int>(state.points.size());
-    if (n < 2)
-    {
-        stopPlayback(player, state.position);
-        return;
-    }
-
-    // Сегмент segmentIndex закончился: камера в points[(segmentIndex + 1) % n].
-    const int arrived = (state.segmentIndex + 1) % n;
-
-    // Без зацикливания путь заканчивается в последней точке.
-    if (!state.loop && arrived >= n - 1)
-    {
-        stopPlayback(player, state.points[n - 1].position);
-        player.sendClientMessage(Colour::White(), u("Перелёт завершён. Камера в последней точке."));
-        return;
-    }
-
-    state.segmentIndex = arrived;
-    interpolateSegment(player, state.points[arrived], state.points[(arrived + 1) % n]);
-    state.segmentEnd = now + std::chrono::milliseconds(state.segmentTimeMs);
 }
 
 void DebugCameraSystem::stopPlayback(IPlayer &player, const Vector3 &restPosition)
 {
     CameraState &state = stateOf(player);
-    state.playing = false;
+    m_cameraService.stop(player, false); // полётную камеру привяжем сами
     state.position = restPosition;
 
     if (!createCameraObject(player))
     {
         player.sendClientMessage(Colour::White(), u("Не удалось вернуть полётную камеру (лимит пула объектов)"));
     }
-}
-
-void DebugCameraSystem::interpolateSegment(IPlayer &player, const CameraPoint &from, const CameraPoint &to)
-{
-    const CameraState &state = m_state[player.getID()];
-    player.interpolateCameraPosition(from.position, to.position, state.segmentTimeMs, PlayerCameraCutType_Move);
-    player.interpolateCameraLookAt(from.lookAt, to.lookAt, state.segmentTimeMs, PlayerCameraCutType_Move);
 }
 
 // ------------------------------------------------------------------ экраны диалогов
@@ -430,7 +409,7 @@ void DebugCameraSystem::showMain(IPlayer &player)
                                  showPoints(*player);
                                  break;
                              case 2:
-                                 startPlayback(*player, Time::now());
+                                 startPlayback(*player);
                                  break;
                              case 3:
                                  showSegmentTimeInput(*player);
@@ -802,49 +781,18 @@ void DebugCameraSystem::listPathFilesAsync(IPlayer &player)
 
 bool DebugCameraSystem::loadPathFromContent(CameraState &state, const std::string &content)
 {
-    std::vector<CameraPoint> points;
-    int segmentTimeMs = state.segmentTimeMs;
-    bool loop = state.loop;
-
-    std::istringstream in(content);
-    std::string line;
-    while (std::getline(in, line) && points.size() < MAX_POINTS)
-    {
-        std::istringstream ss(line);
-        std::string kind;
-        ss >> kind;
-
-        if (kind == "settings")
-        {
-            int timeMs = 0;
-            int loopFlag = 0;
-            if (ss >> timeMs >> loopFlag)
-            {
-                segmentTimeMs = std::clamp(timeMs, static_cast<int>(SEGMENT_TIME_MIN_S * 1000.0f),
-                                           static_cast<int>(SEGMENT_TIME_MAX_S * 1000.0f));
-                loop = loopFlag != 0;
-            }
-        }
-        else if (kind == "point")
-        {
-            CameraPoint p;
-            if (ss >> p.position.x >> p.position.y >> p.position.z >> p.lookAt.x >> p.lookAt.y >> p.lookAt.z)
-            {
-                points.push_back(p);
-            }
-        }
-    }
-
-    if (points.empty())
+    // Формат и клампы общие с CameraService — один парсер на тулзу и бизнес.
+    CameraPath path;
+    if (!CameraService::parsePath(content, path))
     {
         return false;
     }
 
     // Загрузка заменяет текущий путь целиком (вместе с настройками из файла).
-    state.points = std::move(points);
+    state.points = std::move(path.points);
     state.selectedPoint = -1;
-    state.segmentTimeMs = segmentTimeMs;
-    state.loop = loop;
+    state.segmentTimeMs = static_cast<int>(path.segmentTime.count());
+    state.loop = path.loop;
     return true;
 }
 
