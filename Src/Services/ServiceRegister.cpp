@@ -24,6 +24,7 @@
 #include "Services/Core/PlayerHealthService/PlayerHealthService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
+#include "Services/Core/PlayerSkinService/PlayerSkinService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
@@ -63,6 +64,7 @@ void ServiceRegister::registerServices()
     registerService<GameTextService>();
     registerService<SpectateService>();
     registerService<MovingObjectService>();
+    registerService<PlayerSkinService>();
     registerService<PlayerCommandService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();

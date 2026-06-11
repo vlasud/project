@@ -9,15 +9,16 @@
 
 class PlayerSpawnSystem;
 class PlayerLocationService;
+class PlayerSkinService;
 
-// Точка спавна игрока: где и кем он появится.
+// Точка спавна игрока: где он появится. Скин в точку не входит — его единый
+// источник правды PlayerSkinService (спавн берёт текущее значение оттуда).
 struct SpawnPoint
 {
     Vector3 position{1762.15f, -1896.25f, 13.56f};
     float angle = 0.0f;
     unsigned interior = 0;
     int virtualWorld = 0;
-    int skin = 22;
 };
 
 // Единственный источник правды о спавне игрока.
@@ -58,7 +59,7 @@ class PlayerSpawnService final : public IService
     };
 
     // Вызываются PlayerSpawnSystem.
-    void initialize(PlayerLocationService *location);
+    void initialize(PlayerLocationService *location, PlayerSkinService *skins);
     void handleConnect(IPlayer &player); // прокинуть дефолт в class-данные
     void handleSpawn(IPlayer &player);   // интерьер/мир после фактического спавна
     void resetPlayer(int playerId);
@@ -67,6 +68,7 @@ class PlayerSpawnService final : public IService
     static SpawnPoint sanitize(SpawnPoint point);
 
     PlayerLocationService *m_location = nullptr;
+    PlayerSkinService *m_skins = nullptr;
     SpawnPoint m_defaultSpawn{};
     std::array<Slot, MAX_PLAYERS> m_slots;
 };

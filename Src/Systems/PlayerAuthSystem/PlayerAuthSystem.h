@@ -7,6 +7,7 @@
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
+#include "Services/Core/PlayerSkinService/PlayerSkinService.h"
 #include "Services/PlayerAuthService/PlayerAuthService.h"
 #include "Services/PlayerSpawnService/PlayerSpawnService.h"
 #include "Systems/BaseSystem.h"
@@ -67,6 +68,7 @@ class PlayerAuthSystem : public BaseSystem,
     PlayerWeaponService &m_weaponService;
     PlayerMoneyService &m_moneyService;
     PlayerSpawnService &m_spawnService;
+    PlayerSkinService &m_skinService;
 
     std::array<LoginData, MAX_PLAYERS> m_loginData;
     std::array<RegistrationData, MAX_PLAYERS> m_registrationData;

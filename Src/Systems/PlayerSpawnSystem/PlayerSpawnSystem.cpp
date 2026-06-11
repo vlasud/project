@@ -2,6 +2,7 @@
 
 #include "Services/Core/ClassSelectionService/ClassSelectionService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
+#include "Services/Core/PlayerSkinService/PlayerSkinService.h"
 
 PlayerSpawnSystem::PlayerSpawnSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_spawnService(serviceRegister.getService<PlayerSpawnService>())
@@ -9,7 +10,8 @@ PlayerSpawnSystem::PlayerSpawnSystem(ICore &core, const ServiceRegister &service
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
 
-    m_spawnService.initialize(&serviceRegister.getService<PlayerLocationService>());
+    m_spawnService.initialize(&serviceRegister.getService<PlayerLocationService>(),
+                              &serviceRegister.getService<PlayerSkinService>());
 
     // Любой вход в класс-селекшн (коннект, F4+смерть) сводится к одному:
     // немедленно заспавнить игрока в точку из источника правды. Что делать

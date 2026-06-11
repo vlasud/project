@@ -22,7 +22,8 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
       m_stateService(serviceRegister.getService<PlayerStateService>()),
       m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
-      m_spawnService(serviceRegister.getService<PlayerSpawnService>())
+      m_spawnService(serviceRegister.getService<PlayerSpawnService>()),
+      m_skinService(serviceRegister.getService<PlayerSkinService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
@@ -357,10 +358,11 @@ void PlayerAuthSystem::finalize(IPlayer &player)
     // Точка появления после входа — через единый источник правды о спавне:
     // выход из спектейта вызовет респаун ровно в неё (и в неё же — все
     // последующие смерти, пока бизнес-логика не переустановит спавн).
+    // Скин — через его источник правды (будущий выбор персонажа заменит 22).
     SpawnPoint spawn;
     spawn.position = {1762.1505f, -1896.2495f, 13.5621f};
-    spawn.skin = 22;
     m_spawnService.setSpawn(player, spawn);
+    m_skinService.setSkin(player, 22);
 
     // Оружие и деньги нельзя выдавать здесь: событие спавна придёт позже и
     // сбросит их (инвентарь чистится на спавне). Экипировка — в onPlayerSpawn.

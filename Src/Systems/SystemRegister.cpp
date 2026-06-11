@@ -29,6 +29,7 @@
 #include "Systems/Core/PlayerKeySystem/PlayerKeySystem.h"
 #include "Systems/Core/PlayerLocationSystem/PlayerLocationSystem.h"
 #include "Systems/Core/PlayerMoneySystem/PlayerMoneySystem.h"
+#include "Systems/Core/PlayerSkinSystem/PlayerSkinSystem.h"
 #include "Systems/Core/PlayerStateSystem/PlayerStateSystem.h"
 #include "Systems/Core/PlayerVelocitySystem/PlayerVelocitySystem.h"
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
@@ -68,6 +69,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // существовать до того, как редактор начнёт сессии.
     m_systems.push_back(std::make_unique<ObjectEditSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MovingObjectSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PlayerSkinSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AudioSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<GameTextSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));

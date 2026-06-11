@@ -2,6 +2,7 @@
 
 #include "Log/LogManager.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
+#include "Services/Core/PlayerSkinService/PlayerSkinService.h"
 #include <algorithm>
 #include <cmath>
 
@@ -9,7 +10,6 @@ namespace
 {
 constexpr float WORLD_MIN = -20000.0f; // интерьеры лежат далеко за картой — кламп щадящий
 constexpr float WORLD_MAX = 20000.0f;
-constexpr int MAX_SKIN = 311;
 constexpr int MAX_INTERIOR = 255;
 constexpr int NO_TEAM = 255;
 
@@ -48,9 +48,10 @@ void PlayerSpawnService::respawn(IPlayer &player)
 
 // ------------------------------------------------------------------ вызовы PlayerSpawnSystem
 
-void PlayerSpawnService::initialize(PlayerLocationService *location)
+void PlayerSpawnService::initialize(PlayerLocationService *location, PlayerSkinService *skins)
 {
     m_location = location;
+    m_skins = skins;
 }
 
 void PlayerSpawnService::handleConnect(IPlayer &player)
@@ -90,16 +91,17 @@ void PlayerSpawnService::applySpawnInfo(IPlayer &player)
     }
 
     const SpawnPoint &point = getSpawn(player.getID());
-    // Оружие на спавне не выдаём — экипировка остаётся за бизнес-системами
-    // (иначе спавн-инфо станет вторым источником правды об инвентаре).
-    data->setSpawnInfo(PlayerClass(point.skin, NO_TEAM, point.position, point.angle, WeaponSlots{}));
+    // Скин — из его источника правды; оружие на спавне не выдаём — экипировка
+    // остаётся за бизнес-системами (иначе спавн-инфо станет вторым источником
+    // правды об инвентаре).
+    const int skin = m_skins ? m_skins->getSkin(player.getID()) : PlayerSkinService::DEFAULT_SKIN;
+    data->setSpawnInfo(PlayerClass(skin, NO_TEAM, point.position, point.angle, WeaponSlots{}));
 }
 
 SpawnPoint PlayerSpawnService::sanitize(SpawnPoint point)
 {
     point.position = {clampCoord(point.position.x), clampCoord(point.position.y), clampCoord(point.position.z)};
     point.angle = std::isfinite(point.angle) ? point.angle : 0.0f;
-    point.skin = std::clamp(point.skin, 0, MAX_SKIN);
     point.interior = std::min(point.interior, static_cast<unsigned>(MAX_INTERIOR));
     return point;
 }
