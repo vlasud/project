@@ -129,6 +129,28 @@ bool WorldService::stuntBonusesEnabled() const
     return value ? *value : true;
 }
 
+void WorldService::setInteriorEnterExits(bool enable)
+{
+    if (!m_core)
+    {
+        return;
+    }
+    if (bool *value = m_core->getConfig().getBool("game.use_entry_exit_markers"))
+    {
+        *value = enable;
+    }
+}
+
+bool WorldService::interiorEnterExitsEnabled() const
+{
+    if (!m_core)
+    {
+        return true; // дефолт ядра
+    }
+    const bool *value = const_cast<ICore *>(m_core)->getConfig().getBool("game.use_entry_exit_markers");
+    return value ? *value : true;
+}
+
 void WorldService::setNameTags(bool show)
 {
     if (!m_core)

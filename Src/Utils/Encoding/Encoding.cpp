@@ -188,6 +188,35 @@ std::string Encoding::cp1251Toutf8(std::string_view input)
     return output;
 }
 
+std::string Encoding::sanitizeUserText(std::string_view utf8, std::size_t maxBytes)
+{
+    std::string result;
+    result.reserve(utf8.size());
+    for (const char c : utf8)
+    {
+        if (static_cast<unsigned char>(c) >= 0x20)
+            result += c;
+    }
+
+    while (!result.empty() && result.front() == ' ')
+        result.erase(result.begin());
+    while (!result.empty() && result.back() == ' ')
+        result.pop_back();
+
+    if (result.size() > maxBytes)
+    {
+        result.resize(maxBytes);
+        // Не рвём utf-8 символ: хвостовые continuation-байты...
+        while (!result.empty() && (static_cast<unsigned char>(result.back()) & 0xC0) == 0x80)
+            result.pop_back();
+        // ...и осиротевший ведущий байт разрезанной последовательности — тоже
+        // мусор (станет '?' при конвертации в cp1251).
+        if (!result.empty() && static_cast<unsigned char>(result.back()) >= 0xC0)
+            result.pop_back();
+    }
+    return result;
+}
+
 std::string Encoding::utf8Tocp1251(std::string_view input)
 {
     std::string output;

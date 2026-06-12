@@ -2,6 +2,7 @@
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
+#include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <chrono>
 #include <fmt/format.h>
@@ -178,27 +179,7 @@ void ElectionService::writeState()
 
 std::string ElectionService::sanitizeText(std::string_view raw, std::size_t maxBytes)
 {
-    std::string result;
-    result.reserve(raw.size());
-    for (const char c : raw)
-    {
-        if (static_cast<unsigned char>(c) >= 0x20)
-            result += c;
-    }
-
-    while (!result.empty() && result.front() == ' ')
-        result.erase(result.begin());
-    while (!result.empty() && result.back() == ' ')
-        result.pop_back();
-
-    if (result.size() > maxBytes)
-    {
-        result.resize(maxBytes);
-        // Не рвём utf-8 символ посередине.
-        while (!result.empty() && (static_cast<unsigned char>(result.back()) & 0xC0) == 0x80)
-            result.pop_back();
-    }
-    return result;
+    return Encoding::sanitizeUserText(raw, maxBytes);
 }
 
 // ------------------------------------------------------------------ загрузка

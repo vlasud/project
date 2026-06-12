@@ -54,6 +54,12 @@ class WorldService final : public IService
     void setStuntBonuses(bool enable);
     bool stuntBonusesEnabled() const;
 
+    // Стандартные входы в интерьеры GTA SA (жёлтые enex-маркеры): выключены —
+    // все здания открываются только нашими пикапами (базы фракций и т.п.).
+    // Клиент читает флаг ОДИН РАЗ в InitGame — задаётся при старте сервера.
+    void setInteriorEnterExits(bool enable);
+    bool interiorEnterExitsEnabled() const;
+
     // Нейм-теги и маркеры игроков на радаре клиент читает ОДИН РАЗ в InitGame:
     // смена на лету подействует только на новые подключения — задавайте при
     // старте сервера.

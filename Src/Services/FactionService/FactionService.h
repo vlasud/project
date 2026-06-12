@@ -81,7 +81,8 @@ class FactionService final : public IService
     static constexpr PermissionMask PERM_INVITE = 1ull << 0; // приглашение + зарплата при найме
     static constexpr PermissionMask PERM_FIRE = 1ull << 1;   // увольнение
     static constexpr PermissionMask PERM_BUDGET = 1ull << 2; // доступ к бюджету
-    static constexpr PermissionMask COMMON_PERMISSIONS = PERM_INVITE | PERM_FIRE | PERM_BUDGET;
+    static constexpr PermissionMask PERM_SKIN = 1ull << 3;   // смена скина из пула организации
+    static constexpr PermissionMask COMMON_PERMISSIONS = PERM_INVITE | PERM_FIRE | PERM_BUDGET | PERM_SKIN;
     static constexpr int FIRST_CUSTOM_BIT = 8;
 
     struct PermissionDef // для лидерского UI (тогглы в меню ранга)
@@ -107,14 +108,52 @@ class FactionService final : public IService
         bool isDefault = false;
     };
 
+    // «Дверь» базы: пикап и точка, куда он переносит.
+    struct BaseDoor
+    {
+        Vector3 pickupPos{}; // где стоит пикап
+        Vector3 targetPos{}; // куда переносит игрока
+        float targetAngle = 0.0f;
+    };
+
+    // База организации: здание с интерьером, входы на улице и выходы внутри
+    // (дверей может быть несколько). Вход — только членам фракции; внутри
+    // изоляция по виртуальному миру (= id фракции), поэтому базы разных
+    // организаций могут делить один интерьер, не видя друг друга.
+    struct Base
+    {
+        int pickupModel = 1318; // стрелка
+        int interior = 0;       // интерьер базы
+        std::vector<BaseDoor> entrances; // улица (мир 0) -> интерьер базы
+        std::vector<BaseDoor> exits;     // интерьер (мир = id фракции) -> улица
+        bool defined = false;            // выставляет registerBase
+    };
+
+    // Точка спавна организации: члены появляются здесь (вместо гражданского
+    // спавна) при каждом спавне, пока состоят во фракции.
+    struct Spawn
+    {
+        Vector3 position{};
+        float angle = 0.0f;
+        int interior = 0;
+        int virtualWorld = 0; // для точки внутри базы — id фракции
+        bool defined = false; // выставляет registerSpawn
+    };
+
     struct Faction
     {
         int id = NO_FACTION;
         std::string name; // utf-8
+        // Уникальный цвет организации: ник и маркер на карте у членов.
+        Colour colour = Colour::White();
+        // Пул скинов организации: члены с PERM_SKIN выбирают из него (/skin).
+        std::vector<int> skins;
         std::int64_t budget = 0;
         int supervisorId = NO_FACTION; // фракция-куратор (NO_FACTION — никто)
         std::vector<PermissionDef> customPermissions; // расширение маски этой организации
         std::vector<Rank> ranks;
+        Base base;
+        Spawn spawn;
         TimePoint orderIssuedAt{}; // кулдаун приказов о выплате (память, сессия сервера)
     };
 
@@ -127,6 +166,17 @@ class FactionService final : public IService
     // Расширение маски организации своим битом (>= FIRST_CUSTOM_BIT); имя
     // видно лидеру в меню ранга.
     void registerPermission(int factionId, PermissionMask mask, std::string name);
+    // База организации (из конструктора системы конкретной фракции, до
+    // initialize — пикапы создаёт FactionSystem).
+    void registerBase(int factionId, const Base &base);
+    // Точка спавна организации (применяет членам FactionSystem).
+    void registerSpawn(int factionId, const Spawn &spawn);
+    // Цвет организации (ники/маркеры членов красит FactionSystem).
+    void registerColour(int factionId, Colour colour);
+    // Пул скинов организации (невалидные id отбрасываются с warning).
+    void registerSkins(int factionId, std::vector<int> skins);
+    // Скин из пула фракции игрока + право PERM_SKIN у игрока.
+    bool canUseSkin(int playerId, int skin) const;
 
     const Faction *getFaction(int factionId) const;
     const std::vector<Faction> &getFactions() const;

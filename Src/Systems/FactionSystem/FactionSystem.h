@@ -1,11 +1,16 @@
 #pragma once
 
 #include "Services/BankService/BankService.h"
+#include "Services/Core/PickupService/PickupService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
+#include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/FactionService/FactionService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
+#include "Services/Core/PlayerSkinService/PlayerSkinService.h"
+#include "Services/PlayerSpawnService/PlayerSpawnService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -30,6 +35,22 @@ class FactionSystem : public BaseSystem
   private:
     void loadCatalog();
     void loadMembership(IPlayer &player, const PlayerSessionService::Session &session);
+
+    // Базы организаций (зарегистрированные конкретными фракциями): пикапы
+    // дверей входа/выхода + телепорт. Вход — только членам.
+    void createBasePickups();
+    void enterBase(IPlayer &player, int factionId, const Vector3 &target, float angle);
+    void exitBase(IPlayer &player, int factionId, const Vector3 &target, float angle);
+
+    // Спавн: член фракции с точкой спавна появляется на ней, остальные — на
+    // гражданском дефолте. Применяется на событии членства.
+    void applyFactionSpawn(IPlayer &player, int factionId);
+    // Цвет организации на нике и маркере миникарты (вне фракции — гражданский).
+    void applyFactionColour(IPlayer &player, int factionId);
+    // Рация /r: сообщение всем членам организации.
+    void radioChat(IPlayer &player, StringView rawText);
+    // Смена скина из пула организации (право PERM_SKIN).
+    void showSkinDialog(IPlayer &player);
 
     // Команды лидера по людям.
     void inviteMember(IPlayer &leader, int targetId);
@@ -84,4 +105,10 @@ class FactionSystem : public BaseSystem
     PlayerSessionService &m_sessionService;
     PlayerDialogService &m_dialogService;
     BankService &m_bankService;
+    PickupService &m_pickupService;
+    PlayerLocationService &m_locationService;
+    PlayerSpawnService &m_spawnService;
+    PlayerSkinService &m_skinService;
+
+    std::array<TimePoint, MAX_PLAYERS> m_lastRadioAt{}; // антифлуд рации
 };

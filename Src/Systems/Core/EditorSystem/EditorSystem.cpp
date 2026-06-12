@@ -60,8 +60,11 @@ constexpr float PROBE_PARK_Z = -1000.0f; // куда временно пряче
 
 constexpr int MAX_INTERIOR_ID = 255;
 
-// Известные интерьеры (https://sampwiki.blast.hk/wiki/InteriorIDs): телепорт
-// сразу выставляет нужный interior id и переносит тело с камерой.
+// Модель прокси-объекта мыши для актора/машины/чекпоинта (стрелка).
+constexpr int MOUSE_PROXY_MARKER_MODEL = 1318;
+
+// Известные интерьеры (https://pawnokit.ru/ru/interiors_id, полный список):
+// телепорт сразу выставляет нужный interior id и переносит тело с камерой.
 struct InteriorSpot
 {
     const char *name;
@@ -69,71 +72,149 @@ struct InteriorSpot
     float x, y, z;
 };
 constexpr InteriorSpot INTERIOR_SPOTS[] = {
-    {"24/7 1", 17, -25.8845f, -35.0952f, -3.3979f},
-    {"24/7 2", 10, 6.0912f, -13.1705f, 10.8973f},
-    {"24/7 3", 18, -30.9467f, -39.2296f, -12.9542f},
-    {"24/7 4", 16, -25.1326f, -39.1961f, -14.0429f},
-    {"24/7 5", 4, -27.3123f, -36.9258f, -25.8106f},
-    {"24/7 6", 6, -26.6916f, -37.4347f, -16.2656f},
-    {"Ammunation 1", 1, 286.149f, -40.6444f, 1001.5699f},
-    {"Ammunation 2", 4, 286.801f, -82.5476f, 1001.5400f},
-    {"Ammunation 3", 6, 296.9200f, -108.0720f, 1001.5699f},
-    {"Ammunation 4", 7, 314.8210f, -141.4320f, 999.6620f},
-    {"Ammunation 5", 6, 316.5250f, -167.7070f, 999.6620f},
-    {"Ammunation Booth", 7, 302.2929f, -143.1391f, 1004.0625f},
-    {"Ammunation Range", 7, 280.7951f, -135.2034f, 1004.0625f},
-    {"Burglary House 1", 3, 235.5090f, 1189.1699f, 1080.3400f},
-    {"Burglary House 2", 2, 225.7570f, 1240.0000f, 1082.1499f},
-    {"Burglary House 3", 1, 223.0440f, 1289.2599f, 1082.2000f},
-    {"Burglary House 4", 7, 225.6310f, 1022.4800f, 1084.0699f},
-    {"Burglary House 5", 15, 295.1390f, 1474.4700f, 1080.5199f},
-    {"Burglary House 6", 15, 328.4940f, 1480.5900f, 1084.4500f},
-    {"Burglary House 7", 15, 385.8040f, 1471.7699f, 1080.2100f},
-    {"Atrium", 18, 1726.18f, -1641.00f, 20.23f},
-    {"Big Smoke's Crack Palace", 2, 2567.52f, -1294.59f, 1063.25f},
-    {"Bloodbowl Stadium", 15, -1394.20f, 987.62f, 1023.96f},
-    {"8 Track Stadium", 7, -1395.958f, -208.197f, 1051.170f},
-    {"Dirt Bike Stadium", 4, -1424.9319f, -664.5869f, 1059.8585f},
-    {"Kickstart Stadium", 14, -1410.72f, 1591.16f, 1052.53f},
-    {"Burning Desire House", 5, 2338.32f, -1180.61f, 1027.98f},
-    {"Colonel Furhberger's", 8, 2807.63f, -1170.15f, 1025.57f},
-    {"Crack Den", 5, 318.565f, 1115.210f, 1082.98f},
-    {"Donut Shop (Rusty Brown's)", 17, 376.99f, -191.21f, 1000.63f},
-    {"Francis Int. Airport", 14, -1830.81f, 16.83f, 1061.14f},
-    {"LS Airport Baggage Reclaim", 14, -1870.80f, 59.81f, 1056.25f},
-    {"Shamal cabin", 1, 2.3848f, 33.1034f, 1199.8500f},
-    {"Andromada cargo hold", 9, 315.8562f, 1024.4965f, 1949.7974f},
-    {"Jefferson Motel", 15, 2220.26f, -1148.01f, 1025.80f},
-    {"Golden Bed Motel Room", 9, 2251.85f, -1138.16f, 1050.63f},
-    {"Red Bed Motel Room", 10, 2262.83f, -1137.71f, 1050.63f},
-    {"Liberty City", 1, -750.80f, 491.00f, 1371.70f},
-    {"Pleasure Domes (Jizzy's)", 3, -2637.69f, 1404.24f, 906.46f},
-    {"RC Battlefield", 10, -1079.99f, 1061.58f, 1343.04f},
-    {"Zero's RC Shop", 6, -2240.00f, 131.00f, 1035.40f},
-    {"Ryder's House", 2, 2451.77f, -1699.80f, 1013.51f},
-    {"Sweet's House", 1, 2535.83f, -1674.32f, 1015.50f},
-    {"Johnson's House (CJ)", 3, 2496.65f, -1696.55f, 1014.74f},
-    {"SF Garage Interior", 1, -2042.42f, 178.59f, 28.84f},
-    {"Welcome Pump", 1, 681.66f, -453.32f, -25.61f},
-    {"Woozie's Apartment", 1, -2158.72f, 641.29f, 1052.38f},
-    {"Hashbury House", 10, 2260.76f, -1210.45f, 1049.02f},
-    {"Madd Dogg's Mansion", 5, 1299.14f, -794.77f, 1084.00f},
-    {"Verdant Bluffs Safehouse", 8, 2365.42f, -1131.85f, 1050.88f},
-    {"Unused Safe House", 12, 2324.33f, -1144.79f, 1050.71f},
-    {"SF Police Department", 10, 246.40f, 110.84f, 1003.22f},
-    {"Tattoos", 16, -203.0764f, -24.1658f, 1002.2734f},
-    {"Burger Shot", 10, 363.4129f, -74.5786f, 1001.5078f},
-    {"Well Stacked Pizza", 5, 372.3520f, -131.6510f, 1001.4922f},
-    {"Cluckin' Bell", 9, 365.7158f, -9.8873f, 1001.8516f},
-    {"Caligula's Casino", 1, 2233.8032f, 1712.2303f, 1011.7632f},
-    {"Casino (Redsands West)", 12, 1118.8878f, -10.2737f, 1002.0859f},
-    {"4 Dragons Casino", 10, 2016.2699f, 1017.7790f, 996.8750f},
-    {"Loco Low Co.", 2, 616.7820f, -74.8151f, 997.6350f},
-    {"Wheel Arch Angels", 3, 615.2851f, -124.2390f, 997.6350f},
-    {"Transfender", 1, 617.5380f, -1.9900f, 1000.6829f},
-    {"Dillimore Gas Station", 0, 664.19f, -570.73f, 16.34f},
+    {"24/7 1", 17, -25.72f, -187.82f, 1003.54f},
+    {"24/7 2", 10, 6.08f, -28.89f, 1003.54f},
+    {"24/7 3", 18, -30.98f, -89.68f, 1003.54f},
+    {"24/7 4", 16, -26.18f, -140.91f, 1003.54f},
+    {"24/7 5", 4, -27.84f, -26.67f, 1003.55f},
+    {"24/7 6", 6, -26.83f, -55.58f, 1003.54f},
+    {"Loco Low Co.", 2, 611.35f, -77.55f, 997.99f},
+    {"Wheel Arch Angels", 3, 612.21f, -123.90f, 997.99f},
+    {"TransFender", 1, 621.45f, -23.72f, 1000.92f},
+    {"Four Dragons", 10, 2016.11f, 1017.15f, 996.87f},
+    {"Casino Floor (Redsands West)", 12, 1133.34f, -7.84f, 1000.67f},
+    {"Caligula's Casino", 1, 2233.93f, 1711.80f, 1011.63f},
+    {"Caligula's Roof", 1, 2268.51f, 1647.76f, 1084.23f},
+    {"Victim", 5, 225.03f, -9.18f, 1002.21f},
+    {"Sub Urban", 1, 204.11f, -46.80f, 1001.80f},
+    {"Zip", 18, 161.40f, -94.24f, 1001.80f},
+    {"Didier Sachs", 14, 204.16f, -165.76f, 1000.52f},
+    {"Binco", 15, 207.52f, -109.74f, 1005.13f},
+    {"Pro-Laps", 3, 206.46f, -137.70f, 1003.09f},
+    {"Pizza Stack", 5, 372.55f, -131.36f, 1001.49f},
+    {"Rusty Brown's Donuts", 17, 378.02f, -190.51f, 1000.63f},
+    {"Burger Shot", 10, 366.02f, -73.34f, 1001.50f},
+    {"Cluckin' Bell", 9, 366.00f, -9.43f, 1001.85f},
+    {"Bar", 11, 501.95f, -70.56f, 998.75f},
+    {"Lil' Probe Inn", 18, -227.57f, 1401.55f, 27.76f},
+    {"Barber shop 1", 12, 411.97f, -51.92f, 1001.89f},
+    {"Barber shop 2", 2, 414.29f, -18.80f, 1001.80f},
+    {"Barber shop 3", 3, 418.46f, -80.45f, 1001.80f},
+    {"Tattoo parlor", 3, -201.22f, -43.24f, 1002.27f},
+    {"Sex shop", 3, -100.26f, -22.93f, 1000.71f},
+    {"Burglary house 1", 3, 234.60f, 1187.81f, 1080.25f},
+    {"Burglary house 2", 2, 225.57f, 1240.06f, 1082.14f},
+    {"Burglary house 3", 1, 224.28f, 1289.19f, 1082.14f},
+    {"Burglary house 4", 5, 239.28f, 1114.19f, 1080.99f},
+    {"Burglary house 5", 15, 295.13f, 1473.37f, 1080.25f},
+    {"Burglary house 6", 2, 446.62f, 1397.73f, 1084.30f},
+    {"Burglary house 7", 5, 227.75f, 1114.38f, 1080.99f},
+    {"Burglary house 8", 4, 261.11f, 1287.21f, 1080.25f},
+    {"Burglary house 9", 10, 24.37f, 1341.18f, 1084.37f},
+    {"Burglary house 10", 4, 221.67f, 1142.49f, 1082.60f},
+    {"Burglary house 11", 4, -262.17f, 1456.61f, 1084.36f},
+    {"Burglary house 12", 5, 22.86f, 1404.91f, 1084.42f},
+    {"Burglary house 13", 5, 140.36f, 1367.88f, 1083.86f},
+    {"Burglary house 14", 6, 234.28f, 1065.22f, 1084.21f},
+    {"Burglary house 15", 6, -68.51f, 1353.84f, 1080.21f},
+    {"Burglary house 16", 15, -285.25f, 1471.19f, 1084.37f},
+    {"Burglary house 17", 8, -42.52f, 1408.22f, 1084.42f},
+    {"Burglary house 18", 9, 84.92f, 1324.29f, 1083.85f},
+    {"Burglary house 19", 9, 260.74f, 1238.22f, 1084.25f},
+    {"Burglary house 20", 15, 327.80f, 1479.74f, 1084.43f},
+    {"Burglary house 21", 15, 295.46f, 1474.69f, 1080.26f},
+    {"Burglary house 22", 8, -42.49f, 1407.644f, 1084.43f},
+    {"Burglary house 23", 15, 375.57f, 1417.44f, 1081.33f},
+    {"Ammu-nation 1", 7, 315.24f, -140.88f, 999.60f},
+    {"Ammu-nation 2", 1, 285.83f, -39.01f, 1001.51f},
+    {"Ammu-nation 3", 4, 291.76f, -80.13f, 1001.51f},
+    {"Ammu-nation 4", 6, 297.14f, -109.87f, 1001.51f},
+    {"Ammu-nation 5", 6, 316.50f, -167.62f, 999.59f},
+    {"The Johnson house", 3, 2496.05f, -1695.17f, 1014.74f},
+    {"Angel Pine trailer", 2, 1.18f, -3.23f, 999.42f},
+    {"Abandoned AC tower", 10, 419.89f, 2537.11f, 10.00f},
+    {"Wardrobe/Changing room", 14, 256.90f, -41.65f, 1002.02f},
+    {"The Camel's Toe safehouse", 1, 2216.12f, -1076.30f, 1050.48f},
+    {"Verdant Bluffs safehouse", 8, 2365.10f, -1133.07f, 1050.87f},
+    {"Willowfield safehouse", 11, 2282.97f, -1140.28f, 1050.89f},
+    {"Vank Hoff Hotel", 5, 2233.69f, -1112.81f, 1050.88f},
+    {"Unknown safe house", 9, 2319.12f, -1023.95f, 1050.21f},
+    {"Safe House 1", 10, 2262.83f, -1137.71f, 1050.63f},
+    {"Safe House 2", 8, 2365.24f, -1134.297f, 1050.88f},
+    {"Safe House 3", 6, 2333.033f, -1073.96f, 1049.10f},
+    {"Safe House 4", 1, 2216.54f, -1076.29f, 1050.50f},
+    {"Safe House 5", 6, 2194.29f, -1204.015f, 1049.10f},
+    {"Safe House 6", 6, 2308.87f, -1210.78f, 1049.10f},
+    {"Safe House 7", 12, 2324.38f, -1148.48f, 1050.71f},
+    {"Denise's house", 1, 245.23f, 304.76f, 999.14f},
+    {"Helena's barn", 3, 290.62f, 309.06f, 999.14f},
+    {"Barbara's house", 5, 322.50f, 303.69f, 999.14f},
+    {"Katie's house", 2, 269.64f, 305.95f, 999.14f},
+    {"Michelle's house", 4, 306.19f, 307.81f, 1003.30f},
+    {"Planning Department", 3, 386.52f, 173.63f, 1008.38f},
+    {"Los Santos Police Department", 6, 246.66f, 65.80f, 1003.64f},
+    {"Las Venturas Police Department", 3, 288.47f, 170.06f, 1007.17f},
+    {"San Fierro Police Department", 10, 246.06f, 108.97f, 1003.21f},
+    {"Oval Stadium", 1, -1402.66f, 106.38f, 1032.27f},
+    {"Vice Stadium", 16, -1401.06f, 1265.37f, 1039.86f},
+    {"Blood Bowl Stadium", 15, -1417.89f, 932.44f, 1041.53f},
+    {"Bike school", 3, 1494.85f, 1306.47f, 1093.29f},
+    {"Driving school", 3, -2031.11f, -115.82f, 1035.17f},
+    {"Ganton Gym", 5, 770.80f, -0.70f, 1000.72f},
+    {"Cobra Gym", 6, 773.88f, -47.76f, 1000.58f},
+    {"Below The Belt Gym", 7, 773.73f, -74.69f, 1000.65f},
+    {"Brothel 1", 3, 974.01f, -9.59f, 1001.14f},
+    {"Brothel 2", 3, 961.93f, -51.90f, 1001.11f},
+    {"The Big Spread Ranch", 3, 1212.14f, -28.53f, 1000.95f},
+    {"The Pig Pen", 2, 1204.66f, -13.54f, 1000.92f},
+    {"Club", 17, 493.14f, -24.26f, 1000.67f},
+    {"Fanny Batter's Whore House", 6, 748.46f, 1438.23f, 1102.95f},
+    {"Warehouse 1", 18, 1290.41f, 1.95f, 1001.02f},
+    {"Warehouse 2", 1, 1412.14f, -2.28f, 1000.92f},
+    {"Inside Track Betting", 3, 830.60f, 5.94f, 1004.17f},
+    {"Blastin' Fools Records", 3, 1037.82f, 0.39f, 1001.28f},
+    {"B Dup's Apartment", 3, 1527.04f, -12.02f, 1002.09f},
+    {"B Dup's Crack Palace", 2, 1523.50f, -47.82f, 1002.26f},
+    {"OG Loc's House", 3, 512.92f, -11.69f, 1001.56f},
+    {"Ryder's house", 2, 2447.87f, -1704.45f, 1013.50f},
+    {"Sweet's House", 1, 2527.01f, -1679.20f, 1015.49f},
+    {"Wu-Zi Mu's", 1, -2158.67f, 642.09f, 1052.37f},
+    {"Los Santos Airport", 14, -1864.94f, 55.73f, 1055.52f},
+    {"Four Dragons' Janitor's Office", 10, 1893.07f, 1017.89f, 31.88f},
+    {"Jefferson Motel", 15, 2217.28f, -1150.53f, 1025.79f},
+    {"Kickstart Stadium", 14, -1420.42f, 1616.92f, 1052.53f},
+    {"Liberty City", 1, -741.84f, 493.00f, 1371.97f},
+    {"Francis International Airport", 14, -1813.21f, -58.01f, 1058.96f},
+    {"The Pleasure Domes", 3, -2638.82f, 1407.33f, 906.46f},
+    {"RC Battlefield", 10, -1129.89f, 1057.54f, 1346.41f},
+    {"San Fierro Garage", 1, -2041.23f, 178.39f, 28.84f},
+    {"The Welcome Pump", 1, 681.62f, -451.89f, -25.61f},
+    {"8-Track Stadium", 7, -1403.01f, -250.45f, 1043.53f},
+    {"Dirtbike Stadium", 4, -1421.56f, -663.82f, 1059.55f},
+    {"Crack Den", 5, 322.11f, 1119.32f, 1083.88f},
+    {"Big Smoke's Crack Palace", 2, 2536.53f, -1294.84f, 1044.12f},
+    {"Zero's RC Shop", 6, -2240.10f, 136.97f, 1035.41f},
+    {"Sherman Dam", 17, -944.24f, 1886.15f, 5.00f},
+    {"Rosenberg's Office", 2, 2182.20f, 1628.58f, 1043.87f},
+    {"Secret Valley Diner", 6, 442.12f, -52.47f, 999.71f},
+    {"World of Coq", 1, 445.60f, -6.98f, 1000.73f},
+    {"Jays Diner", 5, 454.98f, -107.25f, 999.43f},
+    {"Madd Dogg's Mansion", 5, 1267.84f, -776.95f, 1091.90f},
+    {"Colonel Furhberger's", 8, 2807.36f, -1171.70f, 1025.57f},
+    {"Burning Desire Building", 5, 2350.15f, -1181.06f, 1027.97f},
+    {"Atrium", 18, 1727.28f, -1642.94f, 20.22f},
+    {"Sindacco Abatoir", 1, 963.05f, 2159.75f, 1011.03f},
+    {"Jet Interior", 1, 1.54f, 23.31f, 1199.59f},
+    {"Andromada", 9, 315.45f, 976.59f, 1960.85f},
+    {"Palomino Bank", 0, 2306.38f, -15.23f, 26.74f},
+    {"Dillimore Gas Station", 0, 663.05f, -573.62f, 16.33f},
+    {"Random House", 2, 2236.69f, -1078.94f, 1049.02f},
+    {"Budget Inn Motel Room", 12, 446.32f, 509.96f, 1001.41f},
 };
 constexpr int INTERIOR_SPOT_COUNT = static_cast<int>(sizeof(INTERIOR_SPOTS) / sizeof(INTERIOR_SPOTS[0]));
+
+// Страница списка интерьеров: в тело диалога (~4 КБ) весь список не влезает.
+constexpr int INTERIOR_PAGE_SIZE = 40;
 
 // Готовые позы NPC: проверенные зацикленные анимации для типовых сценок.
 struct AnimPreset
@@ -317,6 +398,7 @@ void EditorSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reas
 
     // Сущности остаются в мире — но зондируемая запаркована под картой, вернём её.
     cancelGroundProbe(state);
+    destroyMouseProxy(state); // прокси-объект мыши — мусор без хозяина
     // Машины сцены остаются — снять с них редакторский байпас античита.
     setVehicleEditBypasses(state, false);
 
@@ -367,6 +449,7 @@ void EditorSystem::disableEditor(IPlayer &player)
     EditorState &state = stateOf(player);
 
     cancelGroundProbe(state); // вернуть запаркованную зондом сущность
+    destroyMouseProxy(state); // незакрытая сессия прокси-редактирования
 
     if (state.cameraObjectId >= 0 && m_objects)
     {
@@ -651,12 +734,32 @@ void EditorSystem::createObjectEntity(IPlayer &player, int model)
     }
 }
 
+void EditorSystem::destroyMouseProxy(EditorState &state)
+{
+    if (state.mouseProxyObjectId >= 0 && m_objects)
+    {
+        m_objects->release(state.mouseProxyObjectId);
+    }
+    state.mouseProxyObjectId = -1;
+    state.mouseProxyIndex = -1;
+    state.mouseProxyEntityId = -1;
+}
+
 void EditorSystem::beginMouseEdit(IPlayer &player)
 {
     EditorState &state = stateOf(player);
-    if (!selectedValid(state) || state.entities[state.selectedIndex].type != EntityType::Object)
+    if (!selectedValid(state))
     {
         showMain(player);
+        return;
+    }
+
+    state.followCamera = false;
+    state.keyMode = KeyMode::Camera;
+
+    if (state.entities[state.selectedIndex].type != EntityType::Object)
+    {
+        beginProxyMouseEdit(player);
         return;
     }
 
@@ -666,9 +769,6 @@ void EditorSystem::beginMouseEdit(IPlayer &player)
         showEntityEdit(player);
         return;
     }
-
-    state.followCamera = false;
-    state.keyMode = KeyMode::Camera;
 
     m_objectEditService.beginEdit(
         player, *object,
@@ -711,6 +811,107 @@ void EditorSystem::beginMouseEdit(IPlayer &player)
 
     player.sendClientMessage(Colour::White(),
                              u("Тащите стрелки/кольца мышью. Клик вне объекта — сохранить, ESC — отмена."));
+}
+
+void EditorSystem::beginProxyMouseEdit(IPlayer &player)
+{
+    EditorState &state = stateOf(player);
+    if (!m_objects || !selectedValid(state))
+    {
+        showMain(player);
+        return;
+    }
+    destroyMouseProxy(state); // прошлая сессия могла не закрыться
+
+    EditorEntity &selected = state.entities[state.selectedIndex];
+    // Пикапу прокси с его же моделью — выглядит как сам пикап; актору/машине/
+    // чекпоинту — маркер-стрелка.
+    const int proxyModel = selected.type == EntityType::Pickup ? selected.model : MOUSE_PROXY_MARKER_MODEL;
+    IObject *proxy = m_objects->create(proxyModel, selected.position, Vector3(0.0f, 0.0f, selected.rotation.z));
+    if (!proxy)
+    {
+        player.sendClientMessage(Colour::White(), u("Не удалось создать прокси-объект (лимит пула)"));
+        showEntityEdit(player);
+        return;
+    }
+
+    state.mouseProxyObjectId = proxy->getID();
+    state.mouseProxyIndex = state.selectedIndex;
+    state.mouseProxyEntityId = selected.entityId;
+    state.mouseProxyType = selected.type;
+    state.mouseProxyOrigPos = selected.position;
+    state.mouseProxyOrigAngle = selected.rotation.z;
+
+    m_objectEditService.beginEdit(
+        player, *proxy,
+        [this, playerId = player.getID()](IPlayer &, IObject &object, ObjectEditResponse response, Vector3 position,
+                                          Vector3 rotation)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+            EditorState &state = m_state[playerId];
+            if (object.getID() != state.mouseProxyObjectId)
+            {
+                return; // сессия другого прокси
+            }
+
+            // Сущность по снапшоту: индексы могли сдвинуться (удаление и т.п.).
+            EditorEntity *entity = nullptr;
+            if (state.mouseProxyIndex >= 0 && state.mouseProxyIndex < (int)state.entities.size())
+            {
+                EditorEntity &candidate = state.entities[state.mouseProxyIndex];
+                if (candidate.type == state.mouseProxyType && candidate.entityId == state.mouseProxyEntityId)
+                {
+                    entity = &candidate;
+                }
+            }
+            if (!entity)
+            {
+                destroyMouseProxy(state);
+                m_objectEditService.end(*player);
+                showMain(*player);
+                return;
+            }
+
+            if (response == ObjectEditResponse_Update)
+            {
+                // Живое применение только дешёвым типам (setPosition без
+                // рестрима); пикап и чекпоинт переезжают на сохранении —
+                // их перенос рестримит сущность всем вокруг.
+                if (entity->type == EntityType::Actor || entity->type == EntityType::Vehicle)
+                {
+                    entity->position = position;
+                    entity->rotation.z = rotation.z;
+                    applyEntityTransform(*entity);
+                }
+                return;
+            }
+
+            if (response == ObjectEditResponse_Final)
+            {
+                entity->position = position;
+                if (entity->type == EntityType::Actor || entity->type == EntityType::Vehicle)
+                {
+                    entity->rotation.z = rotation.z;
+                }
+                applyEntityTransform(*entity);
+            }
+            else // Cancel — откат (живые типы успели подвигаться)
+            {
+                entity->position = state.mouseProxyOrigPos;
+                entity->rotation.z = state.mouseProxyOrigAngle;
+                applyEntityTransform(*entity);
+            }
+            refreshCheckpointPreview(*player);
+            destroyMouseProxy(state);
+            showEntityEdit(*player);
+        });
+
+    player.sendClientMessage(
+        Colour::White(), u("Тащите прокси-маркер мышью. Клик вне объекта — сохранить (сущность переедет), ESC — отмена."));
 }
 
 void EditorSystem::beginMouseSelect(IPlayer &player)
@@ -1614,6 +1815,7 @@ void EditorSystem::showActorEdit(IPlayer &player)
     std::string body;
     body += "Поставить по взгляду камеры\n";
     body += fmt::format("Следовать за взглядом: {}\n", state.followCamera ? "ВКЛ" : "выкл");
+    body += "Редактировать мышью (прокси-маркер)\n";
     body += "Двигать клавишами (XY)\n";
     body += "Двигать клавишами (высота)\n";
     body += "Вращать клавишами (угол)\n";
@@ -1672,52 +1874,55 @@ void EditorSystem::showActorEdit(IPlayer &player)
                 }
                 break;
             case 2:
+                beginMouseEdit(*player);
+                break;
+            case 3:
                 state.followCamera = false;
                 state.keyMode = KeyMode::MoveXY;
                 player->sendClientMessage(Colour::White(),
                                           u("Стрелки двигают актора (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 3:
+            case 4:
                 state.followCamera = false;
                 state.keyMode = KeyMode::MoveZ;
                 player->sendClientMessage(
                     Colour::White(), u("Вверх/вниз меняют высоту (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 4:
+            case 5:
                 state.followCamera = false;
                 state.keyMode = KeyMode::Rotate;
                 player->sendClientMessage(
                     Colour::White(), u("Влево/вправо вращают актора (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 5:
+            case 6:
                 showKeyStepInput(*player);
                 break;
-            case 6:
+            case 7:
                 requestGroundSnap(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Ищу землю под актором..."));
                 showActorEdit(*player);
                 break;
-            case 7:
+            case 8:
                 showDistanceInput(*player);
                 break;
-            case 8:
+            case 9:
                 showPositionInput(*player);
                 break;
-            case 9:
+            case 10:
                 showAngleInput(*player);
                 break;
-            case 10:
+            case 11:
                 showChangeModelInput(*player);
                 break;
-            case 11:
+            case 12:
                 showAnimationMenu(*player);
                 break;
-            case 12: // переключить режим анимации
+            case 13: // переключить режим анимации
                 entity.animLoop = !entity.animLoop;
                 applyEntityAnimation(entity);
                 showActorEdit(*player);
                 break;
-            case 13:
+            case 14:
                 entity.animLib.clear();
                 entity.animName.clear();
                 if (IActor *actor = m_actors ? m_actors->get(entity.entityId) : nullptr)
@@ -1726,11 +1931,11 @@ void EditorSystem::showActorEdit(IPlayer &player)
                 }
                 showActorEdit(*player);
                 break;
-            case 14:
+            case 15:
                 duplicateEntity(*player, state.selectedIndex);
                 showEntityEdit(*player);
                 break;
-            case 15: // перелететь
+            case 16: // перелететь
                 state.cameraPosition = entity.position + Vector3(2.0f, 2.0f, 2.0f);
                 if (state.cameraObjectId >= 0 && m_objects)
                 {
@@ -1741,7 +1946,7 @@ void EditorSystem::showActorEdit(IPlayer &player)
                 }
                 showActorEdit(*player);
                 break;
-            case 16:
+            case 17:
                 deleteEntity(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Актор удалён"));
                 showMain(*player);
@@ -1766,6 +1971,7 @@ void EditorSystem::showVehicleEdit(IPlayer &player)
     std::string body;
     body += "Поставить по взгляду камеры\n";
     body += fmt::format("Следовать за взглядом: {}\n", state.followCamera ? "ВКЛ" : "выкл");
+    body += "Редактировать мышью (прокси-маркер)\n";
     body += "Двигать клавишами (XY)\n";
     body += "Двигать клавишами (высота)\n";
     body += "Вращать клавишами (угол)\n";
@@ -1822,51 +2028,54 @@ void EditorSystem::showVehicleEdit(IPlayer &player)
                 }
                 break;
             case 2:
+                beginMouseEdit(*player);
+                break;
+            case 3:
                 state.followCamera = false;
                 state.keyMode = KeyMode::MoveXY;
                 player->sendClientMessage(Colour::White(),
                                           u("Стрелки двигают машину (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 3:
+            case 4:
                 state.followCamera = false;
                 state.keyMode = KeyMode::MoveZ;
                 player->sendClientMessage(
                     Colour::White(), u("Вверх/вниз меняют высоту (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 4:
+            case 5:
                 state.followCamera = false;
                 state.keyMode = KeyMode::Rotate;
                 player->sendClientMessage(
                     Colour::White(), u("Влево/вправо вращают машину (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 5:
+            case 6:
                 showKeyStepInput(*player);
                 break;
-            case 6:
+            case 7:
                 requestGroundSnap(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Ищу землю под машиной..."));
                 showVehicleEdit(*player);
                 break;
-            case 7:
+            case 8:
                 showDistanceInput(*player);
                 break;
-            case 8:
+            case 9:
                 showPositionInput(*player);
                 break;
-            case 9:
+            case 10:
                 showAngleInput(*player);
                 break;
-            case 10:
+            case 11:
                 showChangeModelInput(*player);
                 break;
-            case 11:
+            case 12:
                 showVehicleColoursInput(*player);
                 break;
-            case 12:
+            case 13:
                 duplicateEntity(*player, state.selectedIndex);
                 showEntityEdit(*player);
                 break;
-            case 13: // перелететь
+            case 14: // перелететь
                 state.cameraPosition = entity.position + Vector3(2.0f, 2.0f, 2.0f);
                 if (state.cameraObjectId >= 0 && m_objects)
                 {
@@ -1877,7 +2086,7 @@ void EditorSystem::showVehicleEdit(IPlayer &player)
                 }
                 showVehicleEdit(*player);
                 break;
-            case 14:
+            case 15:
                 deleteEntity(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Машина удалена"));
                 showMain(*player);
@@ -1902,6 +2111,7 @@ void EditorSystem::showPickupEdit(IPlayer &player)
     std::string body;
     body += "Поставить по взгляду камеры\n";
     body += fmt::format("Следовать за взглядом: {}\n", state.followCamera ? "ВКЛ" : "выкл");
+    body += "Редактировать мышью (прокси-маркер)\n";
     body += "Двигать клавишами (XY)\n";
     body += "Двигать клавишами (высота)\n";
     body += fmt::format("Шаг клавиш: {:.2f}\n", state.keyStep);
@@ -1956,42 +2166,45 @@ void EditorSystem::showPickupEdit(IPlayer &player)
                 }
                 break;
             case 2:
+                beginMouseEdit(*player);
+                break;
+            case 3:
                 state.followCamera = false;
                 state.keyMode = KeyMode::MoveXY;
                 player->sendClientMessage(Colour::White(),
                                           u("Стрелки двигают пикап (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 3:
+            case 4:
                 state.followCamera = false;
                 state.keyMode = KeyMode::MoveZ;
                 player->sendClientMessage(
                     Colour::White(), u("Вверх/вниз меняют высоту (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 4:
+            case 5:
                 showKeyStepInput(*player);
                 break;
-            case 5:
+            case 6:
                 requestGroundSnap(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Ищу землю под пикапом..."));
                 showPickupEdit(*player);
                 break;
-            case 6:
+            case 7:
                 showDistanceInput(*player);
                 break;
-            case 7:
+            case 8:
                 showPositionInput(*player);
                 break;
-            case 8:
+            case 9:
                 showChangeModelInput(*player);
                 break;
-            case 9:
+            case 10:
                 showPickupTypeInput(*player);
                 break;
-            case 10:
+            case 11:
                 duplicateEntity(*player, state.selectedIndex);
                 showEntityEdit(*player);
                 break;
-            case 11: // перелететь
+            case 12: // перелететь
                 state.cameraPosition = entity.position + Vector3(2.0f, 2.0f, 2.0f);
                 if (state.cameraObjectId >= 0 && m_objects)
                 {
@@ -2002,7 +2215,7 @@ void EditorSystem::showPickupEdit(IPlayer &player)
                 }
                 showPickupEdit(*player);
                 break;
-            case 12:
+            case 13:
                 deleteEntity(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Пикап удалён"));
                 showMain(*player);
@@ -2027,6 +2240,7 @@ void EditorSystem::showCheckpointEdit(IPlayer &player)
     std::string body;
     body += "Поставить по взгляду камеры\n";
     body += fmt::format("Следовать за взглядом: {}\n", state.followCamera ? "ВКЛ" : "выкл");
+    body += "Редактировать мышью (прокси-маркер)\n";
     body += "Двигать клавишами (XY)\n";
     body += "Двигать клавишами (высота)\n";
     body += "Менять радиус клавишами\n";
@@ -2082,45 +2296,48 @@ void EditorSystem::showCheckpointEdit(IPlayer &player)
                 }
                 break;
             case 2:
+                beginMouseEdit(*player);
+                break;
+            case 3:
                 state.followCamera = false;
                 state.keyMode = KeyMode::MoveXY;
                 player->sendClientMessage(
                     Colour::White(), u("Стрелки двигают чекпоинт (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 3:
+            case 4:
                 state.followCamera = false;
                 state.keyMode = KeyMode::MoveZ;
                 player->sendClientMessage(
                     Colour::White(), u("Вверх/вниз меняют высоту (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 4:
+            case 5:
                 state.followCamera = false;
                 state.keyMode = KeyMode::Rotate; // для чекпоинта вращение = радиус
                 player->sendClientMessage(
                     Colour::White(), u("Влево/вправо меняют радиус (Sprint — крупно, Alt — точно). /editor — готово."));
                 break;
-            case 5:
+            case 6:
                 showKeyStepInput(*player);
                 break;
-            case 6:
+            case 7:
                 requestGroundSnap(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Ищу землю под чекпоинтом..."));
                 showCheckpointEdit(*player);
                 break;
-            case 7:
+            case 8:
                 showDistanceInput(*player);
                 break;
-            case 8:
+            case 9:
                 showPositionInput(*player);
                 break;
-            case 9:
+            case 10:
                 showRadiusInput(*player);
                 break;
-            case 10:
+            case 11:
                 duplicateEntity(*player, state.selectedIndex);
                 showEntityEdit(*player);
                 break;
-            case 11: // перелететь
+            case 12: // перелететь
                 state.cameraPosition = entity.position + Vector3(2.0f, 2.0f, 2.0f);
                 if (state.cameraObjectId >= 0 && m_objects)
                 {
@@ -2131,7 +2348,7 @@ void EditorSystem::showCheckpointEdit(IPlayer &player)
                 }
                 showCheckpointEdit(*player);
                 break;
-            case 12:
+            case 13:
                 deleteEntity(*player, state.selectedIndex);
                 player->sendClientMessage(Colour::White(), u("Чекпоинт удалён"));
                 showMain(*player);
@@ -2684,17 +2901,25 @@ void EditorSystem::showInteriorInput(IPlayer &player)
         });
 }
 
-void EditorSystem::showInteriorList(IPlayer &player)
+void EditorSystem::showInteriorList(IPlayer &player, int page)
 {
+    constexpr int pageCount = (INTERIOR_SPOT_COUNT + INTERIOR_PAGE_SIZE - 1) / INTERIOR_PAGE_SIZE;
+    page = std::clamp(page, 0, pageCount - 1);
+    const int first = page * INTERIOR_PAGE_SIZE;
+    const int count = std::min(INTERIOR_PAGE_SIZE, INTERIOR_SPOT_COUNT - first);
+
     std::string body;
-    for (const InteriorSpot &spot : INTERIOR_SPOTS)
+    for (int i = first; i < first + count; ++i)
     {
-        body += fmt::format("{}\tID {}\n", spot.name, spot.interior);
+        body += fmt::format("{}\tID {}\n", INTERIOR_SPOTS[i].name, INTERIOR_SPOTS[i].interior);
     }
+    body += fmt::format("» Следующая страница ({}/{})", page + 1, pageCount);
 
     m_dialogService.show(
-        player, makeDialog(DialogStyle_LIST, "Телепорт по интерьерам", body, "Телепорт", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+        player,
+        makeDialog(DialogStyle_LIST, fmt::format("Телепорт по интерьерам {}/{}", page + 1, pageCount), body,
+                   "Телепорт", "Назад"),
+        [this, playerId = player.getID(), page, first, count](DialogResponse response, int listItem, StringView)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -2702,13 +2927,19 @@ void EditorSystem::showInteriorList(IPlayer &player)
                 return;
             }
 
-            if (response != DialogResponse_Left || listItem < 0 || listItem >= INTERIOR_SPOT_COUNT)
+            if (response != DialogResponse_Left || listItem < 0 || listItem > count)
             {
                 showMain(*player);
                 return;
             }
+            if (listItem == count) // последняя строка — следующая страница (по кругу)
+            {
+                constexpr int pageCount = (INTERIOR_SPOT_COUNT + INTERIOR_PAGE_SIZE - 1) / INTERIOR_PAGE_SIZE;
+                showInteriorList(*player, (page + 1) % pageCount);
+                return;
+            }
 
-            const InteriorSpot &spot = INTERIOR_SPOTS[listItem];
+            const InteriorSpot &spot = INTERIOR_SPOTS[first + listItem];
             const Vector3 position(spot.x, spot.y, spot.z);
 
             EditorState &state = m_state[playerId];

@@ -12,6 +12,9 @@
 #include "Systems/BankSystem/BankSystem.h"
 #include "Systems/ElectionSystem/ElectionSystem.h"
 #include "Systems/FactionSystem/FactionSystem.h"
+#include "Systems/Factions/PoliceLasVenturasSystem/PoliceLasVenturasSystem.h"
+#include "Systems/Factions/PoliceLosSantosSystem/PoliceLosSantosSystem.h"
+#include "Systems/Factions/PresidentAdministrationSystem/PresidentAdministrationSystem.h"
 #include "Systems/Core/GameTextSystem/GameTextSystem.h"
 #include "Systems/Core/GangZoneEditorSystem/GangZoneEditorSystem.h"
 #include "Systems/Core/GangZoneSystem/GangZoneSystem.h"
@@ -124,6 +127,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // FactionSystem после auth: подписки на сессию (членство грузится по её
     // старту). Конкретные фракции регистрируются после неё.
     m_systems.push_back(std::make_unique<FactionSystem>(core, serviceRegister));
+    // Конкретные фракции: регистрируют себя и свои базы в конструкторах —
+    // до FactionSystem::initialize (он грузит ранги и создаёт пикапы баз).
+    m_systems.push_back(std::make_unique<PresidentAdministrationSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PoliceLosSantosSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PoliceLasVenturasSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<BankSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ElectionSystem>(core, serviceRegister));
     // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до

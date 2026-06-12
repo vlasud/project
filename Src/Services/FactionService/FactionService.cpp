@@ -2,6 +2,7 @@
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
+#include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
@@ -26,6 +27,65 @@ void FactionService::registerFaction(int factionId, std::string name, int superv
     faction.name = std::move(name);
     faction.supervisorId = supervisorId;
     m_factions.push_back(std::move(faction));
+}
+
+void FactionService::registerBase(int factionId, const Base &base)
+{
+    Faction *faction = findFaction(factionId);
+    if (!faction)
+    {
+        LogManager::log(Error, fmt::format("FactionService: base registration for unknown faction {}", factionId));
+        return;
+    }
+    faction->base = base;
+    faction->base.defined = true;
+}
+
+void FactionService::registerSpawn(int factionId, const Spawn &spawn)
+{
+    Faction *faction = findFaction(factionId);
+    if (!faction)
+    {
+        LogManager::log(Error, fmt::format("FactionService: spawn registration for unknown faction {}", factionId));
+        return;
+    }
+    faction->spawn = spawn;
+    faction->spawn.defined = true;
+}
+
+void FactionService::registerColour(int factionId, Colour colour)
+{
+    if (Faction *faction = findFaction(factionId))
+        faction->colour = colour;
+    else
+        LogManager::log(Error, fmt::format("FactionService: colour registration for unknown faction {}", factionId));
+}
+
+void FactionService::registerSkins(int factionId, std::vector<int> skins)
+{
+    Faction *faction = findFaction(factionId);
+    if (!faction)
+    {
+        LogManager::log(Error, fmt::format("FactionService: skins registration for unknown faction {}", factionId));
+        return;
+    }
+    for (const int skin : skins)
+    {
+        if (skin >= 0 && skin <= 311 && skin != 74) // диапазон клиента; 74 крашит
+            faction->skins.push_back(skin);
+        else
+            LogManager::log(Warning, fmt::format("FactionService: invalid skin {} for faction {}", skin, factionId));
+    }
+}
+
+bool FactionService::canUseSkin(int playerId, int skin) const
+{
+    if (!hasPermission(playerId, PERM_SKIN))
+        return false;
+    const Faction *faction = getFaction(getMemberFaction(playerId));
+    if (!faction)
+        return false;
+    return std::find(faction->skins.begin(), faction->skins.end(), skin) != faction->skins.end();
 }
 
 void FactionService::registerPermission(int factionId, PermissionMask mask, std::string name)
@@ -78,6 +138,7 @@ std::vector<FactionService::PermissionDef> FactionService::permissionsOf(int fac
         {PERM_INVITE, "Приглашение игроков"},
         {PERM_FIRE, "Увольнение игроков"},
         {PERM_BUDGET, "Доступ к бюджету"},
+        {PERM_SKIN, "Смена скина"},
     };
     if (const Faction *faction = getFaction(factionId))
     {
@@ -638,27 +699,7 @@ void FactionService::notifyChange(IPlayer &player, int oldFactionId, int newFact
 
 std::string FactionService::sanitizeRankName(std::string_view raw)
 {
-    std::string result;
-    result.reserve(raw.size());
-    for (const char c : raw)
-    {
-        if (static_cast<unsigned char>(c) >= 0x20)
-            result += c;
-    }
-
-    while (!result.empty() && result.front() == ' ')
-        result.erase(result.begin());
-    while (!result.empty() && result.back() == ' ')
-        result.pop_back();
-
-    if (result.size() > MAX_RANK_NAME_BYTES)
-    {
-        result.resize(MAX_RANK_NAME_BYTES);
-        // Не рвём utf-8 символ посередине.
-        while (!result.empty() && (static_cast<unsigned char>(result.back()) & 0xC0) == 0x80)
-            result.pop_back();
-    }
-    return result;
+    return Encoding::sanitizeUserText(raw, MAX_RANK_NAME_BYTES);
 }
 
 // ------------------------------------------------------------------ вызовы FactionSystem

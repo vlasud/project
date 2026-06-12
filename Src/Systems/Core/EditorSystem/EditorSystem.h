@@ -97,6 +97,15 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
         int previewIndex = -1;
         Vector3 previewPosition{};
         float previewRadius = 0.0f;
+        // Прокси-объект редактирования мышью для НЕ-объектов (актор/машина/
+        // пикап/чекпоинт): клиентский гизмо умеет только объекты, поэтому
+        // двигается прокси, а сохранение применяет его трансформ к сущности.
+        int mouseProxyObjectId = -1;
+        int mouseProxyIndex = -1;    // индекс редактируемой сущности
+        int mouseProxyEntityId = -1; // снапшот для валидации (индексы сдвигаются)
+        EntityType mouseProxyType = EntityType::Object;
+        Vector3 mouseProxyOrigPos{}; // откат «живых» типов при ESC
+        float mouseProxyOrigAngle = 0.0f;
     };
 
     // --- управление режимом ---
@@ -113,8 +122,12 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     // --- работа с сущностями ---
     Vector3 placementPoint(IPlayer &player) const;
     void createObjectEntity(IPlayer &player, int model);
-    // Нативное редактирование выбранного объекта мышью (стрелки-оси клиента).
+    // Нативное редактирование выбранной сущности мышью (стрелки-оси клиента).
+    // Объект редактируется напрямую; актор/машина/пикап/чекпоинт — через
+    // прокси-объект (см. EditorState::mouseProxy*).
     void beginMouseEdit(IPlayer &player);
+    void beginProxyMouseEdit(IPlayer &player); // не-объекты: сессия на прокси
+    void destroyMouseProxy(EditorState &state);
     // Выбор объекта сцены кликом мыши.
     void beginMouseSelect(IPlayer &player);
     void createActorEntity(IPlayer &player, int skin);
@@ -153,7 +166,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     void showPickupTypeInput(IPlayer &player);
     void showRadiusInput(IPlayer &player);
     void showInteriorInput(IPlayer &player);
-    void showInteriorList(IPlayer &player); // телепорт по известным интерьерам
+    void showInteriorList(IPlayer &player, int page = 0); // телепорт по известным интерьерам
     void showChangeModelInput(IPlayer &player); // смена модели объекта / скина актора на месте
     void showPositionInput(IPlayer &player);
     void showRotationInput(IPlayer &player); // объект: три угла одной строкой

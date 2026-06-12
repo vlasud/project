@@ -12,6 +12,11 @@ WorldSystem::WorldSystem(ICore &core, const ServiceRegister &serviceRegister)
     // PlayerMoneyService — это дыра в источнике правды о деньгах (money-валидатор
     // считал бы их читерским ростом или, хуже, легализовал бы).
     m_worldService.setStuntBonuses(false);
+
+    // Стандартные входы в интерьеры GTA SA выключены: телепорт жёлтым enex —
+    // клиентский (мимо LocationService), а все нужные здания открываются
+    // нашими пикапами (базы фракций, мэрии и т.п.).
+    m_worldService.setInteriorEnterExits(false);
 }
 
 void WorldSystem::onPlayerSpawn(IPlayer &player)

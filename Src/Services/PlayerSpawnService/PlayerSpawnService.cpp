@@ -64,14 +64,23 @@ void PlayerSpawnService::handleConnect(IPlayer &player)
 
 void PlayerSpawnService::handleSpawn(IPlayer &player)
 {
-    // Позицию/угол/скин клиент применил сам из class-данных; интерьер и
-    // виртуальный мир в них не входят — докатываем здесь.
+    // Интерьер и виртуальный мир в class-данные не входят — докатываем здесь.
+    // ПОЗИЦИЮ тоже принудительно: клиент спавнится по class-данным
+    // (SetSpawnInfo — отдельный RPC), и при смене точки прямо перед спавном
+    // (членство фракции пришло из БД на логине) он использует СТАРУЮ позицию
+    // с НОВЫМ интерьером — «в небе без стен». Серверный телепорт в точку
+    // правды закрывает гонку при любом порядке доставки.
     const SpawnPoint &point = getSpawn(player.getID());
     if (m_location)
     {
         m_location->setInterior(player, point.interior);
         m_location->setVirtualWorld(player, point.virtualWorld);
+        m_location->teleport(player, point.position);
+        player.setRotation(GTAQuat(Vector3(0.0f, 0.0f, point.angle)));
     }
+    // Камера всегда за спиной: после смерти/телепорта клиент любит оставлять
+    // её где попало — игрок спавнится, глядя в случайную сторону.
+    player.setCameraBehind();
 }
 
 void PlayerSpawnService::resetPlayer(int playerId)

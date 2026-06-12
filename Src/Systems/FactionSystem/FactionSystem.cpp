@@ -13,6 +13,14 @@ namespace
 {
 const Colour INFO_COLOUR{120, 220, 255};
 const Colour ERROR_COLOUR{255, 90, 90};
+// Цвет гражданина (ник/маркер вне фракции). Источник правды о «гражданском»
+// цвете пока здесь; цветовая система игрока — будущая задача.
+const Colour CIVILIAN_COLOUR{200, 200, 200};
+// Рация организации: весь текст светло-зелёный.
+const Colour RADIO_COLOUR{144, 238, 144};
+// Антифлуд рации.
+constexpr Milliseconds RADIO_COOLDOWN{1000};
+constexpr std::size_t MAX_RADIO_BYTES = 180; // utf-8, ~90 кириллических
 
 std::string u(const std::string &text)
 {
@@ -36,23 +44,38 @@ FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister
     : BaseSystem(core, serviceRegister), m_factionService(serviceRegister.getService<FactionService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
-      m_bankService(serviceRegister.getService<BankService>())
+      m_bankService(serviceRegister.getService<BankService>()),
+      m_pickupService(serviceRegister.getService<PickupService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>()),
+      m_spawnService(serviceRegister.getService<PlayerSpawnService>()),
+      m_skinService(serviceRegister.getService<PlayerSkinService>())
 {
-    // Временно здесь: когда появятся системы конкретных фракций, каждая
-    // зарегистрирует свою в собственном конструкторе.
+    // Спавн и цвет члена — от его организации (вступление/выход/появление в
+    // сети применяют немедленно; спавн действует на все последующие спавны).
+    m_factionService.subscribeMemberChange(
+        [this](IPlayer &player, int, int newFactionId)
+        {
+            applyFactionSpawn(player, newFactionId);
+            applyFactionColour(player, newFactionId);
+        });
+
+    // Временно здесь: когда появятся системы остальных конкретных фракций,
+    // каждая зарегистрирует свою в собственном конструкторе (администрация —
+    // PresidentAdministrationSystem, образец).
     // Гос-вертикаль: фракция 1 — администрация, её лидер — ПРЕЗИДЕНТ
     // (назначается итогом выборов автоматически). Президент создаёт ранги
     // («Министр ВД», ...) и в меню ранга передаёт каждому в управление
     // КОНКРЕТНЫЕ подопечные организации — их лидеров ранг назначает через
     // /gov. Банки городов — тоже фракции; деньги организаций лежат «в банке»
     // (бюджет), зарплатные чеки уходят на счета BankService.
-    m_factionService.registerFaction(1, "Администрация Президента");
-    m_factionService.registerFaction(2, "Полиция Лос-Сантоса", 1);
     m_factionService.registerFaction(3, "Полиция Сан-Фиерро", 1);
-    m_factionService.registerFaction(4, "Полиция Лас-Вентураса", 1);
+    m_factionService.registerColour(3, Colour(70, 130, 180));
     m_factionService.registerFaction(5, "Банк Лос-Сантоса", 1);
+    m_factionService.registerColour(5, Colour(46, 139, 87));
     m_factionService.registerFaction(6, "Банк Сан-Фиерро", 1);
+    m_factionService.registerColour(6, Colour(60, 179, 113));
     m_factionService.registerFaction(7, "Банк Лас-Вентураса", 1);
+    m_factionService.registerColour(7, Colour(32, 178, 170));
 
     m_sessionService.subscribeStart(
         [this](IPlayer &player, const PlayerSessionService::Session &session)
@@ -102,6 +125,17 @@ FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister
                      showSetSalaryDialog(player, args.getInt(0));
                  });
 
+    // Рация организации: сообщение всем членам.
+    commands.add("r", {{PlayerCommandService::Param::String, "текст"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 {
+                     radioChat(player, args.getString(0));
+                 });
+
+    // Смена скина из пула организации (право «Смена скина»).
+    commands.add("skin", {},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showSkinDialog(player); });
+
     // Куратор (министр/президент): управление лидерами подопечных фракций.
     commands.add("gov", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -120,6 +154,167 @@ FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister
 void FactionSystem::initialize(IComponentList *components)
 {
     loadCatalog();
+    createBasePickups();
+}
+
+// ------------------------------------------------------------------ базы организаций
+
+void FactionSystem::createBasePickups()
+{
+    for (const FactionService::Faction &faction : m_factionService.getFactions())
+    {
+        if (!faction.base.defined)
+            continue;
+        const int factionId = faction.id;
+        for (const FactionService::BaseDoor &door : faction.base.entrances)
+        {
+            m_pickupService.add(faction.base.pickupModel, 1, door.pickupPos,
+                                [this, factionId, target = door.targetPos, angle = door.targetAngle](IPlayer &player)
+                                { enterBase(player, factionId, target, angle); });
+        }
+        // Пикапы выходов живут в мире базы (= id фракции).
+        for (const FactionService::BaseDoor &door : faction.base.exits)
+        {
+            m_pickupService.add(faction.base.pickupModel, 1, door.pickupPos,
+                                [this, factionId, target = door.targetPos, angle = door.targetAngle](IPlayer &player)
+                                { exitBase(player, factionId, target, angle); },
+                                static_cast<std::uint32_t>(factionId));
+        }
+    }
+}
+
+void FactionSystem::enterBase(IPlayer &player, int factionId, const Vector3 &target, float angle)
+{
+    const FactionService::Faction *faction = m_factionService.getFaction(factionId);
+    if (!faction || !faction->base.defined)
+        return;
+    if (m_factionService.getMemberFaction(player.getID()) != factionId)
+    {
+        player.sendClientMessage(ERROR_COLOUR,
+                                 u(fmt::format("Вход только для сотрудников «{}»", faction->name)));
+        return;
+    }
+
+    m_locationService.teleport(player, target, static_cast<unsigned>(faction->base.interior), factionId);
+    player.setRotation(GTAQuat(Vector3(0.0f, 0.0f, angle)));
+    player.setCameraBehind();
+}
+
+void FactionSystem::exitBase(IPlayer &player, int factionId, const Vector3 &target, float angle)
+{
+    const FactionService::Faction *faction = m_factionService.getFaction(factionId);
+    if (!faction || !faction->base.defined)
+        return;
+
+    m_locationService.teleport(player, target, 0, 0);
+    player.setRotation(GTAQuat(Vector3(0.0f, 0.0f, angle)));
+    player.setCameraBehind();
+}
+
+void FactionSystem::applyFactionColour(IPlayer &player, int factionId)
+{
+    const FactionService::Faction *faction = m_factionService.getFaction(factionId);
+    // setColour красит и ник, и маркер на миникарте.
+    player.setColour(faction ? faction->colour : CIVILIAN_COLOUR);
+}
+
+void FactionSystem::radioChat(IPlayer &player, StringView rawText)
+{
+    const int playerId = player.getID();
+    const int factionId = m_factionService.getMemberFaction(playerId);
+    const FactionService::Faction *faction = m_factionService.getFaction(factionId);
+    if (!faction)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Вы не состоите в организации"));
+        return;
+    }
+
+    // Антифлуд: рация в обход общего чата, кулдаун свой.
+    const TimePoint now = std::chrono::steady_clock::now();
+    if (now - m_lastRadioAt[playerId] < RADIO_COOLDOWN)
+        return;
+
+    // Ввод клиента: cp1251 -> utf-8, чистка и обрезка без разрыва символа.
+    const std::string text = Encoding::sanitizeUserText(
+        Encoding::cp1251Toutf8(std::string(rawText.data(), rawText.size())), MAX_RADIO_BYTES);
+    if (text.empty())
+        return;
+    m_lastRadioAt[playerId] = now;
+
+    const FactionService::Rank *rank = m_factionService.getMemberRank(playerId);
+    const std::string message = u(fmt::format("[R] [{}] {}[{}] : {}", rank ? rank->name : "?",
+                                              player.getName().to_string(), playerId, text));
+
+    for (IPlayer *member : m_core.getPlayers().entries())
+    {
+        if (m_factionService.getMemberFaction(member->getID()) == factionId)
+            member->sendClientMessage(RADIO_COLOUR, message);
+    }
+}
+
+void FactionSystem::showSkinDialog(IPlayer &player)
+{
+    const FactionService::Faction *faction = permittedFaction(player, FactionService::PERM_SKIN);
+    if (!faction)
+        return;
+    if (faction->skins.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("У организации нет пула скинов"));
+        return;
+    }
+
+    std::string body;
+    for (const int skin : faction->skins)
+        body += fmt::format("Скин {}\n", skin);
+    body.pop_back();
+
+    Dialog dialog;
+    dialog.style = DialogStyle_LIST;
+    dialog.title = u(fmt::format("{} — скины", faction->name));
+    dialog.body = u(body);
+    dialog.leftButton = u("Надеть");
+    dialog.rightButton = u("Закрыть");
+
+    m_dialogService.show(
+        player, dialog,
+        [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player || response != DialogResponse_Left)
+                return;
+            const FactionService::Faction *faction =
+                m_factionService.getFaction(m_factionService.getMemberFaction(playerId));
+            if (!faction || listItem < 0 || static_cast<std::size_t>(listItem) >= faction->skins.size())
+                return;
+
+            const int skin = faction->skins[listItem];
+            // Перепроверка права и принадлежности скина пулу — состояние могло
+            // измениться, пока диалог был открыт.
+            if (!m_factionService.canUseSkin(playerId, skin))
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Недостаточно прав во фракции"));
+                return;
+            }
+            m_skinService.setSkin(*player, skin);
+            player->sendClientMessage(INFO_COLOUR, u(fmt::format("Скин сменён на {}", skin)));
+        });
+}
+
+void FactionSystem::applyFactionSpawn(IPlayer &player, int factionId)
+{
+    const FactionService::Faction *faction = m_factionService.getFaction(factionId);
+    if (faction && faction->spawn.defined)
+    {
+        SpawnPoint point;
+        point.position = faction->spawn.position;
+        point.angle = faction->spawn.angle;
+        point.interior = static_cast<unsigned>(faction->spawn.interior);
+        point.virtualWorld = faction->spawn.virtualWorld;
+        m_spawnService.setSpawn(player, point);
+        return;
+    }
+    // Вне фракции (или у неё нет точки) — гражданский дефолт.
+    m_spawnService.setSpawn(player, SpawnPoint{});
 }
 
 // ------------------------------------------------------------------ загрузка
