@@ -23,11 +23,22 @@
 // Телепорт машины С ВОДИТЕЛЕМ ловится валидатором позиции игрока (позиция
 // водителя следует за машиной) — здесь не дублируется.
 //
+// МАШИНЫ НЕ ВЗРЫВАЮТСЯ ВООБЩЕ, ни по какой причине: ниже ~250 HP клиент
+// поджигает машину и затем взрывает. Как только серверное HP падает к порогу,
+// машина ГЛОХНЕТ: HP клампится на STALL_HEALTH (выше порога пожара —
+// восстановление HP тушит уже занявшийся клиентский огонь), двигатель
+// глушится и не заводится до repair(). Единственное, что сервер физически не
+// перехватывает, — мгновенный локальный подрыв взрывчаткой вплотную (клиент
+// успевает отыграть смерть до ответа сервера).
+//
 // КОНТРАКТ: серверные изменения HP/ремонт — только через сервис; прямой
 // vehicle.setHealth() мимо него валидатор посчитает читерским ростом.
 class VehicleService final : public IService
 {
   public:
+    // Порог «заглохла»: с запасом выше клиентского порога пожара (250).
+    static constexpr float STALL_HEALTH = 300.0f;
+
     void bind(IVehiclesComponent *vehicles, PlayerLocationService &location);
 
     // --- источник правды ---
@@ -35,14 +46,15 @@ class VehicleService final : public IService
     int getSeat(int playerId) const;          // -1 — не в машине; 0 — водитель
     int getDriver(int vehicleId) const;       // id водителя или -1
     float getHealth(int vehicleId) const;     // серверное HP машины
+    bool isStalled(int vehicleId) const;      // заглохла (HP добит до порога)
 
     // --- серверные операции ---
     void setHealth(IVehicle &vehicle, float health);
-    void repair(IVehicle &vehicle); // полный ремонт: HP 1000 + визуал
+    void repair(IVehicle &vehicle); // полный ремонт: HP 1000 + визуал + снимает «заглохла»
     // Серверно-авторитетный урон машине (стрельба: клиент водителя чужих пуль не
     // видит при lagcomp — урон применяет сервер; модель ровно как HP игрока).
     void applyDamage(IVehicle &vehicle, float amount);
-    void setEngine(IVehicle &vehicle, bool on);
+    void setEngine(IVehicle &vehicle, bool on); // заглохшую завести нельзя (сначала repair)
     void setLocked(IVehicle &vehicle, bool locked);
 
     // Байпас валидации unoccupied-синка для машины, которую легально двигает
@@ -93,6 +105,7 @@ class VehicleService final : public IService
         float health = 1000.0f; // серверное HP
         int driverId = -1;      // обратный индекс «машина -> водитель»
         bool editBypass = false; // машину двигает сервер (редактор) — синк не валидируем
+        bool stalled = false;   // заглохла: HP на клампе, двигатель не заводится
         TimePoint lastChange;   // грейс после серверного изменения
         TimePoint lastFlag;     // rate limit нарушений
     };
@@ -106,6 +119,10 @@ class VehicleService final : public IService
     // Санкция «машину могли починить легально» (мод-шоп, Pay'n'Spray).
     void sanctionRepair(int vehicleId, TimePoint now);
     bool isDriverOf(int playerId, const IVehicle &vehicle) const;
+    // HP у порога — кламп над пожаром + глушим (вызывать после падения HP).
+    void stallIfCritical(IVehicle &vehicle, VehicleState &st, TimePoint timeNow);
+    // Снять «заглохла» (ремонт/респаун): вернуть двигателю клиентский авто-режим.
+    void clearStall(IVehicle &vehicle, VehicleState &st);
 
     IVehiclesComponent *m_vehicles = nullptr;
     PlayerLocationService *m_location = nullptr;

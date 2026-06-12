@@ -68,8 +68,6 @@ FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister
     // КОНКРЕТНЫЕ подопечные организации — их лидеров ранг назначает через
     // /gov. Банки городов — тоже фракции; деньги организаций лежат «в банке»
     // (бюджет), зарплатные чеки уходят на счета BankService.
-    m_factionService.registerFaction(3, "Полиция Сан-Фиерро", 1);
-    m_factionService.registerColour(3, Colour(70, 130, 180));
     m_factionService.registerFaction(5, "Банк Лос-Сантоса", 1);
     m_factionService.registerColour(5, Colour(46, 139, 87));
     m_factionService.registerFaction(6, "Банк Сан-Фиерро", 1);

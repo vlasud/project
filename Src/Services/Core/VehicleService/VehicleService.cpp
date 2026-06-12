@@ -2,12 +2,14 @@
 
 #include "glm/geometric.hpp"
 #include <chrono>
+#include <cmath>
 #include <fmt/format.h>
 
 namespace
 {
 // Допуск на дрожание float HP между клиентом и сервером.
 constexpr float HEALTH_EPS = 5.0f;
+
 
 // Грейс после серверного setHealth/repair: клиент применяет RPC.
 constexpr std::chrono::milliseconds SYNC_GRACE{1500};
@@ -83,6 +85,7 @@ void VehicleService::setHealth(IVehicle &vehicle, float health)
     st.health = health < 0.0f ? 0.0f : health;
     st.lastChange = now();
     vehicle.setHealth(st.health);
+    stallIfCritical(vehicle, st, now());
 }
 
 void VehicleService::repair(IVehicle &vehicle)
@@ -91,6 +94,7 @@ void VehicleService::repair(IVehicle &vehicle)
     st.health = 1000.0f;
     st.lastChange = now();
     vehicle.repair(); // полный ремонт: HP + визуальные повреждения
+    clearStall(vehicle, st);
 }
 
 void VehicleService::applyDamage(IVehicle &vehicle, float amount)
@@ -105,13 +109,54 @@ void VehicleService::applyDamage(IVehicle &vehicle, float amount)
         st.health = 0.0f;
     st.lastChange = now(); // грейс: честный водитель применит setHealth и сойдётся
     vehicle.setHealth(st.health);
+    stallIfCritical(vehicle, st, now());
 }
 
 void VehicleService::setEngine(IVehicle &vehicle, bool on)
 {
+    if (on && m_vehicleState[vehicle.getID()].stalled)
+        return; // заглохшую не завести — сначала repair()
     VehicleParams params = vehicle.getParams();
     params.engine = on ? 1 : 0;
     vehicle.setParams(params);
+}
+
+void VehicleService::stallIfCritical(IVehicle &vehicle, VehicleState &st, TimePoint timeNow)
+{
+    if (st.health > STALL_HEALTH)
+        return;
+    // Машины не взрываются ВООБЩЕ: ниже ~250 клиент поджигает и затем
+    // взрывает. Держим HP над порогом пожара (восстановление HP тушит уже
+    // занявшийся огонь) и глушим двигатель — ездить на добитой нельзя.
+    st.health = STALL_HEALTH;
+    st.lastChange = timeNow;
+    vehicle.setHealth(STALL_HEALTH);
+    if (!st.stalled)
+    {
+        st.stalled = true;
+        VehicleParams params = vehicle.getParams();
+        params.engine = 0;
+        vehicle.setParams(params);
+    }
+}
+
+void VehicleService::clearStall(IVehicle &vehicle, VehicleState &st)
+{
+    if (!st.stalled)
+        return;
+    st.stalled = false;
+    // Возвращаем двигателю клиентский авто-режим (-1): заводится при посадке,
+    // как обычная машина. Явная единица оставила бы её заведённой без водителя.
+    VehicleParams params = vehicle.getParams();
+    params.engine = -1;
+    vehicle.setParams(params);
+}
+
+bool VehicleService::isStalled(int vehicleId) const
+{
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE)
+        return false;
+    return m_vehicleState[vehicleId].stalled;
 }
 
 void VehicleService::setLocked(IVehicle &vehicle, bool locked)
@@ -145,6 +190,8 @@ void VehicleService::sanctionRepair(int vehicleId, TimePoint timeNow)
     VehicleState &st = m_vehicleState[vehicleId];
     st.health = 1000.0f;
     st.lastChange = timeNow;
+    if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(vehicleId) : nullptr)
+        clearStall(*vehicle, st); // починенная снова заводится
 }
 
 bool VehicleService::isDriverOf(int playerId, const IVehicle &vehicle) const
@@ -201,10 +248,20 @@ VehicleService::Outcome VehicleService::verifyHealth(IPlayer &player, TimePoint 
 
     const float reported = vehicle->getHealth(); // заявление клиента водителя
 
+    // Мусорный float (NaN отсеялся бы сравнением ниже, но -inf прошёл бы в
+    // принятие и осел в серверном HP) — откат на серверную правду.
+    if (!std::isfinite(reported) || reported < 0.0f)
+    {
+        vehicle->setHealth(st.health);
+        st.lastChange = timeNow;
+        return outcome;
+    }
+
     if (reported <= st.health + HEALTH_EPS)
     {
         // Снижение (урон) или совпадение — принимаем как новую правду.
         st.health = reported;
+        stallIfCritical(*vehicle, st, timeNow); // у порога пожара — кламп + глушим
         return outcome;
     }
 
@@ -385,6 +442,7 @@ void VehicleService::onVehicleRespawn(IVehicle &vehicle)
     st.exists = true;
     st.health = 1000.0f;
     st.lastChange = now();
+    clearStall(vehicle, st); // респаун — машина снова целая и заводится
 }
 
 void VehicleService::onVehicleDeath(IVehicle &vehicle)

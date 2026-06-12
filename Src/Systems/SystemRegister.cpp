@@ -14,6 +14,7 @@
 #include "Systems/FactionSystem/FactionSystem.h"
 #include "Systems/Factions/PoliceLasVenturasSystem/PoliceLasVenturasSystem.h"
 #include "Systems/Factions/PoliceLosSantosSystem/PoliceLosSantosSystem.h"
+#include "Systems/Factions/PoliceSanFierroSystem/PoliceSanFierroSystem.h"
 #include "Systems/Factions/PresidentAdministrationSystem/PresidentAdministrationSystem.h"
 #include "Systems/Core/GameTextSystem/GameTextSystem.h"
 #include "Systems/Core/GangZoneEditorSystem/GangZoneEditorSystem.h"
@@ -131,6 +132,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // до FactionSystem::initialize (он грузит ранги и создаёт пикапы баз).
     m_systems.push_back(std::make_unique<PresidentAdministrationSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PoliceLosSantosSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PoliceSanFierroSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PoliceLasVenturasSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<BankSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ElectionSystem>(core, serviceRegister));
