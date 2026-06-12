@@ -135,6 +135,59 @@ static const auto &getUtf8First()
     return table;
 }
 
+// Обратная таблица строится сканом прямой — гарантирует консистентный
+// roundtrip utf8 -> cp1251 -> utf8 для всех отображаемых символов.
+static const std::array<uint32_t, 256> &getCp1251ToUnicode()
+{
+    static const std::array<uint32_t, 256> table = []
+    {
+        std::array<uint32_t, 256> t{};
+        for (uint32_t i = 0; i < 0x80; ++i)
+            t[i] = i;
+        for (uint32_t i = 0x80; i < 0x100; ++i)
+            t[i] = '?';
+
+        const auto &lut = getCp1251Lut();
+        for (uint32_t cp = 0x80; cp <= 0xFFFF; ++cp)
+        {
+            const unsigned char b = lut[cp];
+            if (b >= 0x80 && t[b] == '?')
+                t[b] = cp;
+        }
+        return t;
+    }();
+    return table;
+}
+
+std::string Encoding::cp1251Toutf8(std::string_view input)
+{
+    const auto &table = getCp1251ToUnicode();
+
+    std::string output;
+    output.reserve(input.size() * 2); // кириллица — 2 байта в utf-8
+
+    for (const char raw : input)
+    {
+        const uint32_t cp = table[static_cast<unsigned char>(raw)];
+        if (cp <= 0x7F)
+        {
+            output += static_cast<char>(cp);
+        }
+        else if (cp <= 0x7FF)
+        {
+            output += static_cast<char>(0xC0 | (cp >> 6));
+            output += static_cast<char>(0x80 | (cp & 0x3F));
+        }
+        else
+        {
+            output += static_cast<char>(0xE0 | (cp >> 12));
+            output += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            output += static_cast<char>(0x80 | (cp & 0x3F));
+        }
+    }
+    return output;
+}
+
 std::string Encoding::utf8Tocp1251(std::string_view input)
 {
     std::string output;

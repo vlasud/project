@@ -9,6 +9,9 @@
 #include "Systems/Core/ClassSelectionSystem/ClassSelectionSystem.h"
 #include "Systems/Core/DebugCameraSystem/DebugCameraSystem.h"
 #include "Systems/Core/EditorSystem/EditorSystem.h"
+#include "Systems/BankSystem/BankSystem.h"
+#include "Systems/ElectionSystem/ElectionSystem.h"
+#include "Systems/FactionSystem/FactionSystem.h"
 #include "Systems/Core/GameTextSystem/GameTextSystem.h"
 #include "Systems/Core/GangZoneEditorSystem/GangZoneEditorSystem.h"
 #include "Systems/Core/GangZoneSystem/GangZoneSystem.h"
@@ -118,6 +121,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // интерьер/мир точки спавна своим сохранённым местом.
     m_systems.push_back(std::make_unique<SpectateSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
+    // FactionSystem после auth: подписки на сессию (членство грузится по её
+    // старту). Конкретные фракции регистрируются после неё.
+    m_systems.push_back(std::make_unique<FactionSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<BankSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<ElectionSystem>(core, serviceRegister));
     // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до
     // того, как /camera начнёт им пользоваться.
     m_systems.push_back(std::make_unique<CameraSystem>(core, serviceRegister));

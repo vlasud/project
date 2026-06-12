@@ -2,6 +2,9 @@
 
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
 #include "Services/Core/AttachmentService/AttachmentService.h"
+#include "Services/BankService/BankService.h"
+#include "Services/ElectionService/ElectionService.h"
+#include "Services/FactionService/FactionService.h"
 #include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/CameraService/CameraService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
@@ -78,5 +81,8 @@ void ServiceRegister::registerServices()
     registerService<PlayerMoneyService>();
     registerService<PlayerSpawnService>();
     registerService<PlayerSessionService>();
+    registerService<BankService>();
+    registerService<FactionService>();
+    registerService<ElectionService>();
     registerService<PlayerAuthService>();
 }
