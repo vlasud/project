@@ -55,6 +55,7 @@
 #include "Systems/Core/TextDrawSystem/TextDrawSystem.h"
 #include "Systems/Core/TextLabelSystem/TextLabelSystem.h"
 #include "Systems/Core/TimerSystem/TimerSystem.h"
+#include "Systems/Core/VehicleControlSystem/VehicleControlSystem.h"
 #include "Systems/Core/VehicleDebugSystem/VehicleDebugSystem.h"
 #include "Systems/Core/WeaponDebugSystem/WeaponDebugSystem.h"
 #include "Systems/Core/VehicleSystem/VehicleSystem.h"
@@ -112,6 +113,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<PlayerDialogSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerCommandSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerKeySystem>(core, serviceRegister));
+    // VehicleControlSystem после PlayerKeySystem и VehicleSystem: на момент работы
+    // оба сервиса уже привязаны (VehicleService::bind в initialize VehicleSystem),
+    // а клавишный поток маршрутизируется PlayerKeySystem.
+    m_systems.push_back(std::make_unique<VehicleControlSystem>(core, serviceRegister));
     // TextDrawSystem раньше редактора: роутер кликов должен существовать до того,
     // как редактор начнёт регистрировать обработчики.
     m_systems.push_back(std::make_unique<TextDrawSystem>(core, serviceRegister));

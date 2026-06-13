@@ -55,6 +55,7 @@ class VehicleService final : public IService
     // видит при lagcomp — урон применяет сервер; модель ровно как HP игрока).
     void applyDamage(IVehicle &vehicle, float amount);
     void setEngine(IVehicle &vehicle, bool on); // заглохшую завести нельзя (сначала repair)
+    void setLights(IVehicle &vehicle, bool on); // фары можно переключать всегда
     void setLocked(IVehicle &vehicle, bool locked);
 
     // Байпас валидации unoccupied-синка для машины, которую легально двигает

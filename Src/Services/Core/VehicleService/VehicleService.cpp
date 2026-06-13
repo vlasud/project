@@ -121,6 +121,14 @@ void VehicleService::setEngine(IVehicle &vehicle, bool on)
     vehicle.setParams(params);
 }
 
+void VehicleService::setLights(IVehicle &vehicle, bool on)
+{
+    // Фары не зависят от «заглохла»: их можно жечь и на добитой машине.
+    VehicleParams params = vehicle.getParams();
+    params.lights = on ? 1 : 0;
+    vehicle.setParams(params);
+}
+
 void VehicleService::stallIfCritical(IVehicle &vehicle, VehicleState &st, TimePoint timeNow)
 {
     if (st.health > STALL_HEALTH)
