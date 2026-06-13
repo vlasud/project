@@ -97,13 +97,19 @@ class FactionSystem : public BaseSystem
     void confirmPayOrder(IPlayer &player);
     void executePayOrder(IPlayer &player);
 
-    // Меню куратора /gov: подопечные фракции -> назначить/снять лидера.
-    // Каждый колбэк перепроверяет canManage — доступ могли срезать.
+    // Меню куратора /gov: подопечные фракции -> назначить/снять лидера/уволить
+    // сотрудника. Каждый колбэк перепроверяет canManage — доступ могли срезать.
     void showGovMenu(IPlayer &player);
     void showGovFactionMenu(IPlayer &player, int factionId);
     void showGovAppointInput(IPlayer &player, int factionId);
     void showGovAppointSalaryInput(IPlayer &player, int factionId, int targetId, std::uint32_t targetSerial);
     void govDismissLeader(IPlayer &player, int factionId);
+    // Увольнение куратором: список членов подопечной ОНЛАЙН (без ручного ввода
+    // id) -> подтверждение -> removeMember (полное исключение). Куратор выше
+    // внутрифракционного запрета — может уволить ЛЮБОГО, включая лидера. Каждый
+    // колбэк перепроверяет canManage и serial выбранного.
+    void showGovMembersMenu(IPlayer &player, int factionId);
+    void showGovDismissConfirm(IPlayer &player, int factionId, int targetId, std::uint32_t targetSerial);
 
     // Дев-меню /fdev (одна команда — диалоги вместо россыпи команд).
     enum class DevAction

@@ -992,7 +992,7 @@ void FactionSystem::showGovFactionMenu(IPlayer &player, int factionId)
     Dialog dialog;
     dialog.style = DialogStyle_LIST;
     dialog.title = u(faction->name);
-    dialog.body = u("Назначить лидера\nСнять лидера");
+    dialog.body = u("Назначить лидера\nСнять лидера\nУволить сотрудника");
     dialog.leftButton = u("Выбрать");
     dialog.rightButton = u("Назад");
 
@@ -1013,6 +1013,8 @@ void FactionSystem::showGovFactionMenu(IPlayer &player, int factionId)
                                  showGovAppointInput(*player, factionId);
                              else if (listItem == 1)
                                  govDismissLeader(*player, factionId);
+                             else if (listItem == 2)
+                                 showGovMembersMenu(*player, factionId);
                          });
 }
 
@@ -1137,6 +1139,160 @@ void FactionSystem::govDismissLeader(IPlayer &player, int factionId)
     player.sendClientMessage(
         INFO_COLOUR, u(fmt::format("{} снят с поста лидера фракции «{}»", leader->getName().to_string(), factionName)));
     leader->sendClientMessage(INFO_COLOUR, u(fmt::format("Вы сняты с поста лидера фракции «{}»", factionName)));
+}
+
+void FactionSystem::showGovMembersMenu(IPlayer &player, int factionId)
+{
+    const FactionService::Faction *faction = m_factionService.getFaction(factionId);
+    if (!faction || !m_factionService.canManage(player.getID(), factionId))
+        return;
+
+    // Собираем членов подопечной ОНЛАЙН и параллельно их id — список индексируется
+    // в колбэке, а порядок entries() между показом и ответом не гарантирован,
+    // поэтому id фиксируем здесь по значению (и заново сверяем в подтверждении).
+    // Куратор сам в подопечной не состоит, но самого себя из списка исключаем на
+    // всякий случай — уволить себя он не должен.
+    const int curatorId = player.getID();
+    std::vector<int> memberIds;
+    std::string body = "Имя\tРанг\n";
+    for (IPlayer *member : m_core.getPlayers().entries())
+    {
+        const int memberId = member->getID();
+        if (memberId == curatorId)
+            continue;
+        if (m_factionService.getMemberFaction(memberId) != faction->id)
+            continue;
+        const FactionService::Rank *rank = m_factionService.getMemberRank(memberId);
+        // Лидера помечаем — куратор уволит и его (это и есть смысл: снять-лидера
+        // оставляет в штате, а здесь полное исключение).
+        const char *marker = m_factionService.isLeader(memberId) ? " [лидер]" : "";
+        body += fmt::format("{}{}\t{}\n", member->getName().to_string(), marker, rank ? rank->name : "?");
+        memberIds.push_back(memberId);
+    }
+
+    if (memberIds.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("В подопечной фракции нет сотрудников в сети"));
+        showGovFactionMenu(player, factionId);
+        return;
+    }
+    body.pop_back(); // убрать хвостовой '\n' — иначе пустая строка-фантом в tablist
+
+    Dialog dialog;
+    dialog.style = DialogStyle_TABLIST_HEADERS;
+    dialog.title = u(fmt::format("{} — увольнение", faction->name));
+    dialog.body = u(body);
+    dialog.leftButton = u("Уволить");
+    dialog.rightButton = u("Назад");
+
+    m_dialogService.show(
+        player, dialog,
+        [this, playerId = player.getID(), factionId, memberIds = std::move(memberIds)](DialogResponse response,
+                                                                                       int listItem, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showGovFactionMenu(*player, factionId);
+                return;
+            }
+            // Право куратора могли срезать, пока диалог был открыт.
+            if (!m_factionService.canManage(playerId, factionId))
+                return;
+            // Индекс маппим через снимок id из лямбды — НЕ итерируем entries()
+            // заново (её порядок мог измениться). Bounds-check обязателен.
+            if (listItem < 0 || static_cast<std::size_t>(listItem) >= memberIds.size())
+                return;
+            const int targetId = memberIds[listItem];
+            const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
+            if (!targetSession)
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Сотрудник уже не в сети"));
+                showGovMembersMenu(*player, factionId);
+                return;
+            }
+            showGovDismissConfirm(*player, factionId, targetId, targetSession->serial);
+        });
+}
+
+void FactionSystem::showGovDismissConfirm(IPlayer &player, int factionId, int targetId, std::uint32_t targetSerial)
+{
+    const FactionService::Faction *faction = m_factionService.getFaction(factionId);
+    if (!faction || !m_factionService.canManage(player.getID(), factionId))
+        return;
+
+    // Serial-guard: в слот выбранного мог сесть другой игрок, пока шёл список.
+    // И цель должна всё ещё состоять ИМЕННО в этой подопечной фракции.
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
+    if (!target || !targetSession || targetSession->serial != targetSerial || targetId == player.getID() ||
+        m_factionService.getMemberFaction(targetId) != faction->id)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Сотрудник уже недоступен"));
+        showGovMembersMenu(player, factionId);
+        return;
+    }
+
+    const FactionService::Rank *rank = m_factionService.getMemberRank(targetId);
+    const char *marker = m_factionService.isLeader(targetId) ? " (лидер фракции)" : "";
+
+    Dialog dialog;
+    dialog.style = DialogStyle_MSGBOX;
+    dialog.title = u("Увольнение сотрудника");
+    dialog.body = u(fmt::format("Уволить {}{} (ранг «{}») из фракции «{}»?\nЭто полное исключение из организации.",
+                                target->getName().to_string(), marker, rank ? rank->name : "?", faction->name));
+    dialog.leftButton = u("Уволить");
+    dialog.rightButton = u("Назад");
+
+    m_dialogService.show(
+        player, dialog,
+        [this, playerId = player.getID(), factionId, targetId, targetSerial](DialogResponse response, int, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showGovMembersMenu(*player, factionId);
+                return;
+            }
+            // Перепроверяем право куратора заново — могли срезать при открытом диалоге.
+            if (!m_factionService.canManage(playerId, factionId))
+                return;
+
+            const FactionService::Faction *faction = m_factionService.getFaction(factionId);
+            if (!faction)
+                return;
+            // Перепроверяем цель: serial её сессии (в слот мог сесть другой игрок),
+            // что она не сам куратор, и что она всё ещё член ИМЕННО этой подопечной.
+            IPlayer *target = m_core.getPlayers().get(targetId);
+            const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
+            if (!target || !targetSession || targetSession->serial != targetSerial || targetId == playerId ||
+                m_factionService.getMemberFaction(targetId) != faction->id)
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Сотрудник уже недоступен"));
+                showGovMembersMenu(*player, factionId);
+                return;
+            }
+
+            // Полное исключение: removeMember снимает и членство, и флаг лидера,
+            // пишет в БД. Куратор выше внутрифракционного запрета «лидера увольняет
+            // только администрация» — здесь он и есть эта администрация.
+            const std::string targetName = target->getName().to_string();
+            if (!m_factionService.removeMember(*target))
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Не вышло уволить сотрудника"));
+                showGovMembersMenu(*player, factionId);
+                return;
+            }
+            player->sendClientMessage(
+                INFO_COLOUR, u(fmt::format("{} уволен из фракции «{}»", targetName, faction->name)));
+            target->sendClientMessage(INFO_COLOUR, u(fmt::format("Вы уволены из фракции «{}»", faction->name)));
+            // Возврат к обновлённому списку — навигация без тупика.
+            showGovMembersMenu(*player, factionId);
+        });
 }
 
 // ------------------------------------------------------------------ дев-меню /fdev
