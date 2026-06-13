@@ -12,6 +12,7 @@
 #include "player.hpp"
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 
 // Привод базовой системы фракций:
@@ -54,10 +55,32 @@ class FactionSystem : public BaseSystem
 
     // Команды лидера по людям.
     void inviteMember(IPlayer &leader, int targetId);
-    void showInviteSalaryInput(IPlayer &leader, int targetId, std::uint32_t targetSerial);
+    // Проверка цели найма (право Invite, цель онлайн и вне фракции). false —
+    // отказ с сообщением; общая для /invite и кнопки «Нанять сотрудника».
+    bool validateHireTarget(IPlayer &leader, int targetId);
+    // Найм — единая цепочка: проверка цели -> выбор ранга -> ввод зарплаты ->
+    // setMember. id вводится только в showHireInput (точка с ручным id), либо
+    // приходит из /invite. Каждый шаг тащит targetSerial: в слот мог сесть
+    // другой игрок, пока диалоги открыты.
+    void showHireInput(IPlayer &leader);
+    void showHireRankPick(IPlayer &leader, int targetId, std::uint32_t targetSerial);
+    void showHireSalaryInput(IPlayer &leader, int targetId, std::uint32_t targetSerial, std::int64_t rankId);
     void uninviteMember(IPlayer &leader, int targetId);
-    void showSetRankDialog(IPlayer &leader, int targetId);
-    void showSetSalaryDialog(IPlayer &leader, int targetId);
+    // onClose (если задан) вызывается по завершении/отмене диалога — карточка
+    // сотрудника передаёт сюда возврат к себе, чтобы не было тупика; команды
+    // /setrank, /setsalary вызывают без него (диалог просто закрывается).
+    void showSetRankDialog(IPlayer &leader, int targetId, std::function<void(IPlayer &)> onClose = {});
+    void showSetSalaryDialog(IPlayer &leader, int targetId, std::function<void(IPlayer &)> onClose = {});
+
+    // Меню «Сотрудники»: список членов онлайн -> карточка сотрудника (ранг/
+    // зарплата/увольнение) без ручного ввода id (выбран из списка). Каждый
+    // колбэк перепроверяет лидерство и serial выбранного.
+    void showMembersMenu(IPlayer &player);
+    void showMemberCard(IPlayer &player, int targetId, std::uint32_t targetSerial);
+    // «Мой ранг»: смена ранга на самого себя (та же логика, что setMemberRank).
+    void showMyRankMenu(IPlayer &player);
+    // Пресеты прав при создании ранга (рядовой/офицер/заместитель/вручную).
+    void showRankPresetMenu(IPlayer &player, std::int64_t rankId);
 
     // Лидерский UI. Каждый колбэк перепроверяет лидерство — лидера могли
     // снять, пока диалог был открыт.

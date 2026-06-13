@@ -421,45 +421,100 @@ void FactionSystem::loadMembership(IPlayer &player, const PlayerSessionService::
 
 // ------------------------------------------------------------------ команды лидера по людям
 
+// Валидация цели найма (общая для /invite и кнопки «Нанять сотрудника»);
+// успех — ведём в единую цепочку выбора ранга. false — отказ с сообщением.
+bool FactionSystem::validateHireTarget(IPlayer &leader, int targetId)
+{
+    if (!permittedFaction(leader, FactionService::PERM_INVITE))
+        return false;
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    if (!target)
+    {
+        leader.sendClientMessage(ERROR_COLOUR, u("Игрок не найден"));
+        return false;
+    }
+    if (m_factionService.getMemberFaction(targetId) != FactionService::NO_FACTION)
+    {
+        leader.sendClientMessage(ERROR_COLOUR, u("Игрок уже состоит во фракции"));
+        return false;
+    }
+    const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
+    if (!targetSession)
+    {
+        leader.sendClientMessage(ERROR_COLOUR, u("Игрок ещё не авторизован"));
+        return false;
+    }
+    return true;
+}
+
 void FactionSystem::inviteMember(IPlayer &leader, int targetId)
+{
+    // /invite [id] — шорткат: сразу в ту же цепочку (id уже задан).
+    if (!validateHireTarget(leader, targetId))
+        return;
+    showHireRankPick(leader, targetId, m_sessionService.get(targetId)->serial);
+}
+
+void FactionSystem::showHireInput(IPlayer &leader)
+{
+    // Единственное место с ручным вводом id — отсюда цепочка найма.
+    if (!permittedFaction(leader, FactionService::PERM_INVITE))
+        return;
+
+    Dialog dialog;
+    dialog.style = DialogStyle_INPUT;
+    dialog.title = u("Найм сотрудника");
+    dialog.body = u("Введите id игрока для приёма во фракцию");
+    dialog.leftButton = u("Далее");
+    dialog.rightButton = u("Назад");
+
+    m_dialogService.show(leader, dialog,
+                         [this, leaderId = leader.getID()](DialogResponse response, int, StringView text)
+                         {
+                             IPlayer *leader = m_core.getPlayers().get(leaderId);
+                             if (!leader)
+                                 return;
+                             if (response != DialogResponse_Left)
+                             {
+                                 showMembersMenu(*leader);
+                                 return;
+                             }
+                             const auto targetId = parseNumber(text);
+                             if (!targetId || !validateHireTarget(*leader, static_cast<int>(*targetId)))
+                             {
+                                 showHireInput(*leader);
+                                 return;
+                             }
+                             const int id = static_cast<int>(*targetId);
+                             showHireRankPick(*leader, id, m_sessionService.get(id)->serial);
+                         });
+}
+
+void FactionSystem::showHireRankPick(IPlayer &leader, int targetId, std::uint32_t targetSerial)
 {
     const FactionService::Faction *faction = permittedFaction(leader, FactionService::PERM_INVITE);
     if (!faction)
         return;
     IPlayer *target = m_core.getPlayers().get(targetId);
     if (!target)
-    {
-        leader.sendClientMessage(ERROR_COLOUR, u("Игрок не найден"));
         return;
-    }
-    if (m_factionService.getMemberFaction(targetId) != FactionService::NO_FACTION)
-    {
-        leader.sendClientMessage(ERROR_COLOUR, u("Игрок уже состоит во фракции"));
-        return;
-    }
-    const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
-    if (!targetSession)
-    {
-        leader.sendClientMessage(ERROR_COLOUR, u("Игрок ещё не авторизован"));
-        return;
-    }
-    showInviteSalaryInput(leader, targetId, targetSession->serial);
-}
 
-void FactionSystem::showInviteSalaryInput(IPlayer &leader, int targetId, std::uint32_t targetSerial)
-{
+    // Ранги пересобираем здесь же — список индексируется в колбэке.
+    std::string body;
+    for (const FactionService::Rank &rank : faction->ranks)
+        body += fmt::format("{}\n", rank.name);
+    body.pop_back();
+
     Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Найм — зарплата");
-    dialog.body = u(fmt::format("Укажите персональную зарплату нанимаемого (0..{}).\n"
-                                "Зарплата платится из бюджета фракции.",
-                                FactionService::MAX_SALARY));
-    dialog.leftButton = u("Нанять");
+    dialog.style = DialogStyle_LIST;
+    dialog.title = u(fmt::format("Найм {} — ранг", target->getName().to_string()));
+    dialog.body = u(body);
+    dialog.leftButton = u("Далее");
     dialog.rightButton = u("Отмена");
 
     m_dialogService.show(
         leader, dialog,
-        [this, leaderId = leader.getID(), targetId, targetSerial](DialogResponse response, int, StringView text)
+        [this, leaderId = leader.getID(), targetId, targetSerial](DialogResponse response, int listItem, StringView)
         {
             IPlayer *leader = m_core.getPlayers().get(leaderId);
             if (!leader || response != DialogResponse_Left)
@@ -477,17 +532,60 @@ void FactionSystem::showInviteSalaryInput(IPlayer &leader, int targetId, std::ui
                 leader->sendClientMessage(ERROR_COLOUR, u("Игрок недоступен для найма"));
                 return;
             }
+            if (listItem < 0 || static_cast<std::size_t>(listItem) >= faction->ranks.size())
+                return;
+            showHireSalaryInput(*leader, targetId, targetSerial, faction->ranks[listItem].id);
+        });
+}
+
+void FactionSystem::showHireSalaryInput(IPlayer &leader, int targetId, std::uint32_t targetSerial, std::int64_t rankId)
+{
+    Dialog dialog;
+    dialog.style = DialogStyle_INPUT;
+    dialog.title = u("Найм — зарплата");
+    dialog.body = u(fmt::format("Укажите персональную зарплату нанимаемого (0..{}).\n"
+                                "Зарплата платится из бюджета фракции.",
+                                FactionService::MAX_SALARY));
+    dialog.leftButton = u("Нанять");
+    dialog.rightButton = u("Отмена");
+
+    m_dialogService.show(
+        leader, dialog,
+        [this, leaderId = leader.getID(), targetId, targetSerial, rankId](DialogResponse response, int, StringView text)
+        {
+            IPlayer *leader = m_core.getPlayers().get(leaderId);
+            if (!leader || response != DialogResponse_Left)
+                return;
+            const FactionService::Faction *faction = permittedFaction(*leader, FactionService::PERM_INVITE);
+            if (!faction)
+                return;
+
+            // Serial-guard цели: в её слот мог сесть другой игрок.
+            IPlayer *target = m_core.getPlayers().get(targetId);
+            const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
+            if (!target || !targetSession || targetSession->serial != targetSerial ||
+                m_factionService.getMemberFaction(targetId) != FactionService::NO_FACTION)
+            {
+                leader->sendClientMessage(ERROR_COLOUR, u("Игрок недоступен для найма"));
+                return;
+            }
+            // Выбранный ранг могли удалить, пока диалог зарплаты был открыт.
+            const FactionService::Rank *rank = m_factionService.getRank(faction->id, rankId);
+            if (!rank)
+            {
+                leader->sendClientMessage(ERROR_COLOUR, u("Выбранный ранг уже не существует"));
+                return;
+            }
 
             const auto salary = parseNumber(text);
             if (!salary || *salary < 0 || *salary > FactionService::MAX_SALARY)
             {
                 leader->sendClientMessage(ERROR_COLOUR, u("Некорректная зарплата"));
-                showInviteSalaryInput(*leader, targetId, targetSerial);
+                showHireSalaryInput(*leader, targetId, targetSerial, rankId);
                 return;
             }
 
-            const FactionService::Rank *rank = m_factionService.defaultRank(faction->id);
-            if (!rank || !m_factionService.setMember(*target, faction->id, rank->id, false, *salary))
+            if (!m_factionService.setMember(*target, faction->id, rankId, false, *salary))
                 return;
             leader->sendClientMessage(INFO_COLOUR, u(fmt::format("{} принят во фракцию: ранг «{}», зарплата ${}",
                                                                  target->getName().to_string(), rank->name, *salary)));
@@ -496,7 +594,7 @@ void FactionSystem::showInviteSalaryInput(IPlayer &leader, int targetId, std::ui
         });
 }
 
-void FactionSystem::showSetSalaryDialog(IPlayer &leader, int targetId)
+void FactionSystem::showSetSalaryDialog(IPlayer &leader, int targetId, std::function<void(IPlayer &)> onClose)
 {
     const FactionService::Faction *faction = permittedFaction(leader, FactionService::PERM_INVITE);
     if (!faction)
@@ -521,12 +619,18 @@ void FactionSystem::showSetSalaryDialog(IPlayer &leader, int targetId)
 
     m_dialogService.show(
         leader, dialog,
-        [this, leaderId = leader.getID(), targetId, targetSerial = targetSession->serial](DialogResponse response, int,
-                                                                                          StringView text)
+        [this, leaderId = leader.getID(), targetId, targetSerial = targetSession->serial, onClose](
+            DialogResponse response, int, StringView text)
         {
             IPlayer *leader = m_core.getPlayers().get(leaderId);
-            if (!leader || response != DialogResponse_Left)
+            if (!leader)
                 return;
+            if (response != DialogResponse_Left) // отмена — возврат туда, откуда пришли
+            {
+                if (onClose)
+                    onClose(*leader);
+                return;
+            }
             const FactionService::Faction *faction = permittedFaction(*leader, FactionService::PERM_INVITE);
             if (!faction)
                 return;
@@ -537,6 +641,8 @@ void FactionSystem::showSetSalaryDialog(IPlayer &leader, int targetId)
                 m_factionService.getMemberFaction(targetId) != faction->id)
             {
                 leader->sendClientMessage(ERROR_COLOUR, u("Игрок уже не в вашей фракции"));
+                if (onClose)
+                    onClose(*leader);
                 return;
             }
 
@@ -544,12 +650,14 @@ void FactionSystem::showSetSalaryDialog(IPlayer &leader, int targetId)
             if (!salary || !m_factionService.setMemberSalary(*target, *salary))
             {
                 leader->sendClientMessage(ERROR_COLOUR, u("Некорректная зарплата"));
-                showSetSalaryDialog(*leader, targetId);
+                showSetSalaryDialog(*leader, targetId, onClose); // повтор ввода, не теряя возврат
                 return;
             }
             leader->sendClientMessage(INFO_COLOUR,
                                       u(fmt::format("Зарплата {} теперь ${}", target->getName().to_string(), *salary)));
             target->sendClientMessage(INFO_COLOUR, u(fmt::format("Ваша зарплата теперь ${}", *salary)));
+            if (onClose)
+                onClose(*leader);
         });
 }
 
@@ -580,7 +688,7 @@ void FactionSystem::uninviteMember(IPlayer &leader, int targetId)
     target->sendClientMessage(INFO_COLOUR, u(fmt::format("Вы исключены из фракции «{}»", faction->name)));
 }
 
-void FactionSystem::showSetRankDialog(IPlayer &leader, int targetId)
+void FactionSystem::showSetRankDialog(IPlayer &leader, int targetId, std::function<void(IPlayer &)> onClose)
 {
     const FactionService::Faction *faction = leaderFaction(leader);
     if (!faction)
@@ -607,36 +715,231 @@ void FactionSystem::showSetRankDialog(IPlayer &leader, int targetId)
     dialog.leftButton = u("Назначить");
     dialog.rightButton = u("Отмена");
 
-    m_dialogService.show(leader, dialog,
-                         [this, leaderId = leader.getID(), targetId,
-                          targetSerial = targetSession->serial](DialogResponse response, int listItem, StringView)
-                         {
-                             IPlayer *leader = m_core.getPlayers().get(leaderId);
-                             if (!leader || response != DialogResponse_Left)
-                                 return;
-                             const FactionService::Faction *faction = leaderFaction(*leader);
-                             if (!faction)
-                                 return;
+    m_dialogService.show(
+        leader, dialog,
+        [this, leaderId = leader.getID(), targetId, targetSerial = targetSession->serial, onClose](
+            DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *leader = m_core.getPlayers().get(leaderId);
+            if (!leader)
+                return;
+            if (response != DialogResponse_Left) // отмена — возврат туда, откуда пришли
+            {
+                if (onClose)
+                    onClose(*leader);
+                return;
+            }
+            const FactionService::Faction *faction = leaderFaction(*leader);
+            if (!faction)
+                return;
 
-                             // Serial-guard цели: в её слот мог сесть другой игрок, пока диалог открыт.
-                             const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
-                             IPlayer *target = m_core.getPlayers().get(targetId);
-                             if (!target || !targetSession || targetSession->serial != targetSerial ||
-                                 m_factionService.getMemberFaction(targetId) != faction->id)
+            // Serial-guard цели: в её слот мог сесть другой игрок, пока диалог открыт.
+            const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
+            IPlayer *target = m_core.getPlayers().get(targetId);
+            if (!target || !targetSession || targetSession->serial != targetSerial ||
+                m_factionService.getMemberFaction(targetId) != faction->id)
+            {
+                leader->sendClientMessage(ERROR_COLOUR, u("Игрок уже не в вашей фракции"));
+                if (onClose)
+                    onClose(*leader);
+                return;
+            }
+            if (listItem < 0 || static_cast<std::size_t>(listItem) >= faction->ranks.size())
+            {
+                if (onClose)
+                    onClose(*leader);
+                return;
+            }
+
+            const FactionService::Rank &rank = faction->ranks[listItem];
+            if (!m_factionService.setMemberRank(*target, rank.id))
+                return;
+            leader->sendClientMessage(
+                INFO_COLOUR, u(fmt::format("{} назначен на ранг «{}»", target->getName().to_string(), rank.name)));
+            target->sendClientMessage(INFO_COLOUR, u(fmt::format("Ваш новый ранг — «{}»", rank.name)));
+            if (onClose)
+                onClose(*leader);
+        });
+}
+
+// ------------------------------------------------------------------ меню «Сотрудники»
+
+void FactionSystem::showMembersMenu(IPlayer &player)
+{
+    const FactionService::Faction *faction = leaderFaction(player);
+    if (!faction)
+        return;
+
+    // Собираем членов ОНЛАЙН и параллельно их id — список индексируется в
+    // колбэке, и порядок entries() между показом и ответом не гарантирован,
+    // поэтому id сохраняем здесь же (и заново сверяем в карточке).
+    std::vector<int> memberIds;
+    std::string body = "Имя\tРанг\tЗарплата\n";
+    for (IPlayer *member : m_core.getPlayers().entries())
+    {
+        const int memberId = member->getID();
+        if (m_factionService.getMemberFaction(memberId) != faction->id)
+            continue;
+        const FactionService::Rank *rank = m_factionService.getMemberRank(memberId);
+        body += fmt::format("{}\t{}\t${}\n", member->getName().to_string(), rank ? rank->name : "?",
+                            m_factionService.getMemberSalary(memberId));
+        memberIds.push_back(memberId);
+    }
+    body += "» Нанять сотрудника";
+
+    Dialog dialog;
+    dialog.style = DialogStyle_TABLIST_HEADERS;
+    dialog.title = u(fmt::format("{} — сотрудники", faction->name));
+    dialog.body = u(body);
+    dialog.leftButton = u("Выбрать");
+    dialog.rightButton = u("Назад");
+
+    m_dialogService.show(
+        player, dialog,
+        [this, playerId = player.getID(), memberIds = std::move(memberIds)](DialogResponse response, int listItem,
+                                                                            StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showLeaderMenu(*player);
+                return;
+            }
+            if (!m_factionService.isLeader(playerId))
+                return;
+            // Последняя строка — найм; всё, что выше, — выбранный сотрудник.
+            if (listItem < 0 || static_cast<std::size_t>(listItem) >= memberIds.size())
+            {
+                showHireInput(*player);
+                return;
+            }
+            const int targetId = memberIds[listItem];
+            const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
+            if (!targetSession)
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Сотрудник уже не в сети"));
+                showMembersMenu(*player);
+                return;
+            }
+            showMemberCard(*player, targetId, targetSession->serial);
+        });
+}
+
+void FactionSystem::showMemberCard(IPlayer &player, int targetId, std::uint32_t targetSerial)
+{
+    const FactionService::Faction *faction = leaderFaction(player);
+    if (!faction)
+        return;
+    // Serial-guard: в слот выбранного мог сесть другой игрок, пока шли диалоги.
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
+    if (!target || !targetSession || targetSession->serial != targetSerial ||
+        m_factionService.getMemberFaction(targetId) != faction->id)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Сотрудник уже не в вашей фракции"));
+        showMembersMenu(player);
+        return;
+    }
+
+    const FactionService::Rank *rank = m_factionService.getMemberRank(targetId);
+    Dialog dialog;
+    dialog.style = DialogStyle_LIST;
+    dialog.title = u(fmt::format("{} — ранг «{}», ${}", target->getName().to_string(), rank ? rank->name : "?",
+                                 m_factionService.getMemberSalary(targetId)));
+    dialog.body = u("Изменить ранг\nИзменить зарплату\nУволить");
+    dialog.leftButton = u("Выбрать");
+    dialog.rightButton = u("Назад");
+
+    m_dialogService.show(
+        player, dialog,
+        [this, playerId = player.getID(), targetId, targetSerial](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showMembersMenu(*player);
+                return;
+            }
+            const FactionService::Faction *faction = leaderFaction(*player);
+            if (!faction)
+                return;
+            // Перепроверка цели заново: операции ниже сверяют serial сами
+            // (showSetRankDialog/showSetSalaryDialog/uninviteMember), но карточка
+            // могла устареть — отсекаем сразу.
+            const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
+            if (!m_core.getPlayers().get(targetId) || !targetSession || targetSession->serial != targetSerial ||
+                m_factionService.getMemberFaction(targetId) != faction->id)
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Сотрудник уже не в вашей фракции"));
+                showMembersMenu(*player);
+                return;
+            }
+            // Возврат к карточке после ранга/зарплаты — навигация без тупика
+            // (serial цели операцией не меняется, карточка перепроверит сама).
+            auto backToCard = [this, targetId, targetSerial](IPlayer &p) { showMemberCard(p, targetId, targetSerial); };
+            switch (listItem)
+            {
+            case 0:
+                showSetRankDialog(*player, targetId, backToCard);
+                break;
+            case 1:
+                showSetSalaryDialog(*player, targetId, backToCard);
+                break;
+            case 2:
+                // Уволенного в карточку не вернуть — назад к списку сотрудников.
+                uninviteMember(*player, targetId);
+                showMembersMenu(*player);
+                break;
+            default:
+                break;
+            }
+        });
+}
+
+void FactionSystem::showMyRankMenu(IPlayer &player)
+{
+    const FactionService::Faction *faction = leaderFaction(player);
+    if (!faction)
+        return;
+
+    // Ранги пересобираем здесь — список индексируется в колбэке.
+    std::string body;
+    for (const FactionService::Rank &rank : faction->ranks)
+        body += fmt::format("{}\n", rank.name);
+    body.pop_back();
+
+    Dialog dialog;
+    dialog.style = DialogStyle_LIST;
+    dialog.title = u("Мой ранг");
+    dialog.body = u(body);
+    dialog.leftButton = u("Назначить");
+    dialog.rightButton = u("Назад");
+
+    m_dialogService.show(player, dialog,
+                         [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (!player)
+                                 return;
+                             if (response != DialogResponse_Left)
                              {
-                                 leader->sendClientMessage(ERROR_COLOUR, u("Игрок уже не в вашей фракции"));
+                                 showLeaderMenu(*player);
                                  return;
                              }
-                             if (listItem < 0 || static_cast<std::size_t>(listItem) >= faction->ranks.size())
+                             // Лидерство могли снять, ранги — измениться.
+                             const FactionService::Faction *faction = leaderFaction(*player);
+                             if (!faction || listItem < 0 ||
+                                 static_cast<std::size_t>(listItem) >= faction->ranks.size())
                                  return;
-
                              const FactionService::Rank &rank = faction->ranks[listItem];
-                             if (!m_factionService.setMemberRank(*target, rank.id))
+                             if (!m_factionService.setMemberRank(*player, rank.id))
                                  return;
-                             leader->sendClientMessage(
-                                 INFO_COLOUR,
-                                 u(fmt::format("{} назначен на ранг «{}»", target->getName().to_string(), rank.name)));
-                             target->sendClientMessage(INFO_COLOUR, u(fmt::format("Ваш новый ранг — «{}»", rank.name)));
+                             player->sendClientMessage(INFO_COLOUR,
+                                                       u(fmt::format("Ваш ранг теперь — «{}»", rank.name)));
                          });
 }
 
@@ -1152,7 +1455,8 @@ void FactionSystem::showLeaderMenu(IPlayer &player)
     Dialog dialog;
     dialog.style = DialogStyle_LIST;
     dialog.title = u(fmt::format("{} — бюджет ${}", faction->name, faction->budget));
-    dialog.body = u("Управление рангами\nПриказ о выплате зарплат\nИнформация о фракции");
+    // Порядок пунктов завязан на индексы в колбэке ниже — менять синхронно.
+    dialog.body = u("Сотрудники\nМой ранг\nУправление рангами\nПриказ о выплате зарплат\nИнформация о фракции");
     dialog.leftButton = u("Выбрать");
     dialog.rightButton = u("Закрыть");
 
@@ -1167,12 +1471,18 @@ void FactionSystem::showLeaderMenu(IPlayer &player)
                              switch (listItem)
                              {
                              case 0:
-                                 showRanksMenu(*player);
+                                 showMembersMenu(*player);
                                  break;
                              case 1:
-                                 confirmPayOrder(*player);
+                                 showMyRankMenu(*player);
                                  break;
                              case 2:
+                                 showRanksMenu(*player);
+                                 break;
+                             case 3:
+                                 confirmPayOrder(*player);
+                                 break;
+                             case 4:
                                  showFactionInfo(*player);
                                  break;
                              default:
@@ -1526,7 +1836,8 @@ void FactionSystem::showRankNameInput(IPlayer &player, std::int64_t rankId)
                                      showRanksMenu(*player);
                                      return;
                                  }
-                                 showRankMenu(*player, created->id);
+                                 // Сразу предлагаем пресет прав — частый случай быстрее ручного тоггла.
+                                 showRankPresetMenu(*player, created->id);
                              }
                              else
                              {
@@ -1534,6 +1845,76 @@ void FactionSystem::showRankNameInput(IPlayer &player, std::int64_t rankId)
                                  showRankMenu(*player, rankId);
                              }
                          });
+}
+
+void FactionSystem::showRankPresetMenu(IPlayer &player, std::int64_t rankId)
+{
+    const FactionService::Faction *faction = leaderFaction(player);
+    if (!faction)
+        return;
+    const FactionService::Rank *rank = m_factionService.getRank(faction->id, rankId);
+    if (!rank)
+    {
+        showRanksMenu(player);
+        return;
+    }
+
+    Dialog dialog;
+    dialog.style = DialogStyle_LIST;
+    dialog.title = u(fmt::format("«{}» — права", rank->name));
+    // Порядок строк завязан на индексы в колбэке — менять синхронно.
+    dialog.body = u("Рядовой (без прав)\nОфицер (приём + скины)\nЗаместитель (все базовые права)\nНастроить вручную");
+    dialog.leftButton = u("Выбрать");
+    dialog.rightButton = u("Готово");
+
+    m_dialogService.show(
+        player, dialog,
+        [this, playerId = player.getID(), rankId](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            const FactionService::Faction *faction = leaderFaction(*player);
+            if (!faction)
+                return;
+            const FactionService::Rank *rank = m_factionService.getRank(faction->id, rankId);
+            if (!rank)
+            {
+                showRanksMenu(*player);
+                return;
+            }
+            // Закрытие/«Готово» — ранг уже создан, просто к списку рангов.
+            if (response != DialogResponse_Left)
+            {
+                showRanksMenu(*player);
+                return;
+            }
+
+            // «Настроить вручную» — обычное меню ранга с тогглами.
+            if (listItem == 3)
+            {
+                showRankMenu(*player, rankId);
+                return;
+            }
+
+            // Пресет — набор базовых битов. Невыбранные базовые гасим, чтобы
+            // пресет давал ровно то, что обещает (на свежесозданном ранге прав
+            // нет, но пресет можно применить и повторно).
+            FactionService::PermissionMask preset = 0;
+            if (listItem == 1)
+                preset = FactionService::PERM_INVITE | FactionService::PERM_SKIN; // офицер
+            else if (listItem == 2)
+                preset = FactionService::COMMON_PERMISSIONS; // заместитель — все базовые
+            // listItem == 0 — рядовой: preset остаётся 0.
+
+            for (const FactionService::PermissionMask mask :
+                 {FactionService::PERM_INVITE, FactionService::PERM_FIRE, FactionService::PERM_BUDGET,
+                  FactionService::PERM_SKIN})
+            {
+                m_factionService.editRankPermission(faction->id, rankId, mask, (preset & mask) != 0);
+            }
+            showRankMenu(*player, rankId);
+        });
 }
 
 void FactionSystem::showRankDeleteConfirm(IPlayer &player, std::int64_t rankId)
