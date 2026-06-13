@@ -34,6 +34,7 @@
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
+#include "Services/Core/WeaponSkillService/WeaponSkillService.h"
 #include "Services/Core/SpectateService/SpectateService.h"
 #include "Services/Core/StreamerService/StreamerService.h"
 #include "Services/Core/TextDrawService/TextDrawService.h"
@@ -51,6 +52,7 @@ void ServiceRegister::registerServices()
     registerService<PlayerStateService>();
     registerService<PlayerVelocityService>();
     registerService<PlayerWeaponService>();
+    registerService<WeaponSkillService>();
     registerService<VehicleService>();
     registerService<GridService>();
     registerService<StreamerService>();

@@ -43,6 +43,7 @@
 #include "Systems/Core/PlayerStateSystem/PlayerStateSystem.h"
 #include "Systems/Core/PlayerVelocitySystem/PlayerVelocitySystem.h"
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
+#include "Systems/Core/WeaponSkillSystem/WeaponSkillSystem.h"
 #include "Systems/Core/SpectateSystem/SpectateSystem.h"
 #include "Systems/Core/StreamerSystem/StreamerSystem.h"
 #include "Systems/Core/TextDrawEditorSystem/TextDrawEditorSystem.h"
@@ -115,6 +116,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // WeaponSystem раньше HealthSystem: фейковый выстрел (оружие без выдачи)
     // отбрасывается до регистрации bullet sync в health — не легализует give-damage.
     m_systems.push_back(std::make_unique<PlayerWeaponSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<WeaponSkillSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerHealthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerMoneySystem>(core, serviceRegister));
     // SpawnSystem раньше AuthSystem: на спавне сперва применяются интерьер/мир
