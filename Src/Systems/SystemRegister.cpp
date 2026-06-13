@@ -12,13 +12,17 @@
 #include "Systems/BankSystem/BankSystem.h"
 #include "Systems/ElectionSystem/ElectionSystem.h"
 #include "Systems/FactionSystem/FactionSystem.h"
+#include "Systems/Factions/AztecasSystem/AztecasSystem.h"
+#include "Systems/Factions/BallasSystem/BallasSystem.h"
 #include "Systems/Factions/FbiSystem/FbiSystem.h"
+#include "Systems/Factions/GroveStreetSystem/GroveStreetSystem.h"
 #include "Systems/Factions/PoliceLasVenturasSystem/PoliceLasVenturasSystem.h"
 #include "Systems/Factions/PoliceLosSantosSystem/PoliceLosSantosSystem.h"
 #include "Systems/Factions/PoliceSanFierroSystem/PoliceSanFierroSystem.h"
 #include "Systems/Factions/PresidentAdministrationSystem/PresidentAdministrationSystem.h"
 #include "Systems/Factions/RifaSystem/RifaSystem.h"
 #include "Systems/Factions/TriadSystem/TriadSystem.h"
+#include "Systems/Factions/VagosSystem/VagosSystem.h"
 #include "Systems/Core/GameTextSystem/GameTextSystem.h"
 #include "Systems/Core/GangZoneEditorSystem/GangZoneEditorSystem.h"
 #include "Systems/Core/GangZoneSystem/GangZoneSystem.h"
@@ -157,6 +161,12 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<FbiSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<TriadSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<RifaSystem>(core, serviceRegister));
+    // Уличные банды (криминал без куратора): без базы/интерьера — спавн на турфе,
+    // цвет, пул скинов и пикап-маркер территории.
+    m_systems.push_back(std::make_unique<GroveStreetSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<BallasSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<VagosSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<AztecasSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<BankSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ElectionSystem>(core, serviceRegister));
     // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до
