@@ -42,20 +42,6 @@ Dialog makeDialog(DialogStyle style, const std::string &title, std::string body,
     return dialog;
 }
 
-bool parseInt(StringView text, int &out)
-{
-    try
-    {
-        std::size_t pos = 0;
-        out = std::stoi(text.to_string(), &pos);
-        return pos > 0;
-    }
-    catch (...)
-    {
-        return false;
-    }
-}
-
 bool parseFloat(const std::string &text, float &out)
 {
     try
@@ -576,9 +562,9 @@ void TextDrawEditorSystem::showCreateTextInput(IPlayer &player)
 
 void TextDrawEditorSystem::showCreateModelInput(IPlayer &player)
 {
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player, makeDialog(DialogStyle_INPUT, "Превью модели", u("Введите ID модели (скин, машина, объект)"), "Создать", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -592,13 +578,7 @@ void TextDrawEditorSystem::showCreateModelInput(IPlayer &player)
                 return;
             }
 
-            int model = 0;
-            if (!parseInt(text, model))
-            {
-                player->sendClientMessage(Colour::White(), u("Введите корректный числовой ID модели"));
-                showCreateModelInput(*player);
-                return;
-            }
+            const int model = static_cast<int>(value);
 
             TextDrawParams params;
             params.style = TextDrawStyle_Preview;
@@ -1090,9 +1070,9 @@ void TextDrawEditorSystem::showColourInput(IPlayer &player, ColourTarget target)
 
 void TextDrawEditorSystem::showShadowInput(IPlayer &player)
 {
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player, makeDialog(DialogStyle_INPUT, "Тень", u("Введите размер тени (0 — без тени)"), "OK", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -1103,18 +1083,10 @@ void TextDrawEditorSystem::showShadowInput(IPlayer &player)
             IPlayerTextDraw *textDraw = selectedTextDraw(*player);
             if (response == DialogResponse_Left && textDraw)
             {
-                int shadow = 0;
-                if (parseInt(text, shadow))
-                {
-                    TextDrawParams params = TextDrawService::readParams(*textDraw);
-                    params.shadow = shadow;
-                    m_textDrawService.applyParams(*textDraw, params);
-                    textDraw->restream();
-                }
-                else
-                {
-                    player->sendClientMessage(Colour::White(), u("Введите целое число"));
-                }
+                TextDrawParams params = TextDrawService::readParams(*textDraw);
+                params.shadow = static_cast<int>(value);
+                m_textDrawService.applyParams(*textDraw, params);
+                textDraw->restream();
             }
 
             showEdit(*player);
@@ -1123,9 +1095,9 @@ void TextDrawEditorSystem::showShadowInput(IPlayer &player)
 
 void TextDrawEditorSystem::showOutlineInput(IPlayer &player)
 {
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player, makeDialog(DialogStyle_INPUT, "Контур", u("Введите толщину контура (0 — без контура)"), "OK", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -1136,18 +1108,10 @@ void TextDrawEditorSystem::showOutlineInput(IPlayer &player)
             IPlayerTextDraw *textDraw = selectedTextDraw(*player);
             if (response == DialogResponse_Left && textDraw)
             {
-                int outline = 0;
-                if (parseInt(text, outline))
-                {
-                    TextDrawParams params = TextDrawService::readParams(*textDraw);
-                    params.outline = outline;
-                    m_textDrawService.applyParams(*textDraw, params);
-                    textDraw->restream();
-                }
-                else
-                {
-                    player->sendClientMessage(Colour::White(), u("Введите целое число"));
-                }
+                TextDrawParams params = TextDrawService::readParams(*textDraw);
+                params.outline = static_cast<int>(value);
+                m_textDrawService.applyParams(*textDraw, params);
+                textDraw->restream();
             }
 
             showEdit(*player);
@@ -1156,9 +1120,9 @@ void TextDrawEditorSystem::showOutlineInput(IPlayer &player)
 
 void TextDrawEditorSystem::showPreviewModelInput(IPlayer &player)
 {
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player, makeDialog(DialogStyle_INPUT, "Превью — модель", u("Введите ID модели (работает при стиле «превью модели»)"), "OK", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -1169,18 +1133,10 @@ void TextDrawEditorSystem::showPreviewModelInput(IPlayer &player)
             IPlayerTextDraw *textDraw = selectedTextDraw(*player);
             if (response == DialogResponse_Left && textDraw)
             {
-                int model = 0;
-                if (parseInt(text, model))
-                {
-                    TextDrawParams params = TextDrawService::readParams(*textDraw);
-                    params.previewModel = model;
-                    m_textDrawService.applyParams(*textDraw, params);
-                    textDraw->restream();
-                }
-                else
-                {
-                    player->sendClientMessage(Colour::White(), u("Введите целое число"));
-                }
+                TextDrawParams params = TextDrawService::readParams(*textDraw);
+                params.previewModel = static_cast<int>(value);
+                m_textDrawService.applyParams(*textDraw, params);
+                textDraw->restream();
             }
 
             showEdit(*player);

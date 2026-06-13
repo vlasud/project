@@ -6,7 +6,6 @@
 #include "component.hpp"
 #include "glm/geometric.hpp"
 #include <algorithm>
-#include <charconv>
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
@@ -258,18 +257,6 @@ Dialog makeDialog(DialogStyle style, const std::string &title, const std::string
     dialog.leftButton = u(leftButton);
     dialog.rightButton = u(rightButton);
     return dialog;
-}
-
-bool parseInt(StringView text, int &out)
-{
-    const char *begin = text.data();
-    const char *end = begin + text.size();
-    while (begin < end && *begin == ' ')
-    {
-        ++begin;
-    }
-    auto [ptr, ec] = std::from_chars(begin, end, out);
-    return ec == std::errc();
 }
 
 bool parseFloat(const std::string &text, float &out)
@@ -2398,11 +2385,11 @@ void EditorSystem::showRadiusInput(IPlayer &player)
 
 void EditorSystem::showPickupModelInput(IPlayer &player)
 {
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player,
         makeDialog(DialogStyle_INPUT, "Создать пикап", "Введите ID модели пикапа (напр. 1212 — деньги, 1240 — сердце)",
                    "Создать", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -2416,8 +2403,7 @@ void EditorSystem::showPickupModelInput(IPlayer &player)
                 return;
             }
 
-            int model = 0;
-            if (!parseInt(text, model) || model < 0 || model > MAX_OBJECT_MODEL)
+            if (value < 0 || value > MAX_OBJECT_MODEL)
             {
                 player->sendClientMessage(Colour::White(),
                                           u(fmt::format("Введите ID модели от 0 до {}", MAX_OBJECT_MODEL)));
@@ -2425,21 +2411,21 @@ void EditorSystem::showPickupModelInput(IPlayer &player)
                 return;
             }
 
-            createPickupEntity(*player, model);
+            createPickupEntity(*player, static_cast<int>(value));
             showEntityEdit(*player);
         });
 }
 
 void EditorSystem::showPickupTypeInput(IPlayer &player)
 {
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player,
         makeDialog(DialogStyle_INPUT, "Тип пикапа",
                    u(fmt::format("Введите тип поведения (0-{}). Частые: 1 — статичный, 2 — исчезает и респавнится, "
                                  "14 — подбор из машины",
                                  MAX_PICKUP_TYPE)),
                    "OK", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -2450,8 +2436,7 @@ void EditorSystem::showPickupTypeInput(IPlayer &player)
             EditorState &state = m_state[playerId];
             if (response == DialogResponse_Left && selectedValid(state))
             {
-                int type = 0;
-                if (!parseInt(text, type) || type < 0 || type > MAX_PICKUP_TYPE)
+                if (value < 0 || value > MAX_PICKUP_TYPE)
                 {
                     player->sendClientMessage(Colour::White(),
                                               u(fmt::format("Введите тип от 0 до {}", MAX_PICKUP_TYPE)));
@@ -2459,6 +2444,7 @@ void EditorSystem::showPickupTypeInput(IPlayer &player)
                     return;
                 }
 
+                const int type = static_cast<int>(value);
                 EditorEntity &entity = state.entities[state.selectedIndex];
                 entity.pickupType = type;
                 if (IPickup *pickup = m_pickups ? m_pickups->get(entity.entityId) : nullptr)
@@ -2473,9 +2459,9 @@ void EditorSystem::showPickupTypeInput(IPlayer &player)
 
 void EditorSystem::showObjectModelInput(IPlayer &player)
 {
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player, makeDialog(DialogStyle_INPUT, "Создать объект", "Введите ID модели объекта", "Создать", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -2489,8 +2475,7 @@ void EditorSystem::showObjectModelInput(IPlayer &player)
                 return;
             }
 
-            int model = 0;
-            if (!parseInt(text, model) || model < 0 || model > MAX_OBJECT_MODEL)
+            if (value < 0 || value > MAX_OBJECT_MODEL)
             {
                 player->sendClientMessage(Colour::White(),
                                           u(fmt::format("Введите ID модели от 0 до {}", MAX_OBJECT_MODEL)));
@@ -2498,16 +2483,16 @@ void EditorSystem::showObjectModelInput(IPlayer &player)
                 return;
             }
 
-            createObjectEntity(*player, model);
+            createObjectEntity(*player, static_cast<int>(value));
             showEntityEdit(*player);
         });
 }
 
 void EditorSystem::showActorSkinInput(IPlayer &player)
 {
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player, makeDialog(DialogStyle_INPUT, "Создать актора", "Введите ID скина актора", "Создать", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -2521,8 +2506,7 @@ void EditorSystem::showActorSkinInput(IPlayer &player)
                 return;
             }
 
-            int skin = 0;
-            if (!parseInt(text, skin) || skin < 0 || skin > MAX_ACTOR_SKIN)
+            if (value < 0 || value > MAX_ACTOR_SKIN)
             {
                 player->sendClientMessage(Colour::White(),
                                           u(fmt::format("Введите ID скина от 0 до {}", MAX_ACTOR_SKIN)));
@@ -2530,19 +2514,19 @@ void EditorSystem::showActorSkinInput(IPlayer &player)
                 return;
             }
 
-            createActorEntity(*player, skin);
+            createActorEntity(*player, static_cast<int>(value));
             showEntityEdit(*player);
         });
 }
 
 void EditorSystem::showVehicleModelInput(IPlayer &player)
 {
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player,
         makeDialog(DialogStyle_INPUT, "Создать машину",
                    fmt::format("Введите ID модели машины ({}-{})", MIN_VEHICLE_MODEL, MAX_VEHICLE_MODEL), "Создать",
                    "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -2556,8 +2540,7 @@ void EditorSystem::showVehicleModelInput(IPlayer &player)
                 return;
             }
 
-            int model = 0;
-            if (!parseInt(text, model) || model < MIN_VEHICLE_MODEL || model > MAX_VEHICLE_MODEL)
+            if (value < MIN_VEHICLE_MODEL || value > MAX_VEHICLE_MODEL)
             {
                 player->sendClientMessage(
                     Colour::White(), u(fmt::format("Введите ID модели от {} до {}", MIN_VEHICLE_MODEL, MAX_VEHICLE_MODEL)));
@@ -2565,7 +2548,7 @@ void EditorSystem::showVehicleModelInput(IPlayer &player)
                 return;
             }
 
-            createVehicleEntity(*player, model);
+            createVehicleEntity(*player, static_cast<int>(value));
             showEntityEdit(*player);
         });
 }
@@ -2624,11 +2607,11 @@ void EditorSystem::showChangeModelInput(IPlayer &player)
     const EntityType type = state.entities[state.selectedIndex].type;
     const bool isActor = type == EntityType::Actor;
 
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player,
         makeDialog(DialogStyle_INPUT, isActor ? "Сменить скин" : "Сменить модель",
                    isActor ? "Введите новый ID скина" : "Введите новый ID модели", "OK", "Назад"),
-        [this, playerId = player.getID(), type](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID(), type](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -2653,14 +2636,15 @@ void EditorSystem::showChangeModelInput(IPlayer &player)
                     maxModel = MAX_VEHICLE_MODEL;
                 }
 
-                int model = 0;
-                if (!parseInt(text, model) || model < minModel || model > maxModel)
+                if (value < minModel || value > maxModel)
                 {
                     player->sendClientMessage(Colour::White(),
                                               u(fmt::format("Введите ID от {} до {}", minModel, maxModel)));
                     showChangeModelInput(*player);
                     return;
                 }
+
+                const int model = static_cast<int>(value);
 
                 if (entity.type == EntityType::Object)
                 {
@@ -2871,11 +2855,11 @@ void EditorSystem::showDistanceInput(IPlayer &player)
 
 void EditorSystem::showInteriorInput(IPlayer &player)
 {
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player,
         makeDialog(DialogStyle_INPUT, "Интерьер",
                    fmt::format("Введите ID интерьера (0-{}). 0 — внешний мир.", MAX_INTERIOR_ID), "OK", "Назад"),
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
             if (!player)
@@ -2885,10 +2869,9 @@ void EditorSystem::showInteriorInput(IPlayer &player)
 
             if (response == DialogResponse_Left)
             {
-                int interior = 0;
-                if (parseInt(text, interior) && interior >= 0 && interior <= MAX_INTERIOR_ID)
+                if (value >= 0 && value <= MAX_INTERIOR_ID)
                 {
-                    m_locationService.setInterior(*player, static_cast<unsigned>(interior));
+                    m_locationService.setInterior(*player, static_cast<unsigned>(value));
                 }
                 else
                 {

@@ -5,10 +5,8 @@
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
-#include <charconv>
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
-#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -29,18 +27,6 @@ constexpr std::size_t MAX_RADIO_BYTES = 180; // utf-8, ~90 кирилличес�
 std::string u(const std::string &text)
 {
     return Encoding::utf8Tocp1251(text);
-}
-
-// Числовой ввод из диалога: только целое без хвоста.
-std::optional<std::int64_t> parseNumber(StringView text)
-{
-    std::int64_t value = 0;
-    const char *begin = text.data();
-    const char *end = begin + text.size();
-    const auto [ptr, ec] = std::from_chars(begin, end, value);
-    if (ec != std::errc() || ptr != end)
-        return std::nullopt;
-    return value;
 }
 } // namespace
 
@@ -509,26 +495,26 @@ void FactionSystem::showHireInput(IPlayer &leader)
     dialog.leftButton = u("Далее");
     dialog.rightButton = u("Назад");
 
-    m_dialogService.show(leader, dialog,
-                         [this, leaderId = leader.getID()](DialogResponse response, int, StringView text)
-                         {
-                             IPlayer *leader = m_core.getPlayers().get(leaderId);
-                             if (!leader)
-                                 return;
-                             if (response != DialogResponse_Left)
-                             {
-                                 showMembersMenu(*leader);
-                                 return;
-                             }
-                             const auto targetId = parseNumber(text);
-                             if (!targetId || !validateHireTarget(*leader, static_cast<int>(*targetId)))
-                             {
-                                 showHireInput(*leader);
-                                 return;
-                             }
-                             const int id = static_cast<int>(*targetId);
-                             showHireRankPick(*leader, id, m_sessionService.get(id)->serial);
-                         });
+    m_dialogService.showNumberInput(
+        leader, dialog,
+        [this, leaderId = leader.getID()](DialogResponse response, std::int64_t targetId)
+        {
+            IPlayer *leader = m_core.getPlayers().get(leaderId);
+            if (!leader)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showMembersMenu(*leader);
+                return;
+            }
+            if (!validateHireTarget(*leader, static_cast<int>(targetId)))
+            {
+                showHireInput(*leader);
+                return;
+            }
+            const int id = static_cast<int>(targetId);
+            showHireRankPick(*leader, id, m_sessionService.get(id)->serial);
+        });
 }
 
 void FactionSystem::showHireRankPick(IPlayer &leader, int targetId, std::uint32_t targetSerial)
@@ -590,9 +576,9 @@ void FactionSystem::showHireSalaryInput(IPlayer &leader, int targetId, std::uint
     dialog.leftButton = u("Нанять");
     dialog.rightButton = u("Отмена");
 
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         leader, dialog,
-        [this, leaderId = leader.getID(), targetId, targetSerial, rankId](DialogResponse response, int, StringView text)
+        [this, leaderId = leader.getID(), targetId, targetSerial, rankId](DialogResponse response, std::int64_t salary)
         {
             IPlayer *leader = m_core.getPlayers().get(leaderId);
             if (!leader || response != DialogResponse_Left)
@@ -618,20 +604,19 @@ void FactionSystem::showHireSalaryInput(IPlayer &leader, int targetId, std::uint
                 return;
             }
 
-            const auto salary = parseNumber(text);
-            if (!salary || *salary < 0 || *salary > FactionService::MAX_SALARY)
+            if (salary < 0 || salary > FactionService::MAX_SALARY)
             {
                 leader->sendClientMessage(ERROR_COLOUR, u("Некорректная зарплата"));
                 showHireSalaryInput(*leader, targetId, targetSerial, rankId);
                 return;
             }
 
-            if (!m_factionService.setMember(*target, faction->id, rankId, false, *salary))
+            if (!m_factionService.setMember(*target, faction->id, rankId, false, salary))
                 return;
             leader->sendClientMessage(INFO_COLOUR, u(fmt::format("{} принят во фракцию: ранг «{}», зарплата ${}",
-                                                                 target->getName().to_string(), rank->name, *salary)));
+                                                                 target->getName().to_string(), rank->name, salary)));
             target->sendClientMessage(INFO_COLOUR, u(fmt::format("Вы приняты во фракцию «{}»: ранг «{}», зарплата ${}",
-                                                                 faction->name, rank->name, *salary)));
+                                                                 faction->name, rank->name, salary)));
         });
 }
 
@@ -658,10 +643,10 @@ void FactionSystem::showSetSalaryDialog(IPlayer &leader, int targetId, std::func
     dialog.leftButton = u("Сохранить");
     dialog.rightButton = u("Отмена");
 
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         leader, dialog,
         [this, leaderId = leader.getID(), targetId, targetSerial = targetSession->serial, onClose](
-            DialogResponse response, int, StringView text)
+            DialogResponse response, std::int64_t salary)
         {
             IPlayer *leader = m_core.getPlayers().get(leaderId);
             if (!leader)
@@ -687,16 +672,15 @@ void FactionSystem::showSetSalaryDialog(IPlayer &leader, int targetId, std::func
                 return;
             }
 
-            const auto salary = parseNumber(text);
-            if (!salary || !m_factionService.setMemberSalary(*target, *salary))
+            if (!m_factionService.setMemberSalary(*target, salary))
             {
                 leader->sendClientMessage(ERROR_COLOUR, u("Некорректная зарплата"));
                 showSetSalaryDialog(*leader, targetId, onClose); // повтор ввода, не теряя возврат
                 return;
             }
             leader->sendClientMessage(INFO_COLOUR,
-                                      u(fmt::format("Зарплата {} теперь ${}", target->getName().to_string(), *salary)));
-            target->sendClientMessage(INFO_COLOUR, u(fmt::format("Ваша зарплата теперь ${}", *salary)));
+                                      u(fmt::format("Зарплата {} теперь ${}", target->getName().to_string(), salary)));
+            target->sendClientMessage(INFO_COLOUR, u(fmt::format("Ваша зарплата теперь ${}", salary)));
             if (onClose)
                 onClose(*leader);
         });
@@ -1068,39 +1052,38 @@ void FactionSystem::showGovAppointInput(IPlayer &player, int factionId)
     dialog.leftButton = u("Далее");
     dialog.rightButton = u("Назад");
 
-    m_dialogService.show(player, dialog,
-                         [this, playerId = player.getID(), factionId](DialogResponse response, int, StringView text)
-                         {
-                             IPlayer *player = m_core.getPlayers().get(playerId);
-                             if (!player)
-                                 return;
-                             if (response != DialogResponse_Left)
-                             {
-                                 showGovFactionMenu(*player, factionId);
-                                 return;
-                             }
-                             if (!m_factionService.canManage(playerId, factionId))
-                                 return;
+    m_dialogService.showNumberInput(
+        player, dialog,
+        [this, playerId = player.getID(), factionId](DialogResponse response, std::int64_t targetId)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showGovFactionMenu(*player, factionId);
+                return;
+            }
+            if (!m_factionService.canManage(playerId, factionId))
+                return;
 
-                             const auto targetId = parseNumber(text);
-                             IPlayer *target =
-                                 targetId ? m_core.getPlayers().get(static_cast<int>(*targetId)) : nullptr;
-                             const PlayerSessionService::Session *targetSession =
-                                 target ? m_sessionService.get(target->getID()) : nullptr;
-                             if (!target || !targetSession)
-                             {
-                                 player->sendClientMessage(ERROR_COLOUR, u("Игрок не найден или не авторизован"));
-                                 showGovAppointInput(*player, factionId);
-                                 return;
-                             }
-                             const int targetFaction = m_factionService.getMemberFaction(target->getID());
-                             if (targetFaction != FactionService::NO_FACTION && targetFaction != factionId)
-                             {
-                                 player->sendClientMessage(ERROR_COLOUR, u("Игрок состоит в другой фракции"));
-                                 return;
-                             }
-                             showGovAppointSalaryInput(*player, factionId, target->getID(), targetSession->serial);
-                         });
+            IPlayer *target = m_core.getPlayers().get(static_cast<int>(targetId));
+            const PlayerSessionService::Session *targetSession =
+                target ? m_sessionService.get(target->getID()) : nullptr;
+            if (!target || !targetSession)
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Игрок не найден или не авторизован"));
+                showGovAppointInput(*player, factionId);
+                return;
+            }
+            const int targetFaction = m_factionService.getMemberFaction(target->getID());
+            if (targetFaction != FactionService::NO_FACTION && targetFaction != factionId)
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Игрок состоит в другой фракции"));
+                return;
+            }
+            showGovAppointSalaryInput(*player, factionId, target->getID(), targetSession->serial);
+        });
 }
 
 void FactionSystem::showGovAppointSalaryInput(IPlayer &player, int factionId, int targetId, std::uint32_t targetSerial)
@@ -1113,10 +1096,10 @@ void FactionSystem::showGovAppointSalaryInput(IPlayer &player, int factionId, in
     dialog.leftButton = u("Назначить");
     dialog.rightButton = u("Отмена");
 
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player, dialog,
-        [this, playerId = player.getID(), factionId, targetId, targetSerial](DialogResponse response, int,
-                                                                             StringView text)
+        [this, playerId = player.getID(), factionId, targetId, targetSerial](DialogResponse response,
+                                                                             std::int64_t salary)
         {
             IPlayer *player = m_core.getPlayers().get(playerId);
             if (!player || response != DialogResponse_Left)
@@ -1132,8 +1115,7 @@ void FactionSystem::showGovAppointSalaryInput(IPlayer &player, int factionId, in
                 return;
             }
 
-            const auto salary = parseNumber(text);
-            if (!salary || *salary < 0 || *salary > FactionService::MAX_SALARY)
+            if (salary < 0 || salary > FactionService::MAX_SALARY)
             {
                 player->sendClientMessage(ERROR_COLOUR, u("Некорректная зарплата"));
                 showGovAppointSalaryInput(*player, factionId, targetId, targetSerial);
@@ -1142,7 +1124,7 @@ void FactionSystem::showGovAppointSalaryInput(IPlayer &player, int factionId, in
 
             // Прежний лидер (если онлайн) узнаёт о снятии.
             const int oldLeaderId = m_factionService.onlineLeaderId(factionId);
-            if (!m_factionService.appointLeader(*target, factionId, *salary))
+            if (!m_factionService.appointLeader(*target, factionId, salary))
             {
                 player->sendClientMessage(ERROR_COLOUR, u("Не вышло назначить лидера"));
                 return;
@@ -1159,7 +1141,7 @@ void FactionSystem::showGovAppointSalaryInput(IPlayer &player, int factionId, in
             player->sendClientMessage(INFO_COLOUR, u(fmt::format("{} назначен лидером фракции «{}»",
                                                                  target->getName().to_string(), factionName)));
             target->sendClientMessage(
-                INFO_COLOUR, u(fmt::format("Вы назначены лидером фракции «{}», зарплата ${}", factionName, *salary)));
+                INFO_COLOUR, u(fmt::format("Вы назначены лидером фракции «{}», зарплата ${}", factionName, salary)));
         });
 }
 
@@ -1404,30 +1386,29 @@ void FactionSystem::showDevTargetInput(IPlayer &player, DevAction action)
     dialog.leftButton = u("Далее");
     dialog.rightButton = u("Назад");
 
-    m_dialogService.show(player, dialog,
-                         [this, playerId = player.getID(), action](DialogResponse response, int, StringView text)
-                         {
-                             IPlayer *player = m_core.getPlayers().get(playerId);
-                             if (!player)
-                                 return;
-                             if (response != DialogResponse_Left)
-                             {
-                                 showDevMenu(*player);
-                                 return;
-                             }
-                             const auto targetId = parseNumber(text);
-                             IPlayer *target =
-                                 targetId ? m_core.getPlayers().get(static_cast<int>(*targetId)) : nullptr;
-                             const PlayerSessionService::Session *targetSession =
-                                 target ? m_sessionService.get(target->getID()) : nullptr;
-                             if (!target || !targetSession)
-                             {
-                                 player->sendClientMessage(ERROR_COLOUR, u("Игрок не найден или не авторизован"));
-                                 showDevTargetInput(*player, action);
-                                 return;
-                             }
-                             showDevFactionPick(*player, action, target->getID(), targetSession->serial);
-                         });
+    m_dialogService.showNumberInput(
+        player, dialog,
+        [this, playerId = player.getID(), action](DialogResponse response, std::int64_t targetId)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showDevMenu(*player);
+                return;
+            }
+            IPlayer *target = m_core.getPlayers().get(static_cast<int>(targetId));
+            const PlayerSessionService::Session *targetSession =
+                target ? m_sessionService.get(target->getID()) : nullptr;
+            if (!target || !targetSession)
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Игрок не найден или не авторизован"));
+                showDevTargetInput(*player, action);
+                return;
+            }
+            showDevFactionPick(*player, action, target->getID(), targetSession->serial);
+        });
 }
 
 void FactionSystem::showDevFactionPick(IPlayer &player, DevAction action, int targetId, std::uint32_t targetSerial)
@@ -1502,27 +1483,26 @@ void FactionSystem::showDevKickInput(IPlayer &player)
     dialog.leftButton = u("Исключить");
     dialog.rightButton = u("Назад");
 
-    m_dialogService.show(player, dialog,
-                         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
-                         {
-                             IPlayer *player = m_core.getPlayers().get(playerId);
-                             if (!player)
-                                 return;
-                             if (response != DialogResponse_Left)
-                             {
-                                 showDevMenu(*player);
-                                 return;
-                             }
-                             const auto targetId = parseNumber(text);
-                             IPlayer *target =
-                                 targetId ? m_core.getPlayers().get(static_cast<int>(*targetId)) : nullptr;
-                             if (!target || !m_factionService.removeMember(*target))
-                             {
-                                 player->sendClientMessage(ERROR_COLOUR, u("Игрок не найден или не во фракции"));
-                                 return;
-                             }
-                             player->sendClientMessage(INFO_COLOUR, u("Игрок исключён из фракции"));
-                         });
+    m_dialogService.showNumberInput(
+        player, dialog,
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t targetId)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showDevMenu(*player);
+                return;
+            }
+            IPlayer *target = m_core.getPlayers().get(static_cast<int>(targetId));
+            if (!target || !m_factionService.removeMember(*target))
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Игрок не найден или не во фракции"));
+                return;
+            }
+            player->sendClientMessage(INFO_COLOUR, u("Игрок исключён из фракции"));
+        });
 }
 
 void FactionSystem::showDevBudgetPick(IPlayer &player)
@@ -1574,26 +1554,28 @@ void FactionSystem::showDevBudgetInput(IPlayer &player, int factionId)
     dialog.leftButton = u("Сохранить");
     dialog.rightButton = u("Назад");
 
-    m_dialogService.show(player, dialog,
-                         [this, playerId = player.getID(), factionId](DialogResponse response, int, StringView text)
-                         {
-                             IPlayer *player = m_core.getPlayers().get(playerId);
-                             if (!player)
-                                 return;
-                             if (response != DialogResponse_Left)
-                             {
-                                 showDevBudgetPick(*player);
-                                 return;
-                             }
-                             const auto amount = parseNumber(text);
-                             if (!amount || !m_factionService.setBudget(factionId, *amount))
-                             {
-                                 player->sendClientMessage(ERROR_COLOUR, u("Некорректная сумма"));
-                                 showDevBudgetInput(*player, factionId);
-                                 return;
-                             }
-                             player->sendClientMessage(INFO_COLOUR, u(fmt::format("Бюджет фракции: ${}", *amount)));
-                         });
+    // Числовой ввод: парс делает сервис (мусор/overflow → повтор показа сам),
+    // здесь остаётся только проверка диапазона через setBudget.
+    m_dialogService.showNumberInput(
+        player, dialog,
+        [this, playerId = player.getID(), factionId](DialogResponse response, std::int64_t amount)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showDevBudgetPick(*player);
+                return;
+            }
+            if (!m_factionService.setBudget(factionId, amount))
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Некорректная сумма"));
+                showDevBudgetInput(*player, factionId);
+                return;
+            }
+            player->sendClientMessage(INFO_COLOUR, u(fmt::format("Бюджет фракции: ${}", amount)));
+        });
 }
 
 void FactionSystem::showDevSpawnTeleportPick(IPlayer &player)

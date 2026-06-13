@@ -4,7 +4,6 @@
 #include "Log/LogManager.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
-#include <charconv>
 #include <chrono>
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
@@ -32,17 +31,6 @@ constexpr int PICKUP_MODEL = 1239; // иконка «i»
 std::string u(const std::string &text)
 {
     return Encoding::utf8Tocp1251(text);
-}
-
-std::optional<std::int64_t> parseNumber(StringView text)
-{
-    std::int64_t value = 0;
-    const char *begin = text.data();
-    const char *end = begin + text.size();
-    const auto [ptr, ec] = std::from_chars(begin, end, value);
-    if (ec != std::errc() || ptr != end)
-        return std::nullopt;
-    return value;
 }
 } // namespace
 
@@ -506,31 +494,30 @@ void ElectionSystem::showDevDurationInput(IPlayer &player)
     dialog.leftButton = u("Начать");
     dialog.rightButton = u("Отмена");
 
-    m_dialogService.show(
+    m_dialogService.showNumberInput(
         player, dialog,
-        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t minutes)
         {
             IPlayer *player = m_core.getPlayers().get(playerId);
             if (!player || response != DialogResponse_Left)
                 return;
 
-            const auto minutes = parseNumber(text);
-            if (!minutes || *minutes < 1 || *minutes > 1440)
+            if (minutes < 1 || minutes > 1440)
             {
                 player->sendClientMessage(ERROR_COLOUR, u("Некорректная длительность"));
                 showDevDurationInput(*player);
                 return;
             }
-            if (!m_electionService.start(Minutes(*minutes)))
+            if (!m_electionService.start(Minutes(minutes)))
             {
                 player->sendClientMessage(ERROR_COLOUR, u("Не вышло: выборы уже идут или нет ни одной партии"));
                 return;
             }
 
             m_timerService.cancel(m_finishTimer);
-            m_finishTimer = m_timerService.setTimeout(Minutes(*minutes), [this] { finishElection(); });
+            m_finishTimer = m_timerService.setTimeout(Minutes(minutes), [this] { finishElection(); });
             m_core.getPlayers().sendClientMessageToAll(
                 ANNOUNCE_COLOUR, u(fmt::format("Объявлены выборы президента! Голосование в мэриях городов, {} мин",
-                                               *minutes)));
+                                               minutes)));
         });
 }
