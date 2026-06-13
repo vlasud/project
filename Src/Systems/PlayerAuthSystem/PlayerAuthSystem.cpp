@@ -11,8 +11,10 @@
 #include "sodium/crypto_pwhash.h"
 #include "types.hpp"
 #include <fmt/format.h>
+#include <optional>
 #include <sodium.h>
 #include <string>
+#include <utility>
 
 PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_authService(serviceRegister.getService<PlayerAuthService>()),
@@ -87,32 +89,36 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
     std::string name = player.getName().to_string();
     const int requestConnectionVersion = m_connectionVersionService.getVersion(player.getID());
 
-    DatabaseManager::selectQuery(
+    DatabaseManager::selectQuery<std::optional<std::pair<std::int64_t, std::string>>>(
         [name = std::move(name)](mysqlx::Schema schema)
         {
-            return schema.getTable("player")
-                .select("id", "password_hash")
-                .where("name = :name")
-                .limit(1)
-                .bind("name", name)
-                .execute();
+            mysqlx::RowResult result = schema.getTable("player")
+                                           .select("id", "password_hash")
+                                           .where("name = :name")
+                                           .limit(1)
+                                           .bind("name", name)
+                                           .execute();
+            std::optional<std::pair<std::int64_t, std::string>> account;
+            if (mysqlx::Row row = result.fetchOne())
+                account = std::make_pair(row.get(0).get<std::int64_t>(), row.get(1).get<std::string>());
+            return account;
         },
-        [this, requestConnectionVersion, playerId = player.getID()](mysqlx::RowResult result)
+        [this, requestConnectionVersion,
+         playerId = player.getID()](std::optional<std::pair<std::int64_t, std::string>> account)
         {
             if (m_connectionVersionService.getVersion(playerId) != requestConnectionVersion)
             {
                 return;
             }
 
-            if (result.count() == 0)
+            if (!account)
             {
                 runRegistration(playerId);
                 return;
             }
 
-            mysqlx::Row row = result.fetchOne();
-            m_loginData[playerId].accountId = row.get(0).get<std::int64_t>();
-            m_loginData[playerId].passwordHash = row.get(1).get<std::string>();
+            m_loginData[playerId].accountId = account->first;
+            m_loginData[playerId].passwordHash = account->second;
             runLogin(playerId);
         },
         [this, requestConnectionVersion, playerId = player.getID()](const std::string &)
@@ -349,7 +355,7 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
 
     // Insert и чтение id — одним заданием на воркере: сессии нужен id аккаунта,
     // fire-and-forget insert его не даёт.
-    DatabaseManager::selectQuery(
+    DatabaseManager::selectQuery<std::optional<std::int64_t>>(
         [name, password = std::move(password), sex = m_registrationData[player.getID()].sex](mysqlx::Schema schema)
         {
             char hash[crypto_pwhash_STRBYTES] = {0};
@@ -361,9 +367,14 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
                 .values(name, hash, static_cast<uint8_t>(sex))
                 .execute();
 
-            return schema.getTable("player").select("id").where("name = :name").limit(1).bind("name", name).execute();
+            mysqlx::RowResult result =
+                schema.getTable("player").select("id").where("name = :name").limit(1).bind("name", name).execute();
+            std::optional<std::int64_t> accountId;
+            if (mysqlx::Row row = result.fetchOne())
+                accountId = row.get(0).get<std::int64_t>();
+            return accountId;
         },
-        [this, requestConnectionVersion, playerId = player.getID()](mysqlx::RowResult result)
+        [this, requestConnectionVersion, playerId = player.getID()](std::optional<std::int64_t> accountId)
         {
             if (m_connectionVersionService.getVersion(playerId) != requestConnectionVersion)
             {
@@ -374,7 +385,7 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
             {
                 return;
             }
-            if (result.count() == 0)
+            if (!accountId)
             {
                 player->sendClientMessage(Colour::White(),
                                           Encoding::utf8Tocp1251("Ошибка сервера. Попробуйте зайти позже"));
@@ -382,8 +393,7 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
                 return;
             }
 
-            const auto accountId = result.fetchOne().get(0).get<std::int64_t>();
-            if (!m_sessionService.start(*player, accountId))
+            if (!m_sessionService.start(*player, *accountId))
             {
                 player->sendClientMessage(Colour::White(), Encoding::utf8Tocp1251("Этот аккаунт уже в игре"));
                 player->kick();

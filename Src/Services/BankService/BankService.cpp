@@ -39,20 +39,18 @@ void BankService::creditFactionSalaries(int factionId)
 
 void BankService::getBalance(AccountId accountId, std::function<void(std::int64_t)> callback)
 {
-    DatabaseManager::selectQuery(
+    DatabaseManager::selectQuery<std::int64_t>(
         [accountId](mysqlx::Schema schema)
         {
-            return schema.getTable("bank_account")
-                .select("balance")
-                .where("account_id = :account")
-                .limit(1)
-                .bind("account", accountId)
-                .execute();
-        },
-        [callback = std::move(callback)](mysqlx::RowResult result)
-        {
+            mysqlx::RowResult result = schema.getTable("bank_account")
+                                           .select("balance")
+                                           .where("account_id = :account")
+                                           .limit(1)
+                                           .bind("account", accountId)
+                                           .execute();
             mysqlx::Row row = result.fetchOne();
-            callback(row ? row.get(0).get<std::int64_t>() : 0);
+            return row ? row.get(0).get<std::int64_t>() : std::int64_t{0};
         },
+        [callback = std::move(callback)](std::int64_t balance) { callback(balance); },
         [](const std::string &) { LogManager::log(Error, "BankService: failed to read balance"); });
 }

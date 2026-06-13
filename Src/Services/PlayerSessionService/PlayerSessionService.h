@@ -34,11 +34,15 @@ class PlayerSessionSystem;
 // сверь в колбэке:
 //
 //   const auto serial = m_sessions.get(playerId)->serial;
-//   DatabaseManager::selectQuery(..., [this, playerId, serial](auto result) {
-//       const auto *s = m_sessions.get(playerId);
-//       if (!s || s->serial != serial) return; // уже другая сессия — выбросить
-//       ...
-//   });
+//   // Запрос И вычитка результата — в задаче на воркере; на главный поток
+//   // приходит уже готовое T (RowResult между потоками не передаётся).
+//   DatabaseManager::selectQuery<T>(
+//       [](mysqlx::Schema schema) { /* execute + fetch -> T */ return data; },
+//       [this, playerId, serial](T data) {
+//           const auto *s = m_sessions.get(playerId);
+//           if (!s || s->serial != serial) return; // уже другая сессия — выбросить
+//           ...
+//       });
 class PlayerSessionService final : public IService
 {
     friend PlayerSessionSystem;

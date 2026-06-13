@@ -8,6 +8,10 @@
 #include <charconv>
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
+#include <optional>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -319,15 +323,12 @@ void FactionSystem::applyFactionSpawn(IPlayer &player, int factionId)
 
 void FactionSystem::loadCatalog()
 {
-    DatabaseManager::selectQuery(
+    DatabaseManager::selectQuery<std::vector<std::pair<int, FactionService::Rank>>>(
         [](mysqlx::Schema schema)
         {
-            return schema.getTable("faction_rank")
-                .select("id", "faction_id", "name", "permissions", "is_default")
-                .execute();
-        },
-        [this](mysqlx::RowResult rankRows)
-        {
+            mysqlx::RowResult rankRows = schema.getTable("faction_rank")
+                                             .select("id", "faction_id", "name", "permissions", "is_default")
+                                             .execute();
             std::vector<std::pair<int, FactionService::Rank>> ranks;
             while (mysqlx::Row row = rankRows.fetchOne())
             {
@@ -338,19 +339,25 @@ void FactionSystem::loadCatalog()
                 rank.isDefault = row.get(4).get<int>() != 0;
                 ranks.emplace_back(row.get(1).get<int>(), std::move(rank));
             }
+            return ranks;
+        },
+        [this](std::vector<std::pair<int, FactionService::Rank>> ranks)
+        {
             m_factionService.loadRanks(std::move(ranks));
 
             // Скоупы подопечных организаций — строго после рангов.
-            DatabaseManager::selectQuery(
+            DatabaseManager::selectQuery<std::vector<std::pair<std::int64_t, int>>>(
                 [](mysqlx::Schema schema)
-                { return schema.getTable("faction_rank_scope").select("rank_id", "faction_id").execute(); },
-                [this](mysqlx::RowResult scopeRows)
                 {
+                    mysqlx::RowResult scopeRows =
+                        schema.getTable("faction_rank_scope").select("rank_id", "faction_id").execute();
                     std::vector<std::pair<std::int64_t, int>> scopes;
                     while (mysqlx::Row row = scopeRows.fetchOne())
                         scopes.emplace_back(row.get(0).get<std::int64_t>(), row.get(1).get<int>());
-                    m_factionService.loadScopes(std::move(scopes));
+                    return scopes;
                 },
+                [this](std::vector<std::pair<std::int64_t, int>> scopes)
+                { m_factionService.loadScopes(std::move(scopes)); },
                 [](const std::string &error)
                 { LogManager::log(Error, "FactionSystem: failed to load rank scopes: " + error); });
         },
@@ -359,18 +366,17 @@ void FactionSystem::loadCatalog()
             LogManager::log(Error, "FactionSystem: failed to load faction ranks: " + error);
         });
 
-    DatabaseManager::selectQuery(
+    DatabaseManager::selectQuery<std::vector<std::pair<int, std::int64_t>>>(
         [](mysqlx::Schema schema)
         {
-            return schema.getTable("faction_budget").select("faction_id", "budget").execute();
-        },
-        [this](mysqlx::RowResult budgetRows)
-        {
+            mysqlx::RowResult budgetRows = schema.getTable("faction_budget").select("faction_id", "budget").execute();
             std::vector<std::pair<int, std::int64_t>> budgets;
             while (mysqlx::Row row = budgetRows.fetchOne())
                 budgets.emplace_back(row.get(0).get<int>(), row.get(1).get<std::int64_t>());
-            m_factionService.loadBudgets(std::move(budgets));
+            return budgets;
         },
+        [this](std::vector<std::pair<int, std::int64_t>> budgets)
+        { m_factionService.loadBudgets(std::move(budgets)); },
         [](const std::string &error)
         {
             LogManager::log(Error, "FactionSystem: failed to load faction budgets: " + error);
@@ -379,26 +385,15 @@ void FactionSystem::loadCatalog()
 
 void FactionSystem::loadMembership(IPlayer &player, const PlayerSessionService::Session &session)
 {
-    DatabaseManager::selectQuery(
+    DatabaseManager::selectQuery<std::tuple<int, std::int64_t, bool, std::int64_t>>(
         [accountId = session.accountId](mysqlx::Schema schema)
         {
-            return schema.getTable("faction_member")
-                .select("faction_id", "rank_id", "is_leader", "salary")
-                .where("account_id = :account")
-                .limit(1)
-                .bind("account", accountId)
-                .execute();
-        },
-        [this, playerId = player.getID(), serial = session.serial,
-         accountId = session.accountId](mysqlx::RowResult result)
-        {
-            // Serial-guard: в слоте мог оказаться другой игрок/другая сессия.
-            const PlayerSessionService::Session *current = m_sessionService.get(playerId);
-            if (!current || current->serial != serial)
-                return;
-            IPlayer *player = m_core.getPlayers().get(playerId);
-            if (!player)
-                return;
+            mysqlx::RowResult result = schema.getTable("faction_member")
+                                           .select("faction_id", "rank_id", "is_leader", "salary")
+                                           .where("account_id = :account")
+                                           .limit(1)
+                                           .bind("account", accountId)
+                                           .execute();
 
             int factionId = FactionService::NO_FACTION;
             std::int64_t rankId = 0;
@@ -411,6 +406,20 @@ void FactionSystem::loadMembership(IPlayer &player, const PlayerSessionService::
                 leader = row.get(2).get<int>() != 0;
                 salary = row.get(3).get<std::int64_t>();
             }
+            return std::make_tuple(factionId, rankId, leader, salary);
+        },
+        [this, playerId = player.getID(), serial = session.serial,
+         accountId = session.accountId](std::tuple<int, std::int64_t, bool, std::int64_t> membership)
+        {
+            // Serial-guard: в слоте мог оказаться другой игрок/другая сессия.
+            const PlayerSessionService::Session *current = m_sessionService.get(playerId);
+            if (!current || current->serial != serial)
+                return;
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+
+            const auto [factionId, rankId, leader, salary] = membership;
             m_factionService.handleSessionStart(*player, accountId, factionId, rankId, leader, salary);
         },
         [](const std::string &error)
@@ -1746,23 +1755,23 @@ void FactionSystem::executePayOrder(IPlayer &player)
 
     // Сумма зарплат — из БД (члены и оффлайн тоже). Списание и зачисление —
     // в колбэке; зарплаты, изменённые в эти миллисекунды, разойдутся на копейки.
-    DatabaseManager::selectQuery(
+    DatabaseManager::selectQuery<std::int64_t>(
         [factionId](mysqlx::Schema schema)
         {
-            return schema.getSession()
-                .sql("SELECT COALESCE(SUM(salary), 0) FROM faction_member WHERE faction_id = ?")
-                .bind(factionId)
-                .execute();
+            mysqlx::SqlResult result = schema.getSession()
+                                           .sql("SELECT COALESCE(SUM(salary), 0) FROM faction_member WHERE faction_id = ?")
+                                           .bind(factionId)
+                                           .execute();
+            mysqlx::Row row = result.fetchOne();
+            return row ? row.get(0).get<std::int64_t>() : std::int64_t{0};
         },
-        [this, leaderId = player.getID(), factionId](mysqlx::RowResult result)
+        [this, leaderId = player.getID(), factionId](std::int64_t total)
         {
             IPlayer *leader = m_core.getPlayers().get(leaderId);
             if (!leader || !m_factionService.isLeader(leaderId) ||
                 m_factionService.getMemberFaction(leaderId) != factionId)
                 return;
 
-            mysqlx::Row row = result.fetchOne();
-            const std::int64_t total = row ? row.get(0).get<std::int64_t>() : 0;
             if (total <= 0)
             {
                 leader->sendClientMessage(ERROR_COLOUR, u("Платить некому: ни у кого нет зарплаты"));

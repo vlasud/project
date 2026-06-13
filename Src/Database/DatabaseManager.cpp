@@ -5,7 +5,9 @@
 #include "core.hpp"
 #include "mysqlx/devapi/settings.h"
 #include "mysqlx/xdevapi.h"
+#include <cassert>
 #include <memory>
+#include <thread>
 
 namespace
 {
@@ -38,6 +40,10 @@ mysqlx::Schema SessionWrapper::getSchema()
 
 void DatabaseManager::initialize()
 {
+    // initialize() вызывается из onLoad на главном потоке — фиксируем его id,
+    // чтобы потом assertMainThread() ловил доступ к пулу/очередям с воркеров.
+    s_mainThreadId = std::this_thread::get_id();
+
     size_t opened = 0;
     m_sessionPool.forEach(
         [&opened](SessionWrapper &wrapper)
@@ -59,11 +65,20 @@ void DatabaseManager::initialize()
     LogManager::log(Message, "DatabaseManager initialized with " + std::to_string(opened) + " sessions");
 }
 
+// Проверка инварианта «доступ к пулу/очередям только с главного потока».
+// До initialize() id ещё не зафиксирован — тогда не проверяем.
+void DatabaseManager::assertMainThread()
+{
+    assert((s_mainThreadId == std::thread::id{} || std::this_thread::get_id() == s_mainThreadId) &&
+           "DatabaseManager: pool/queue access must happen on the main thread");
+}
+
 // Сессия возвращается в пул и запускается следующий отложенный запрос.
 // Вызывается на главном потоке и при успехе, и при ошибке — поэтому пул
 // не утекает, даже если запросы падают подряд.
 void DatabaseManager::releaseAndPump(SessionWrapper *sessionWrapper)
 {
+    assertMainThread();
     m_sessionPool.release(sessionWrapper);
 
     if (!m_queue.empty())
@@ -76,19 +91,23 @@ void DatabaseManager::releaseAndPump(SessionWrapper *sessionWrapper)
     {
         PendingSelect pending = std::move(m_selectQueue.front());
         m_selectQueue.pop();
-        selectQuery(std::move(pending.task), std::move(pending.callback), std::move(pending.errorCallback));
+        pending.retry(); // повторно вызовет selectQuery<T> — сессия уже свободна
     }
 }
 
 // Not thread safe, should be called from the main thread
 void DatabaseManager::throwQuery(DatabaseManager::Task task, DatabaseManager::ErrorCallback errorCallback)
 {
+    assertMainThread();
     SessionWrapper *sessionWrapper = m_sessionPool.get();
     if (sessionWrapper == nullptr)
     {
         m_queue.push({std::move(task), std::move(errorCallback)});
         return;
     }
+
+    // Гард вернёт сессию в пул, если addTask бросит до постановки задачи.
+    SessionGuard guard(sessionWrapper);
 
     ThreadPool::Task<bool> asyncTask;
 
@@ -114,41 +133,7 @@ void DatabaseManager::throwQuery(DatabaseManager::Task task, DatabaseManager::Er
     };
 
     ThreadPool::addTask(std::move(asyncTask));
+    guard.commit(); // задача принята — релиз теперь делает releaseAndPump в её колбэке
 }
 
-// Not thread safe, should be called from the main thread
-void DatabaseManager::selectQuery(DatabaseManager::SelectTask task, DatabaseManager::SelectCallback callback,
-                                  DatabaseManager::ErrorCallback errorCallback)
-{
-    SessionWrapper *sessionWrapper = m_sessionPool.get();
-    if (sessionWrapper == nullptr)
-    {
-        m_selectQueue.push({std::move(task), std::move(callback), std::move(errorCallback)});
-        return;
-    }
-
-    ThreadPool::Task<mysqlx::RowResult> asyncTask;
-
-    asyncTask.func = [task = std::move(task), sessionWrapper]()
-    {
-        return task(sessionWrapper->getSchema());
-    };
-
-    asyncTask.callback = [callback = std::move(callback), sessionWrapper](mysqlx::RowResult result)
-    {
-        callback(std::move(result));
-        releaseAndPump(sessionWrapper);
-    };
-
-    asyncTask.errorCallback = [errorCallback = std::move(errorCallback), sessionWrapper](const std::string &error)
-    {
-        LogManager::log(Error, "DatabaseManager: select failed: " + error);
-        if (errorCallback)
-        {
-            errorCallback(error);
-        }
-        releaseAndPump(sessionWrapper);
-    };
-
-    ThreadPool::addTask(std::move(asyncTask));
-}
+// selectQuery<T> / dispatchSelect<T> — шаблонные, определены в DatabaseManager.h.

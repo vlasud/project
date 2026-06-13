@@ -8,6 +8,9 @@
 #include <chrono>
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
+#include <optional>
+#include <utility>
+#include <vector>
 
 using namespace std::chrono_literals;
 
@@ -67,11 +70,11 @@ void ElectionSystem::initialize(IComponentList *components)
 
 void ElectionSystem::load()
 {
-    DatabaseManager::selectQuery(
+    DatabaseManager::selectQuery<std::vector<ElectionService::Party>>(
         [](mysqlx::Schema schema)
-        { return schema.getTable("party").select("id", "name", "description", "leader_account_id", "leader_name").execute(); },
-        [this](mysqlx::RowResult rows)
         {
+            mysqlx::RowResult rows =
+                schema.getTable("party").select("id", "name", "description", "leader_account_id", "leader_name").execute();
             std::vector<ElectionService::Party> parties;
             while (mysqlx::Row row = rows.fetchOne())
             {
@@ -83,25 +86,40 @@ void ElectionSystem::load()
                 party.leaderName = row.get(4).get<std::string>();
                 parties.push_back(std::move(party));
             }
+            return parties;
+        },
+        [this](std::vector<ElectionService::Party> parties)
+        {
             m_electionService.loadParties(std::move(parties));
 
             // Состояние и голоса — строго после партий (голоса ссылаются на них).
-            DatabaseManager::selectQuery(
+            DatabaseManager::selectQuery<std::optional<std::pair<bool, std::int64_t>>>(
                 [](mysqlx::Schema schema)
-                { return schema.getTable("election").select("active", "ends_at").where("id = 1").limit(1).execute(); },
-                [this](mysqlx::RowResult stateRows)
                 {
+                    mysqlx::RowResult stateRows =
+                        schema.getTable("election").select("active", "ends_at").where("id = 1").limit(1).execute();
+                    std::optional<std::pair<bool, std::int64_t>> state;
                     if (mysqlx::Row row = stateRows.fetchOne())
-                        m_electionService.loadState(row.get(0).get<int>() != 0, row.get(1).get<std::int64_t>());
+                        state = std::make_pair(row.get(0).get<int>() != 0, row.get(1).get<std::int64_t>());
+                    return state;
+                },
+                [this](std::optional<std::pair<bool, std::int64_t>> state)
+                {
+                    if (state)
+                        m_electionService.loadState(state->first, state->second);
 
-                    DatabaseManager::selectQuery(
+                    DatabaseManager::selectQuery<std::vector<std::pair<ElectionService::AccountId, std::int64_t>>>(
                         [](mysqlx::Schema schema)
-                        { return schema.getTable("election_vote").select("account_id", "party_id").execute(); },
-                        [this](mysqlx::RowResult voteRows)
                         {
+                            mysqlx::RowResult voteRows =
+                                schema.getTable("election_vote").select("account_id", "party_id").execute();
                             std::vector<std::pair<ElectionService::AccountId, std::int64_t>> votes;
                             while (mysqlx::Row row = voteRows.fetchOne())
                                 votes.emplace_back(row.get(0).get<std::int64_t>(), row.get(1).get<std::int64_t>());
+                            return votes;
+                        },
+                        [this](std::vector<std::pair<ElectionService::AccountId, std::int64_t>> votes)
+                        {
                             m_electionService.loadVotes(std::move(votes));
                             resumeTimer();
                         },
