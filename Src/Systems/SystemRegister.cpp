@@ -12,6 +12,8 @@
 #include "Systems/BankSystem/BankSystem.h"
 #include "Systems/ElectionSystem/ElectionSystem.h"
 #include "Systems/FactionSystem/FactionSystem.h"
+#include "Systems/Factions/ArmyAirForceSystem/ArmyAirForceSystem.h"
+#include "Systems/Factions/ArmyGroundSystem/ArmyGroundSystem.h"
 #include "Systems/Factions/AztecasSystem/AztecasSystem.h"
 #include "Systems/Factions/BallasSystem/BallasSystem.h"
 #include "Systems/Factions/FbiSystem/FbiSystem.h"
@@ -167,6 +169,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<BallasSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<VagosSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AztecasSystem>(core, serviceRegister));
+    // Армия (госструктуры, куратор — Администрация Президента, как полиция/ФБР):
+    // без базы/интерьера — спавн на территории базы, цвет, пул скинов и
+    // пикап-маркер базы.
+    m_systems.push_back(std::make_unique<ArmyGroundSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<ArmyAirForceSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<BankSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ElectionSystem>(core, serviceRegister));
     // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до
