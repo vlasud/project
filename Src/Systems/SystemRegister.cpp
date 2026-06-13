@@ -12,6 +12,7 @@
 #include "Systems/BankSystem/BankSystem.h"
 #include "Systems/ElectionSystem/ElectionSystem.h"
 #include "Systems/FactionSystem/FactionSystem.h"
+#include "Systems/Factions/FbiSystem/FbiSystem.h"
 #include "Systems/Factions/PoliceLasVenturasSystem/PoliceLasVenturasSystem.h"
 #include "Systems/Factions/PoliceLosSantosSystem/PoliceLosSantosSystem.h"
 #include "Systems/Factions/PoliceSanFierroSystem/PoliceSanFierroSystem.h"
@@ -136,6 +137,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<PoliceLosSantosSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PoliceSanFierroSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PoliceLasVenturasSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<FbiSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<BankSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ElectionSystem>(core, serviceRegister));
     // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до
