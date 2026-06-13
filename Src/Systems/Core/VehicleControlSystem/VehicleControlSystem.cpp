@@ -5,10 +5,10 @@ VehicleControlSystem::VehicleControlSystem(ICore &core, const ServiceRegister &s
       m_vehicleService(serviceRegister.getService<VehicleService>())
 {
     // Подписки на фронт клавиш. Антиспам повторов уже внутри PlayerKeyService.
-    // Двигатель — Fire (этот же бит даёт и левый Ctrl, и ЛКМ; развести нельзя).
+    // Двигатель — Fire: в машине этот бит ставит левый Ctrl.
     m_keyService.onPress(PlayerKeyService::Key::Fire, [this](IPlayer &player) { toggleEngine(player); });
-    // Фары — Crouch: отдельный бит, т.к. на Fire уже висит двигатель.
-    m_keyService.onPress(PlayerKeyService::Key::Crouch, [this](IPlayer &player) { toggleLights(player); });
+    // Фары — Action: в машине этот бит ставит ЛКМ (в машине ЛКМ это не Fire).
+    m_keyService.onPress(PlayerKeyService::Key::Action, [this](IPlayer &player) { toggleLights(player); });
 }
 
 IVehicle *VehicleControlSystem::drivenVehicle(IPlayer &player) const
