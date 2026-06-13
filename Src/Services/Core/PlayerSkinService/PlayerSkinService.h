@@ -26,9 +26,12 @@ class PlayerSkinService final : public IService
     friend PlayerSkinSystem;
 
   public:
-    static constexpr int DEFAULT_SKIN = 0; // CJ
+    // Дефолт ОБЯЗАН быть валидным (isValidSkin): 0 запрещён, иначе несидированный
+    // слот «протёк» бы в спавн как CJ. 78 — обычный мужской SA-пед (совпадает с
+    // мужским гражданским дефолтом); сервис про пол не знает, поэтому берёт его.
+    static constexpr int DEFAULT_SKIN = 78;
 
-    // false — невалидный id (вне 0..311 или несуществующий 74), скин не тронут.
+    // false — невалидный id (вне 1..311 или несуществующий 74), скин не тронут.
     bool setSkin(IPlayer &player, int skinId);
     int getSkin(int playerId) const;
 
@@ -38,5 +41,8 @@ class PlayerSkinService final : public IService
     // Вызывается PlayerSkinSystem.
     void resetPlayer(int playerId);
 
-    std::array<int, MAX_PLAYERS> m_skins{}; // 0 — дефолт
+    // 0-инициализация массива — это «слот не сидирован»; getSkin его не
+    // фильтрует, поэтому resetPlayer обязан проставить валидный DEFAULT_SKIN до
+    // первого использования (делается на onConnect). См. resetPlayer.
+    std::array<int, MAX_PLAYERS> m_skins{};
 };

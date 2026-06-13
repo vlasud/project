@@ -27,12 +27,16 @@ CREATE TABLE IF NOT EXISTS `faction_rank_scope` (
     PRIMARY KEY (`rank_id`, `faction_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
+-- skin — выбранный членом скин из пула организации (0 = не задан, тогда
+-- применяется первый из пула). Член ВСЕГДА в скине организации, пока состоит;
+-- /skin меняет выбор и пишет его сюда, на следующем заходе берётся отсюда.
 CREATE TABLE IF NOT EXISTS `faction_member` (
     `account_id` BIGINT  NOT NULL,
     `faction_id` INT     NOT NULL,
     `rank_id`    BIGINT  NOT NULL,
     `is_leader`  TINYINT NOT NULL DEFAULT 0,
     `salary`     BIGINT  NOT NULL DEFAULT 0,
+    `skin`       INT     NOT NULL DEFAULT 0,
     PRIMARY KEY (`account_id`),
     KEY `idx_faction_rank` (`faction_id`, `rank_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
@@ -80,3 +84,7 @@ CREATE TABLE IF NOT EXISTS `election_vote` (
 --     ADD COLUMN `permissions` BIGINT NOT NULL DEFAULT 0,
 --     ADD COLUMN `is_default`  TINYINT NOT NULL DEFAULT 0;
 -- (либо, если успел применить версию с can_*: DROP их и ADD `permissions`)
+
+-- Скин организации у члена (идемпотентно для живой БД; на MySQL 8.0.29+
+-- поддерживается ADD COLUMN IF NOT EXISTS):
+-- ALTER TABLE `faction_member` ADD COLUMN IF NOT EXISTS `skin` INT NOT NULL DEFAULT 0;

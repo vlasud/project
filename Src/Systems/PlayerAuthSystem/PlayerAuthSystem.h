@@ -8,6 +8,7 @@
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/PlayerSkinService/PlayerSkinService.h"
+#include "Services/PlayerPersonalSkinService/PlayerPersonalSkinService.h"
 #include "Services/PlayerAuthService/PlayerAuthService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/PlayerSpawnService/PlayerSpawnService.h"
@@ -42,6 +43,9 @@ class PlayerAuthSystem : public BaseSystem,
         int loginAttempts = 0;
         PlayerSessionService::AccountId accountId = PlayerSessionService::NO_ACCOUNT;
         std::string passwordHash;
+        // Личный (гражданский) скин аккаунта из БД. Применяется в finalize ДО
+        // старта членства; валидируется PlayerPersonalSkinService.
+        int personalSkin = PlayerPersonalSkinService::DEFAULT_SKIN_MALE;
     };
 
     struct RegistrationData
@@ -60,7 +64,11 @@ class PlayerAuthSystem : public BaseSystem,
     void showRegistrationConfirmDialog(IPlayer &player);
     void showChooseSexDialog(IPlayer &player);
     void finalizeRegistration(IPlayer &player);
-    void finalize(IPlayer &player);
+    // personalSkin — личный скин аккаунта (из БД при логине / дефолт по полу
+    // при регистрации). Применяется через PlayerSkinService и сидируется в
+    // PlayerPersonalSkinService ДО того, как async-загрузка членства наложит
+    // органный скин и захватит «гражданский» для возврата.
+    void finalize(IPlayer &player, int personalSkin);
 
     PlayerAuthService &m_authService;
     PlayerConnectionVersionService &m_connectionVersionService;
@@ -71,6 +79,7 @@ class PlayerAuthSystem : public BaseSystem,
     PlayerMoneyService &m_moneyService;
     PlayerSpawnService &m_spawnService;
     PlayerSkinService &m_skinService;
+    PlayerPersonalSkinService &m_personalSkinService;
     PlayerSessionService &m_sessionService;
 
     std::array<LoginData, MAX_PLAYERS> m_loginData;

@@ -177,6 +177,11 @@ class FactionService final : public IService
     void registerSkins(int factionId, std::vector<int> skins);
     // Скин из пула фракции игрока + право PERM_SKIN у игрока.
     bool canUseSkin(int playerId, int skin) const;
+    // Скин организации, который следует НАДЕТЬ члену: сохранённый — если он
+    // валиден и есть в пуле; иначе первый из пула. -1 — у организации нет пула
+    // (надевать нечего, напр. банки). savedSkin 0/невалидный/не из пула трактуется
+    // как «не задан» -> фолбэк на первый из пула.
+    int resolveOrgSkin(int factionId, int savedSkin) const;
 
     const Faction *getFaction(int factionId) const;
     const std::vector<Faction> &getFactions() const;
@@ -189,6 +194,9 @@ class FactionService final : public IService
     int getMemberFaction(int playerId) const; // NO_FACTION — не во фракции
     const Rank *getMemberRank(int playerId) const;
     std::int64_t getMemberSalary(int playerId) const; // 0 — не во фракции
+    // Сохранённый выбор скина организации (0 — не задан). Применять надо через
+    // resolveOrgSkin: член всегда в скине организации, пока состоит.
+    int getMemberSkin(int playerId) const;
     bool isLeader(int playerId) const;
     // Все биты mask есть у ранга игрока; у лидера — всегда true.
     bool hasPermission(int playerId, PermissionMask mask) const;
@@ -199,6 +207,9 @@ class FactionService final : public IService
     bool removeMember(IPlayer &player);
     bool setMemberRank(IPlayer &player, std::int64_t rankId);
     bool setMemberSalary(IPlayer &player, std::int64_t salary); // 0..MAX_SALARY
+    // Сохранить выбор скина организации (память + БД write-through). false —
+    // не член / скин не из пула организации (валидация против серверных фактов).
+    bool setMemberSkin(IPlayer &player, int skin);
 
     // --- надзор (гос-вертикаль, write-through в БД) ---
     // Игрок управляет фракцией, если он лидер её куратора, либо его ранг в
@@ -264,6 +275,7 @@ class FactionService final : public IService
         std::int64_t rankId = 0;
         std::int64_t salary = 0;
         bool leader = false;
+        int skin = 0; // выбранный скин организации (0 — не задан -> первый из пула)
     };
 
     // --- вызывается FactionSystem ---
@@ -275,7 +287,7 @@ class FactionService final : public IService
     void loadScopes(std::vector<std::pair<std::int64_t, int>> scopes);
     void loadBudgets(std::vector<std::pair<int, std::int64_t>> budgets);
     void handleSessionStart(IPlayer &player, AccountId accountId, int factionId, std::int64_t rankId, bool leader,
-                            std::int64_t salary);
+                            std::int64_t salary, int skin);
     void resetPlayer(int playerId);
 
     Faction *findFaction(int factionId);

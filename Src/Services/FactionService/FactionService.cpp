@@ -2,6 +2,7 @@
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
+#include "Services/Core/PlayerSkinService/PlayerSkinService.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <fmt/format.h>
@@ -71,7 +72,9 @@ void FactionService::registerSkins(int factionId, std::vector<int> skins)
     }
     for (const int skin : skins)
     {
-        if (skin >= 0 && skin <= 311 && skin != 74) // диапазон клиента; 74 крашит
+        // Единый источник правды о валидности скина (1..311 кроме 74; 0/CJ
+        // запрещён) — чтобы пул не разошёлся с применяемым скином.
+        if (PlayerSkinService::isValidSkin(skin))
             faction->skins.push_back(skin);
         else
             LogManager::log(Warning, fmt::format("FactionService: invalid skin {} for faction {}", skin, factionId));
@@ -86,6 +89,18 @@ bool FactionService::canUseSkin(int playerId, int skin) const
     if (!faction)
         return false;
     return std::find(faction->skins.begin(), faction->skins.end(), skin) != faction->skins.end();
+}
+
+int FactionService::resolveOrgSkin(int factionId, int savedSkin) const
+{
+    const Faction *faction = getFaction(factionId);
+    if (!faction || faction->skins.empty())
+        return -1; // у организации нет пула — надевать нечего
+    // Сохранённый скин годится только если он реально в пуле сейчас (пул мог
+    // измениться в коде между заходами). Иначе — первый из пула.
+    if (std::find(faction->skins.begin(), faction->skins.end(), savedSkin) != faction->skins.end())
+        return savedSkin;
+    return faction->skins.front();
 }
 
 void FactionService::registerPermission(int factionId, PermissionMask mask, std::string name)
@@ -209,6 +224,13 @@ std::int64_t FactionService::getMemberSalary(int playerId) const
     return m_members[playerId].factionId != NO_FACTION ? m_members[playerId].salary : 0;
 }
 
+int FactionService::getMemberSkin(int playerId) const
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return 0;
+    return m_members[playerId].factionId != NO_FACTION ? m_members[playerId].skin : 0;
+}
+
 bool FactionService::isLeader(int playerId) const
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)
@@ -239,14 +261,21 @@ bool FactionService::setMember(IPlayer &player, int factionId, std::int64_t rank
     member.rankId = rankId;
     member.salary = salary;
     member.leader = leader;
+    // Найм со сменой фракции — выбора ещё нет: ставим ПЕРВЫЙ скин из пула
+    // (0, если пула нет). Назначение лидером уже-члена сохраняет его выбор.
+    if (oldFactionId != factionId)
+    {
+        const int resolved = resolveOrgSkin(factionId, 0);
+        member.skin = resolved >= 0 ? resolved : 0;
+    }
 
     DatabaseManager::throwQuery(
-        [accountId = member.accountId, factionId, rankId, leader, salary](mysqlx::Schema schema)
+        [accountId = member.accountId, factionId, rankId, leader, salary, skin = member.skin](mysqlx::Schema schema)
         {
             mysqlx::Table table = schema.getTable("faction_member");
             table.remove().where("account_id = :account").bind("account", accountId).execute();
-            table.insert("account_id", "faction_id", "rank_id", "is_leader", "salary")
-                .values(accountId, factionId, rankId, leader ? 1 : 0, salary)
+            table.insert("account_id", "faction_id", "rank_id", "is_leader", "salary", "skin")
+                .values(accountId, factionId, rankId, leader ? 1 : 0, salary, skin)
                 .execute();
         });
 
@@ -267,6 +296,7 @@ bool FactionService::removeMember(IPlayer &player)
     member.rankId = 0;
     member.salary = 0;
     member.leader = false;
+    member.skin = 0;
 
     DatabaseManager::throwQuery(
         [accountId = member.accountId](mysqlx::Schema schema)
@@ -315,6 +345,37 @@ bool FactionService::setMemberSalary(IPlayer &player, std::int64_t salary)
             schema.getTable("faction_member")
                 .update()
                 .set("salary", salary)
+                .where("account_id = :account")
+                .bind("account", accountId)
+                .execute();
+        });
+    return true;
+}
+
+bool FactionService::setMemberSkin(IPlayer &player, int skin)
+{
+    Member &member = m_members[player.getID()];
+    if (member.factionId == NO_FACTION)
+        return false;
+    // Валидация против серверных фактов: скин обязан быть в пуле организации.
+    // (Право PERM_SKIN проверяет вызывающий через canUseSkin — здесь только
+    // принадлежность пулу, чтобы не записать мусор с клиента.)
+    const Faction *faction = getFaction(member.factionId);
+    if (!faction || std::find(faction->skins.begin(), faction->skins.end(), skin) == faction->skins.end())
+        return false;
+
+    // Скин не изменился — ни записи в БД, ни лишней работы (антифлуд /skin:
+    // повторный выбор того же скина — no-op).
+    if (member.skin == skin)
+        return true;
+
+    member.skin = skin;
+    DatabaseManager::throwQuery(
+        [accountId = member.accountId, skin](mysqlx::Schema schema)
+        {
+            schema.getTable("faction_member")
+                .update()
+                .set("skin", skin)
                 .where("account_id = :account")
                 .bind("account", accountId)
                 .execute();
@@ -460,24 +521,30 @@ bool FactionService::appointLeaderByAccount(AccountId accountId, int factionId, 
 
     std::int64_t rankId = startRank->id;
     std::int64_t salary = 0;
+    // Уже член ЭТОЙ фракции — выбор скина сохраняется; иначе свежее членство ->
+    // первый из пула (0, если пула нет).
+    int skin = resolveOrgSkin(factionId, 0);
+    if (skin < 0)
+        skin = 0;
     if (onlinePlayer)
     {
         const Member &member = m_members[onlinePlayer->getID()];
         if (member.factionId == factionId)
         {
-            rankId = member.rankId; // уже член — ранг и зарплата сохраняются
+            rankId = member.rankId; // уже член — ранг, зарплата и скин сохраняются
             salary = member.salary;
+            skin = member.skin;
         }
     }
 
     DatabaseManager::throwQuery(
-        [accountId, factionId, rankId, salary](mysqlx::Schema schema)
+        [accountId, factionId, rankId, salary, skin](mysqlx::Schema schema)
         {
             mysqlx::Table table = schema.getTable("faction_member");
             table.update().set("is_leader", 0).where("faction_id = :faction").bind("faction", factionId).execute();
             table.remove().where("account_id = :account").bind("account", accountId).execute();
-            table.insert("account_id", "faction_id", "rank_id", "is_leader", "salary")
-                .values(accountId, factionId, rankId, 1, salary)
+            table.insert("account_id", "faction_id", "rank_id", "is_leader", "salary", "skin")
+                .values(accountId, factionId, rankId, 1, salary, skin)
                 .execute();
         });
 
@@ -489,6 +556,7 @@ bool FactionService::appointLeaderByAccount(AccountId accountId, int factionId, 
         member.rankId = rankId;
         member.salary = salary;
         member.leader = true;
+        member.skin = skin;
         if (oldFactionId != factionId)
             notifyChange(*onlinePlayer, oldFactionId, factionId);
     }
@@ -778,7 +846,7 @@ void FactionService::loadBudgets(std::vector<std::pair<int, std::int64_t>> budge
 }
 
 void FactionService::handleSessionStart(IPlayer &player, AccountId accountId, int factionId, std::int64_t rankId,
-                                        bool leader, std::int64_t salary)
+                                        bool leader, std::int64_t salary, int skin)
 {
     Member &member = m_members[player.getID()];
     member.accountId = accountId;
@@ -792,12 +860,17 @@ void FactionService::handleSessionStart(IPlayer &player, AccountId accountId, in
         rankId = 0;
         leader = false;
         salary = 0;
+        skin = 0;
     }
 
     member.factionId = factionId;
     member.rankId = rankId;
     member.salary = std::clamp<std::int64_t>(salary, 0, MAX_SALARY);
     member.leader = leader;
+    // Сырое значение из БД; на применение всегда идёт через resolveOrgSkin
+    // (невалидный/не из пула -> первый из пула), фактический скин применяет
+    // подписчик в notifyChange.
+    member.skin = factionId != NO_FACTION ? skin : 0;
 
     if (factionId != NO_FACTION)
         notifyChange(player, NO_FACTION, factionId);

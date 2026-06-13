@@ -14,6 +14,7 @@
 #include <optional>
 #include <sodium.h>
 #include <string>
+#include <tuple>
 #include <utility>
 
 PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -26,6 +27,7 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
       m_spawnService(serviceRegister.getService<PlayerSpawnService>()),
       m_skinService(serviceRegister.getService<PlayerSkinService>()),
+      m_personalSkinService(serviceRegister.getService<PlayerPersonalSkinService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
@@ -89,22 +91,27 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
     std::string name = player.getName().to_string();
     const int requestConnectionVersion = m_connectionVersionService.getVersion(player.getID());
 
-    DatabaseManager::selectQuery<std::optional<std::pair<std::int64_t, std::string>>>(
+    DatabaseManager::selectQuery<std::optional<std::tuple<std::int64_t, std::string, int>>>(
         [name = std::move(name)](mysqlx::Schema schema)
         {
             mysqlx::RowResult result = schema.getTable("player")
-                                           .select("id", "password_hash")
+                                           .select("id", "password_hash", "skin")
                                            .where("name = :name")
                                            .limit(1)
                                            .bind("name", name)
                                            .execute();
-            std::optional<std::pair<std::int64_t, std::string>> account;
+            std::optional<std::tuple<std::int64_t, std::string, int>> account;
             if (mysqlx::Row row = result.fetchOne())
-                account = std::make_pair(row.get(0).get<std::int64_t>(), row.get(1).get<std::string>());
+                // skin читаем как int64 и сужаем: таблица player ВНЕШНЯЯ, её схему
+                // мы не контролируем. Значение вне диапазона int не должно ронять
+                // get<int>() (иначе битый ряд = вечный kick аккаунта) — мусор
+                // отфильтрует isValidSkin в finalize (фолбэк на дефолт).
+                account = std::make_tuple(row.get(0).get<std::int64_t>(), row.get(1).get<std::string>(),
+                                          static_cast<int>(row.get(2).get<std::int64_t>()));
             return account;
         },
         [this, requestConnectionVersion,
-         playerId = player.getID()](std::optional<std::pair<std::int64_t, std::string>> account)
+         playerId = player.getID()](std::optional<std::tuple<std::int64_t, std::string, int>> account)
         {
             if (m_connectionVersionService.getVersion(playerId) != requestConnectionVersion)
             {
@@ -117,8 +124,11 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
                 return;
             }
 
-            m_loginData[playerId].accountId = account->first;
-            m_loginData[playerId].passwordHash = account->second;
+            m_loginData[playerId].accountId = std::get<0>(*account);
+            m_loginData[playerId].passwordHash = std::get<1>(*account);
+            // Личный скин из БД; валидируется при применении в finalize (фолбэк
+            // на дефолт там же). Невалидное значение из БД безопасно.
+            m_loginData[playerId].personalSkin = std::get<2>(*account);
             runLogin(playerId);
         },
         [this, requestConnectionVersion, playerId = player.getID()](const std::string &)
@@ -249,7 +259,7 @@ void PlayerAuthSystem::showLoginDialog(IPlayer &player)
                                      return;
                                  }
 
-                                 finalize(*player);
+                                 finalize(*player, m_loginData[playerId].personalSkin);
                              };
 
                              ThreadPool::addTask(std::move(task));
@@ -352,19 +362,24 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
     std::string name = player.getName().to_string();
     std::string password = std::move(m_registrationData[player.getID()].password);
     const int requestConnectionVersion = m_connectionVersionService.getVersion(player.getID());
+    // Дефолтный личный скин нового аккаунта — по выбранному полу. Пишем его в БД
+    // сразу (а не полагаемся на DEFAULT колонки), чтобы женский дефолт тоже
+    // персистился, и применяем тем же значением в finalize.
+    const std::uint8_t sexValue = static_cast<std::uint8_t>(m_registrationData[player.getID()].sex);
+    const int defaultSkin = PlayerPersonalSkinService::defaultSkinForSex(sexValue);
 
     // Insert и чтение id — одним заданием на воркере: сессии нужен id аккаунта,
     // fire-and-forget insert его не даёт.
     DatabaseManager::selectQuery<std::optional<std::int64_t>>(
-        [name, password = std::move(password), sex = m_registrationData[player.getID()].sex](mysqlx::Schema schema)
+        [name, password = std::move(password), sex = sexValue, defaultSkin](mysqlx::Schema schema)
         {
             char hash[crypto_pwhash_STRBYTES] = {0};
             crypto_pwhash_str(hash, password.c_str(), password.size(), crypto_pwhash_OPSLIMIT_INTERACTIVE,
                               crypto_pwhash_MEMLIMIT_INTERACTIVE);
 
             schema.getTable("player")
-                .insert("name", "password_hash", "sex")
-                .values(name, hash, static_cast<uint8_t>(sex))
+                .insert("name", "password_hash", "sex", "skin")
+                .values(name, hash, sex, defaultSkin)
                 .execute();
 
             mysqlx::RowResult result =
@@ -374,7 +389,7 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
                 accountId = row.get(0).get<std::int64_t>();
             return accountId;
         },
-        [this, requestConnectionVersion, playerId = player.getID()](std::optional<std::int64_t> accountId)
+        [this, requestConnectionVersion, playerId = player.getID(), defaultSkin](std::optional<std::int64_t> accountId)
         {
             if (m_connectionVersionService.getVersion(playerId) != requestConnectionVersion)
             {
@@ -399,7 +414,7 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
                 player->kick();
                 return;
             }
-            finalize(*player);
+            finalize(*player, defaultSkin);
         },
         [this, requestConnectionVersion, playerId = player.getID()](const std::string &)
         {
@@ -416,18 +431,33 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
         });
 }
 
-void PlayerAuthSystem::finalize(IPlayer &player)
+void PlayerAuthSystem::finalize(IPlayer &player, int personalSkin)
 {
     m_authService.setPlayerAuthenticated(player.getID(), PlayerAuthService::EAuthState::AUTHENTICATED);
 
+    // Личный (гражданский) скин аккаунта. Валидируем (фолбэк на мужской дефолт —
+    // на случай мусора/нуля из БД), кладём в PlayerPersonalSkinService (источник
+    // правды о личном скине для возврата из фракции) и применяем через
+    // PlayerSkinService. ВАЖНО: применяем ДО старта членства — FactionSystem на
+    // sessionStart грузит членство АСИНХРОННО, его колбэк отстреливает позже и
+    // захватывает текущий (уже личный) скин как «гражданский» для возврата.
+    //
+    // ПОРЯДОК КРИТИЧЕН: skin ставим ДО setSpawn. PlayerSpawnService::setSpawn
+    // строит spawn-инфо (SetSpawnInfo RPC) из getSkin() НА МОМЕНТ вызова. Если
+    // сделать setSpawn раньше — в spawn-инфо уедет ещё дефолтный скин слота, и
+    // респаун из спектейта появит игрока в нём, а не в личном/органном.
+    const int validSkin =
+        PlayerSkinService::isValidSkin(personalSkin) ? personalSkin : PlayerPersonalSkinService::DEFAULT_SKIN_MALE;
+    m_personalSkinService.setSkin(player.getID(), validSkin);
+    m_skinService.setSkin(player, validSkin);
+
     // Точка появления после входа — через единый источник правды о спавне:
     // выход из спектейта вызовет респаун ровно в неё (и в неё же — все
-    // последующие смерти, пока бизнес-логика не переустановит спавн).
-    // Скин — через его источник правды (будущий выбор персонажа заменит 22).
+    // последующие смерти, пока бизнес-логика не переустановит спавн). setSpawn
+    // строит spawn-инфо уже с применённым выше скином.
     SpawnPoint spawn;
     spawn.position = {1762.1505f, -1896.2495f, 13.5621f};
     m_spawnService.setSpawn(player, spawn);
-    m_skinService.setSkin(player, 22);
 
     // Оружие и деньги нельзя выдавать здесь: событие спавна придёт позже и
     // сбросит их (инвентарь чистится на спавне). Экипировка — в onPlayerSpawn.

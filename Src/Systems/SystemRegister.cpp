@@ -41,6 +41,7 @@
 #include "Systems/Core/PlayerLocationSystem/PlayerLocationSystem.h"
 #include "Systems/Core/PlayerMoneySystem/PlayerMoneySystem.h"
 #include "Systems/Core/PlayerSkinSystem/PlayerSkinSystem.h"
+#include "Systems/PlayerPersonalSkinSystem/PlayerPersonalSkinSystem.h"
 #include "Systems/Core/PlayerStateSystem/PlayerStateSystem.h"
 #include "Systems/Core/PlayerVelocitySystem/PlayerVelocitySystem.h"
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
@@ -90,6 +91,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<ObjectEditSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MovingObjectSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerSkinSystem>(core, serviceRegister));
+    // Личный скин аккаунта: лайфцикл слота + персист на конце сессии. После
+    // PlayerSessionSystem (подписка на конец сессии). Загрузку/применение на
+    // входе делает PlayerAuthSystem (у него логин-select).
+    m_systems.push_back(std::make_unique<PlayerPersonalSkinSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AttachmentSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AudioSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<GameTextSystem>(core, serviceRegister));

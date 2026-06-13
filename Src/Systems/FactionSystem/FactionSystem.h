@@ -5,6 +5,7 @@
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/FactionService/FactionService.h"
+#include "Services/PlayerPersonalSkinService/PlayerPersonalSkinService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/Core/PlayerSkinService/PlayerSkinService.h"
 #include "Services/PlayerSpawnService/PlayerSpawnService.h"
@@ -48,6 +49,11 @@ class FactionSystem : public BaseSystem
     void applyFactionSpawn(IPlayer &player, int factionId);
     // Цвет организации на нике и маркере миникарты (вне фракции — гражданский).
     void applyFactionColour(IPlayer &player, int factionId);
+    // Скин члена организации: при входе/появлении в сети — скин организации
+    // (сохранённый или первый из пула; запомнив прежний гражданский скин), при
+    // выходе — возврат прежнего гражданского. Член всегда в скине организации,
+    // пока состоит. Единственная точка применения — событие членства.
+    void applyFactionSkin(IPlayer &player, int oldFactionId, int newFactionId);
     // Рация /r: сообщение всем членам организации.
     void radioChat(IPlayer &player, StringView rawText);
     // Смена скина из пула организации (право PERM_SKIN).
@@ -123,6 +129,8 @@ class FactionSystem : public BaseSystem
     void showDevKickInput(IPlayer &player);
     void showDevBudgetPick(IPlayer &player);
     void showDevBudgetInput(IPlayer &player, int factionId);
+    // Пикер фракций (только с заданной точкой спавна) -> телепорт на её спавн.
+    void showDevSpawnTeleportPick(IPlayer &player);
     void listFactions(IPlayer &player);
 
     // Фракция игрока, если он её лидер; nullptr — не лидер (с сообщением).
@@ -138,6 +146,9 @@ class FactionSystem : public BaseSystem
     PlayerLocationService &m_locationService;
     PlayerSpawnService &m_spawnService;
     PlayerSkinService &m_skinService;
+    // Источник правды о ЛИЧНОМ (гражданском) скине аккаунта — в него член
+    // возвращается при увольнении. Персист — PlayerPersonalSkinService/System.
+    PlayerPersonalSkinService &m_personalSkinService;
 
     std::array<TimePoint, MAX_PLAYERS> m_lastRadioAt{}; // антифлуд рации
 };

@@ -52,15 +52,17 @@ FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister
       m_pickupService(serviceRegister.getService<PickupService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
       m_spawnService(serviceRegister.getService<PlayerSpawnService>()),
-      m_skinService(serviceRegister.getService<PlayerSkinService>())
+      m_skinService(serviceRegister.getService<PlayerSkinService>()),
+      m_personalSkinService(serviceRegister.getService<PlayerPersonalSkinService>())
 {
-    // Спавн и цвет члена — от его организации (вступление/выход/появление в
-    // сети применяют немедленно; спавн действует на все последующие спавны).
+    // Спавн, цвет и скин члена — от его организации (вступление/выход/появление
+    // в сети применяют немедленно; спавн действует на все последующие спавны).
     m_factionService.subscribeMemberChange(
-        [this](IPlayer &player, int, int newFactionId)
+        [this](IPlayer &player, int oldFactionId, int newFactionId)
         {
             applyFactionSpawn(player, newFactionId);
             applyFactionColour(player, newFactionId);
+            applyFactionSkin(player, oldFactionId, newFactionId);
         });
 
     // Временно здесь: когда появятся системы остальных конкретных фракций,
@@ -220,6 +222,30 @@ void FactionSystem::applyFactionColour(IPlayer &player, int factionId)
     player.setColour(faction ? faction->colour : CIVILIAN_COLOUR);
 }
 
+void FactionSystem::applyFactionSkin(IPlayer &player, int oldFactionId, int newFactionId)
+{
+    const int playerId = player.getID();
+
+    if (newFactionId != FactionService::NO_FACTION)
+    {
+        // Вход/появление в сети члена. Скин организации обязателен, пока состоит.
+        // ОТОБРАЖАЕТСЯ органный скин, но ЛИЧНЫЙ (гражданский) скин аккаунта в
+        // PlayerPersonalSkinService остаётся неизменным — его и вернём при
+        // увольнении. На входе его трогать не нужно: auth применил личный скин
+        // ДО старта членства, и здесь он уже лежит в источнике правды о личном.
+        const int orgSkin = m_factionService.resolveOrgSkin(newFactionId, m_factionService.getMemberSkin(playerId));
+        if (orgSkin < 0)
+            return; // у организации нет пула (напр. банк) — применять нечего
+
+        m_skinService.setSkin(player, orgSkin);
+        return;
+    }
+
+    // Выход из фракции — возврат ЛИЧНОГО скина аккаунта (источник правды —
+    // PlayerPersonalSkinService; всегда валиден, фолбэк на дефолт внутри него).
+    m_skinService.setSkin(player, m_personalSkinService.getSkin(playerId));
+}
+
 void FactionSystem::radioChat(IPlayer &player, StringView rawText)
 {
     const int playerId = player.getID();
@@ -297,6 +323,10 @@ void FactionSystem::showSkinDialog(IPlayer &player)
                 player->sendClientMessage(ERROR_COLOUR, u("Недостаточно прав во фракции"));
                 return;
             }
+            // Выбор сохраняется в БД (write-through) — на следующем заходе
+            // возьмётся из БД; setMemberSkin валидирует пул ещё раз.
+            if (!m_factionService.setMemberSkin(*player, skin))
+                return;
             m_skinService.setSkin(*player, skin);
             player->sendClientMessage(INFO_COLOUR, u(fmt::format("Скин сменён на {}", skin)));
         });
@@ -385,11 +415,11 @@ void FactionSystem::loadCatalog()
 
 void FactionSystem::loadMembership(IPlayer &player, const PlayerSessionService::Session &session)
 {
-    DatabaseManager::selectQuery<std::tuple<int, std::int64_t, bool, std::int64_t>>(
+    DatabaseManager::selectQuery<std::tuple<int, std::int64_t, bool, std::int64_t, int>>(
         [accountId = session.accountId](mysqlx::Schema schema)
         {
             mysqlx::RowResult result = schema.getTable("faction_member")
-                                           .select("faction_id", "rank_id", "is_leader", "salary")
+                                           .select("faction_id", "rank_id", "is_leader", "salary", "skin")
                                            .where("account_id = :account")
                                            .limit(1)
                                            .bind("account", accountId)
@@ -399,17 +429,19 @@ void FactionSystem::loadMembership(IPlayer &player, const PlayerSessionService::
             std::int64_t rankId = 0;
             bool leader = false;
             std::int64_t salary = 0;
+            int skin = 0;
             if (mysqlx::Row row = result.fetchOne())
             {
                 factionId = row.get(0).get<int>();
                 rankId = row.get(1).get<std::int64_t>();
                 leader = row.get(2).get<int>() != 0;
                 salary = row.get(3).get<std::int64_t>();
+                skin = row.get(4).get<int>();
             }
-            return std::make_tuple(factionId, rankId, leader, salary);
+            return std::make_tuple(factionId, rankId, leader, salary, skin);
         },
         [this, playerId = player.getID(), serial = session.serial,
-         accountId = session.accountId](std::tuple<int, std::int64_t, bool, std::int64_t> membership)
+         accountId = session.accountId](std::tuple<int, std::int64_t, bool, std::int64_t, int> membership)
         {
             // Serial-guard: в слоте мог оказаться другой игрок/другая сессия.
             const PlayerSessionService::Session *current = m_sessionService.get(playerId);
@@ -419,8 +451,8 @@ void FactionSystem::loadMembership(IPlayer &player, const PlayerSessionService::
             if (!player)
                 return;
 
-            const auto [factionId, rankId, leader, salary] = membership;
-            m_factionService.handleSessionStart(*player, accountId, factionId, rankId, leader, salary);
+            const auto [factionId, rankId, leader, salary, skin] = membership;
+            m_factionService.handleSessionStart(*player, accountId, factionId, rankId, leader, salary, skin);
         },
         [](const std::string &error)
         {
@@ -1312,7 +1344,7 @@ void FactionSystem::showDevMenu(IPlayer &player)
     dialog.style = DialogStyle_LIST;
     dialog.title = u("Фракции — дев-меню");
     dialog.body = u("Список фракций\nПринять игрока во фракцию\nНазначить лидера\nИсключить из фракции\n"
-                    "Установить бюджет");
+                    "Установить бюджет\nТелепорт на спавн организации");
     dialog.leftButton = u("Выбрать");
     dialog.rightButton = u("Закрыть");
 
@@ -1338,6 +1370,9 @@ void FactionSystem::showDevMenu(IPlayer &player)
                                  break;
                              case 4:
                                  showDevBudgetPick(*player);
+                                 break;
+                             case 5:
+                                 showDevSpawnTeleportPick(*player);
                                  break;
                              default:
                                  break;
@@ -1559,6 +1594,75 @@ void FactionSystem::showDevBudgetInput(IPlayer &player, int factionId)
                              }
                              player->sendClientMessage(INFO_COLOUR, u(fmt::format("Бюджет фракции: ${}", *amount)));
                          });
+}
+
+void FactionSystem::showDevSpawnTeleportPick(IPlayer &player)
+{
+    // Список фильтруем: только фракции с заданной точкой спавна (у части —
+    // напр. банков — спавна нет). listItem маппим по ЭТОМУ отфильтрованному
+    // списку id, а не по индексу в getFactions(), поэтому копим id отдельно.
+    std::string body;
+    std::vector<int> spawnFactionIds;
+    for (const FactionService::Faction &faction : m_factionService.getFactions())
+    {
+        if (!faction.spawn.defined)
+            continue;
+        spawnFactionIds.push_back(faction.id);
+        body += fmt::format("{} (id {})\n", faction.name, faction.id);
+    }
+    if (spawnFactionIds.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Нет фракций с заданной точкой спавна"));
+        showDevMenu(player);
+        return;
+    }
+    body.pop_back();
+
+    Dialog dialog;
+    dialog.style = DialogStyle_LIST;
+    dialog.title = u("Телепорт на спавн — выбор фракции");
+    dialog.body = u(body);
+    dialog.leftButton = u("Выбрать");
+    dialog.rightButton = u("Назад");
+
+    m_dialogService.show(
+        player, dialog,
+        // spawnFactionIds копируем в лямбду: список фракций может измениться
+        // между показом и ответом — маппинг listItem -> id берём из снимка,
+        // но сам спавн перепроверяем по актуальному getFaction ниже.
+        [this, playerId = player.getID(), spawnFactionIds = std::move(spawnFactionIds)](DialogResponse response,
+                                                                                       int listItem, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showDevMenu(*player);
+                return;
+            }
+            if (listItem < 0 || static_cast<std::size_t>(listItem) >= spawnFactionIds.size())
+                return;
+            const int factionId = spawnFactionIds[listItem];
+
+            // Перепроверяем фракцию и факт наличия спавна по актуальному
+            // источнику правды — снимок мог устареть.
+            const FactionService::Faction *faction = m_factionService.getFaction(factionId);
+            if (!faction || !faction->spawn.defined)
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("У фракции больше нет точки спавна"));
+                return;
+            }
+
+            // Цель телепорта — СЕРВЕРНАЯ точка спавна фракции (не клиентский ввод).
+            const FactionService::Spawn &spawn = faction->spawn;
+            m_locationService.teleport(*player, spawn.position, static_cast<unsigned>(spawn.interior),
+                                       spawn.virtualWorld);
+            player->setRotation(GTAQuat(Vector3(0.0f, 0.0f, spawn.angle)));
+            player->setCameraBehind();
+            player->sendClientMessage(INFO_COLOUR,
+                                      u(fmt::format("Телепорт на спавн «{}»", faction->name)));
+        });
 }
 
 // ------------------------------------------------------------------ информация
