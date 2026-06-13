@@ -3,8 +3,6 @@
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
 #include "fmt/format.h"
-#include "types.hpp"
-#include <chrono>
 #include <limits>
 
 namespace
@@ -14,7 +12,6 @@ constexpr size_t PAY_BUFFER_SIZE = 128 + 1;
 const Colour PAY_COLOUR = Colour::FromRGBA(0x33AA33FF); // читаемый зелёный
 // Потолок баланса: HUD money на клиенте — signed int32, выше уедет в минус.
 constexpr unsigned long long MONEY_MAX = static_cast<unsigned long long>(std::numeric_limits<int>::max());
-constexpr std::chrono::milliseconds PAY_COOLDOWN{1000}; // антифлуд: не чаще раза в секунду на игрока
 
 std::string u(const std::string &text)
 {
@@ -33,15 +30,6 @@ PaymentSystem::PaymentSystem(ICore &core, const ServiceRegister &serviceRegister
         {
             const int payerId = player.getID();
             const int targetId = args.getInt(0);
-
-            // Антифлуд: успешный перевод шлёт строку и получателю, поэтому темп
-            // ограничиваем, чтобы нельзя было засыпать чужой чат переводами по 1$.
-            const TimePoint now = std::chrono::steady_clock::now();
-            if (now - m_lastPay[payerId] < PAY_COOLDOWN)
-            {
-                player.sendClientMessage(PAY_COLOUR, u("Не так быстро"));
-                return;
-            }
 
             // get() сам отсекает невалидный/неактивный id (в т.ч. отрицательный).
             IPlayer *target = m_core.getPlayers().get(targetId);
@@ -99,7 +87,6 @@ PaymentSystem::PaymentSystem(ICore &core, const ServiceRegister &serviceRegister
             // перевод синхронный и атомарный, HUD обоих участников = новый баланс.
             m_moneyService.setMoney(player, payerBalance - amount);
             m_moneyService.setMoney(*target, targetBalance + amount);
-            m_lastPay[payerId] = now;
 
             // Прерываемая анимация передачи: игрок выходит из неё движением, сервер
             // не переустанавливает (interruptible).

@@ -11,7 +11,6 @@
 #include "Services/PlayerSpawnService/PlayerSpawnService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
-#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -149,6 +148,4 @@ class FactionSystem : public BaseSystem
     // Источник правды о ЛИЧНОМ (гражданском) скине аккаунта — в него член
     // возвращается при увольнении. Персист — PlayerPersonalSkinService/System.
     PlayerPersonalSkinService &m_personalSkinService;
-
-    std::array<TimePoint, MAX_PLAYERS> m_lastRadioAt{}; // антифлуд рации
 };

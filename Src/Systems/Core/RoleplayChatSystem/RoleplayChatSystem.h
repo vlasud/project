@@ -10,17 +10,17 @@
 
 // Ролевые проксимити-эмоуты: /me, /do, /try слышат игроки в радиусе RP_RADIUS
 // того же виртуального мира (поиск через сетку). Имя берётся серверно, текст —
-// сырой клиентский cp1251. Мут и антиспам — через PlayerChatService (тот же
-// барьер, что у обычного чата: через эмоуты мут не обойти).
+// сырой клиентский cp1251. Мут — через PlayerChatService (заглушённый игрок не
+// эмоутит); антифлуд команд — корневой, в PlayerCommandService.
 class RoleplayChatSystem : public BaseSystem
 {
   public:
     RoleplayChatSystem(ICore &core, const ServiceRegister &serviceRegister);
 
   private:
-    // Мут/антиспам через PlayerChatService: при блокировке шлёт игроку причину и
-    // возвращает false (эмоут не рассылается). text — cp1251, как у обычного чата.
-    bool passChatGate(IPlayer &player, StringView text);
+    // Барьер мута: заглушённому игроку шлёт причину и возвращает false (эмоут не
+    // рассылается). Флуд/повтор тут не учитываются — антифлуд команд корневой.
+    bool passChatGate(IPlayer &player);
 
     // Рассылка готовой строки всем ближним того же виртуального мира.
     void broadcast(IPlayer &author, StringView line);

@@ -10,6 +10,7 @@ PlayerCommandSystem::PlayerCommandSystem(ICore &core, const ServiceRegister &ser
     : BaseSystem(core, serviceRegister), m_commandService(serviceRegister.getService<PlayerCommandService>())
 {
     core.getPlayers().getPlayerTextDispatcher().addEventHandler(this);
+    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
 }
 
 bool PlayerCommandSystem::onPlayerCommandText(IPlayer &player, StringView message)
@@ -20,4 +21,9 @@ bool PlayerCommandSystem::onPlayerCommandText(IPlayer &player, StringView messag
         player.sendClientMessage(Colour::White(), ERROR_MESSAGE);
     }
     return true;
+}
+
+void PlayerCommandSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)
+{
+    m_commandService.reset(player.getID());
 }

@@ -1,8 +1,11 @@
 #pragma once
 
+#include "Macro.h"
 #include "Services/IService.h"
 #include "player.hpp"
 #include "types.hpp"
+#include <array>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <string>
@@ -22,6 +25,12 @@
 // StringView-срезы исходного буфера. Поиск команды — O(1) через unordered_map с
 // гетерогенным ключом. Единственная аллокация — вектор аргументов. Срезы валидны
 // на время вызова обработчика; хранить их за его пределами нельзя.
+//
+// Корневой антифлуд: dispatch() блокирует исполнение ВСЕХ команд игрока, если он
+// шлёт одну и ту же команду подряд слишком часто (порог CMD_FLOOD_THRESHOLD
+// повторов в окне CMD_FLOOD_WINDOW). Состояние — пер-игрок в самом сервисе;
+// чистится reset() на дисконнекте (иначе блок/счётчик утечёт в переиспользованный
+// слот). Проверка стоит до разбора аргументов — ловит и спам usage-сообщений.
 class PlayerCommandService final : public IService
 {
   public:
@@ -80,6 +89,9 @@ class PlayerCommandService final : public IService
     // Разобрать сообщение и вызвать обработчик. Возвращает true, если команда найдена.
     bool dispatch(IPlayer &player, StringView message);
 
+    // Сброс пер-игрокового антифлуд-состояния. Зовётся системой на дисконнекте.
+    void reset(int playerId);
+
   private:
     struct ParamInfo
     {
@@ -108,5 +120,24 @@ class PlayerCommandService final : public IService
         bool operator()(StringView a, StringView b) const noexcept;
     };
 
+    // Пер-игроковое антифлуд-состояние. lastCommand — фиксированный буфер (без
+    // аллокаций в горячем пути): длинные команды сравниваются по префиксу длины
+    // LAST_COMMAND_CAP — для детекта одинакового спама этого достаточно.
+    static constexpr std::size_t LAST_COMMAND_CAP = 128;
+    struct State
+    {
+        std::array<char, LAST_COMMAND_CAP> lastCommand{}; // нормализованная (ASCII-lower) строка после '/'
+        std::size_t lastCommandLen = 0;
+        int repeatCount = 0;     // подряд идущих одинаковых вводов в окне
+        TimePoint lastCommandAt; // момент последнего ввода (для окна повторов)
+        TimePoint blockUntil;    // до этого момента все команды игрока заблокированы
+        TimePoint lastNoticeAt;  // последний показ сообщения о блоке (троттлинг)
+    };
+
+    // Корневой антифлуд: true — команду исполнять НЕ нужно (молча/с сообщением
+    // отклонена). normalizedLine — строка после '/' в нижнем ASCII-регистре.
+    bool isFlooding(IPlayer &player, StringView normalizedLine, TimePoint now);
+
     std::unordered_map<std::string, Command, CiHash, CiEqual> m_commands;
+    std::array<State, MAX_PLAYERS> m_state;
 };

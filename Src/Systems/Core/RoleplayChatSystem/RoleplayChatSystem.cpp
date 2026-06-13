@@ -3,8 +3,6 @@
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
 #include "fmt/format.h"
-#include "types.hpp"
-#include <chrono>
 #include <random>
 
 namespace
@@ -67,8 +65,8 @@ RoleplayChatSystem::RoleplayChatSystem(ICore &core, const ServiceRegister &servi
     commands.add("me", {{PlayerCommandService::Param::String, "текст"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
-                     // Мут и антиспам — общий барьер с чатом: через эмоуты мут не обойти.
-                     if (!passChatGate(player, args.getString(0)))
+                     // Мут — общий барьер с чатом: через эмоуты мут не обойти.
+                     if (!passChatGate(player))
                          return;
 
                      char textBuf[RP_MAX_TEXT_LENGTH + 1];
@@ -84,7 +82,7 @@ RoleplayChatSystem::RoleplayChatSystem(ICore &core, const ServiceRegister &servi
     commands.add("do", {{PlayerCommandService::Param::String, "текст"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
-                     if (!passChatGate(player, args.getString(0)))
+                     if (!passChatGate(player))
                          return;
 
                      char textBuf[RP_MAX_TEXT_LENGTH + 1];
@@ -100,7 +98,7 @@ RoleplayChatSystem::RoleplayChatSystem(ICore &core, const ServiceRegister &servi
     commands.add("try", {{PlayerCommandService::Param::String, "текст"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
-                     if (!passChatGate(player, args.getString(0)))
+                     if (!passChatGate(player))
                          return;
 
                      char textBuf[RP_MAX_TEXT_LENGTH + 1];
@@ -114,24 +112,17 @@ RoleplayChatSystem::RoleplayChatSystem(ICore &core, const ServiceRegister &servi
                  });
 }
 
-bool RoleplayChatSystem::passChatGate(IPlayer &player, StringView text)
+bool RoleplayChatSystem::passChatGate(IPlayer &player)
 {
-    const TimePoint now = std::chrono::steady_clock::now();
-    const PlayerChatService::Check check = m_chatService.tryChat(player.getID(), text, now);
-    switch (check.block)
+    // Только мут — это модерация: заглушённый игрок не должен эмоутить. Флуд и
+    // повтор тут НЕ учитываем (не зовём tryChat) — антифлуд команд корневой,
+    // в PlayerCommandService (см. Docs/CommandFlood.md).
+    const int playerId = player.getID();
+    if (m_chatService.isMuted(playerId))
     {
-    case PlayerChatService::Block::Muted:
-        player.sendClientMessage(Colour::White(),
-                                 u(fmt::format("Чат заблокирован. Осталось: {} сек", check.secondsLeft)));
+        player.sendClientMessage(
+            Colour::White(), u(fmt::format("Чат заблокирован. Осталось: {} сек", m_chatService.muteSecondsLeft(playerId))));
         return false;
-    case PlayerChatService::Block::TooFast:
-        player.sendClientMessage(Colour::White(), u("Не так быстро! Подождите немного"));
-        return false;
-    case PlayerChatService::Block::Duplicate:
-        player.sendClientMessage(Colour::White(), u("Не повторяйтесь"));
-        return false;
-    case PlayerChatService::Block::None:
-        break;
     }
     return true;
 }

@@ -1,10 +1,25 @@
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 
 #include "Utils/Encoding/Encoding.h"
+#include "fmt/format.h"
+#include <algorithm>
 #include <charconv>
 
 namespace
 {
+// Корневой антифлуд (решение геймдизайнера). «Та же команда» — полная строка
+// после '/' (имя+параметры) целиком, регистронезависимо по ASCII; пробелы не
+// нормализуются.
+constexpr int CMD_FLOOD_THRESHOLD = 5;                       // блок ставит 5-й одинаковый ввод подряд
+constexpr std::chrono::milliseconds CMD_FLOOD_WINDOW{1500};  // макс. интервал между повторами
+constexpr std::chrono::milliseconds CMD_FLOOD_BLOCK{3000};   // длительность блока всех команд
+constexpr std::chrono::milliseconds CMD_FLOOD_NOTICE_COOLDOWN{1000}; // мин. интервал показа сообщения о блоке
+
+std::string u(const std::string &text)
+{
+    return Encoding::utf8Tocp1251(text);
+}
+
 // ASCII-нижний регистр: без локали и без UB на отрицательных char. Имён команд
 // в кириллице мы не ждём, поэтому ASCII достаточно.
 inline char asciiLower(char c)
@@ -85,6 +100,20 @@ bool PlayerCommandService::dispatch(IPlayer &player, StringView message)
     if (it == m_commands.end())
         return false;
 
+    // Корневой антифлуд — ДО разбора аргументов/usage, чтобы ловить и спам
+    // usage-сообщений. «Та же команда» = вся строка после '/' (имя+параметры),
+    // ASCII-регистронезависимо; нормализуем в стековый буфер (без аллокаций).
+    const TimePoint now = std::chrono::steady_clock::now();
+    {
+        const StringView rawLine(message.data() + 1, message.size() - 1);
+        char lowerBuf[LAST_COMMAND_CAP];
+        const std::size_t lowerLen = std::min<std::size_t>(rawLine.size(), LAST_COMMAND_CAP);
+        for (std::size_t i = 0; i < lowerLen; ++i)
+            lowerBuf[i] = asciiLower(rawLine[i]);
+        if (isFlooding(player, StringView(lowerBuf, lowerLen), now))
+            return true;
+    }
+
     const Command &cmd = it->second;
     const std::size_t paramCount = cmd.params.size();
 
@@ -135,4 +164,60 @@ bool PlayerCommandService::dispatch(IPlayer &player, StringView message)
 
     cmd.handler(player, CommandArgs(args));
     return true;
+}
+
+bool PlayerCommandService::isFlooding(IPlayer &player, StringView normalizedLine, TimePoint now)
+{
+    const int playerId = player.getID();
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return false;
+    State &state = m_state[playerId];
+
+    // Активный блок: все команды отклоняются. Сообщение об остатке троттлим.
+    if (now < state.blockUntil)
+    {
+        if (now - state.lastNoticeAt >= CMD_FLOOD_NOTICE_COOLDOWN)
+        {
+            const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(state.blockUntil - now);
+            // ceil остатка в секундах (целые секунды → как есть).
+            const long long secondsLeft = (remainingMs.count() + 999) / 1000;
+            player.sendClientMessage(Colour::White(),
+                                     u(fmt::format("Команды заблокированы. Осталось: {} сек.", secondsLeft)));
+            state.lastNoticeAt = now;
+        }
+        return true;
+    }
+
+    // Счётчик одинаковых вводов в окне. Сравниваем нормализованную строку с
+    // прошлой; разрыв больше окна — счётчик сбрасывается.
+    const StringView lastCommand(state.lastCommand.data(), state.lastCommandLen);
+    if (normalizedLine == lastCommand && now - state.lastCommandAt < CMD_FLOOD_WINDOW)
+        ++state.repeatCount;
+    else
+        state.repeatCount = 1;
+
+    state.lastCommandLen = std::min<std::size_t>(normalizedLine.size(), LAST_COMMAND_CAP);
+    std::copy_n(normalizedLine.data(), state.lastCommandLen, state.lastCommand.data());
+    state.lastCommandAt = now;
+
+    if (state.repeatCount >= CMD_FLOOD_THRESHOLD)
+    {
+        state.blockUntil = now + CMD_FLOOD_BLOCK;
+        state.repeatCount = 0;
+        const long long blockSeconds = std::chrono::duration_cast<std::chrono::seconds>(CMD_FLOOD_BLOCK).count();
+        player.sendClientMessage(
+            Colour::White(),
+            u(fmt::format("Слишком много одинаковых команд. Подождите {} сек.", blockSeconds)));
+        state.lastNoticeAt = now;
+        return true;
+    }
+
+    return false;
+}
+
+void PlayerCommandService::reset(int playerId)
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return;
+    m_state[playerId] = State{};
 }

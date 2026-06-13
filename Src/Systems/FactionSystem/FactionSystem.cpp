@@ -20,8 +20,6 @@ const Colour ERROR_COLOUR{255, 90, 90};
 const Colour CIVILIAN_COLOUR{200, 200, 200};
 // Рация организации: весь текст светло-зелёный.
 const Colour RADIO_COLOUR{144, 238, 144};
-// Антифлуд рации.
-constexpr Milliseconds RADIO_COOLDOWN{1000};
 constexpr std::size_t MAX_RADIO_BYTES = 180; // utf-8, ~90 кириллических
 
 std::string u(const std::string &text)
@@ -243,17 +241,11 @@ void FactionSystem::radioChat(IPlayer &player, StringView rawText)
         return;
     }
 
-    // Антифлуд: рация в обход общего чата, кулдаун свой.
-    const TimePoint now = std::chrono::steady_clock::now();
-    if (now - m_lastRadioAt[playerId] < RADIO_COOLDOWN)
-        return;
-
     // Ввод клиента: cp1251 -> utf-8, чистка и обрезка без разрыва символа.
     const std::string text = Encoding::sanitizeUserText(
         Encoding::cp1251Toutf8(std::string(rawText.data(), rawText.size())), MAX_RADIO_BYTES);
     if (text.empty())
         return;
-    m_lastRadioAt[playerId] = now;
 
     const FactionService::Rank *rank = m_factionService.getMemberRank(playerId);
     const std::string message = u(fmt::format("[R] [{}] {}[{}] : {}", rank ? rank->name : "?",
