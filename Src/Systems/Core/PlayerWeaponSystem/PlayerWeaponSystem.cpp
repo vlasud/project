@@ -7,7 +7,8 @@ PlayerWeaponSystem::PlayerWeaponSystem(ICore &core, const ServiceRegister &servi
     : BaseSystem(core, serviceRegister), m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
       m_antiCheatService(serviceRegister.getService<AntiCheatService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
-      m_velocityService(serviceRegister.getService<PlayerVelocityService>())
+      m_velocityService(serviceRegister.getService<PlayerVelocityService>()),
+      m_weaponProficiencyService(serviceRegister.getService<WeaponProficiencyService>())
 {
     core.getPlayers().getPlayerShotDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
@@ -52,6 +53,14 @@ bool PlayerWeaponSystem::handleShot(IPlayer &player, const PlayerBulletData &bul
     if (outcome.flag != PlayerWeaponService::ShotFlag::None)
     {
         m_antiCheatService.record(player.getID(), toViolation(outcome.flag), std::move(outcome.detail), now);
+    }
+    if (!outcome.drop)
+    {
+        // Прогрессия владения — ТОЛЬКО по серверно-валидному выстрелу: фейковые/
+        // rapid-fire/ammo-hack выстрелы дропнуты выше и сюда не доходят, фарма
+        // скилла фейковыми RPC нет. Оружие — из серверного bulletData.weapon.
+        // registerShot — O(1), без аллокаций/БД (hot path, каждая пуля).
+        m_weaponProficiencyService.registerShot(player.getID(), bulletData.weapon);
     }
     return !outcome.drop; // фейковый выстрел дальше по конвейеру не идёт
 }

@@ -4,6 +4,7 @@
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
+#include "Services/WeaponProficiencyService/WeaponProficiencyService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 
@@ -42,4 +43,6 @@ class PlayerWeaponSystem : public BaseSystem,
     AntiCheatService &m_antiCheatService;
     PlayerLocationService &m_locationService;
     PlayerVelocityService &m_velocityService;
+    // Прогрессия владения оружием: инкремент только на серверно-валидном выстреле.
+    WeaponProficiencyService &m_weaponProficiencyService;
 };

@@ -36,6 +36,7 @@
 #include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/WeaponSkillService/WeaponSkillService.h"
+#include "Services/WeaponProficiencyService/WeaponProficiencyService.h"
 #include "Services/Core/SpectateService/SpectateService.h"
 #include "Services/Core/StreamerService/StreamerService.h"
 #include "Services/Core/TextDrawService/TextDrawService.h"
@@ -54,6 +55,10 @@ void ServiceRegister::registerServices()
     registerService<PlayerVelocityService>();
     registerService<PlayerWeaponService>();
     registerService<WeaponSkillService>();
+    // Кастомная прогрессия владения оружием (бизнес-стат аккаунта, не Core):
+    // без зависимостей; PlayerWeaponSystem (хук выстрела) и WeaponProficiencySystem
+    // (persist) берут её из регистра.
+    registerService<WeaponProficiencyService>();
     registerService<VehicleService>();
     registerService<GridService>();
     registerService<StreamerService>();
