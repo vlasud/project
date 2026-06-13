@@ -10,6 +10,7 @@
 #include "Systems/Core/DebugCameraSystem/DebugCameraSystem.h"
 #include "Systems/Core/EditorSystem/EditorSystem.h"
 #include "Systems/BankSystem/BankSystem.h"
+#include "Systems/PaymentSystem/PaymentSystem.h"
 #include "Systems/ElectionSystem/ElectionSystem.h"
 #include "Systems/FactionSystem/FactionSystem.h"
 #include "Systems/Factions/ArmyAirForceSystem/ArmyAirForceSystem.h"
@@ -51,6 +52,7 @@
 #include "Systems/Core/PlayerSkinSystem/PlayerSkinSystem.h"
 #include "Systems/PlayerPersonalSkinSystem/PlayerPersonalSkinSystem.h"
 #include "Systems/Core/PlayerStateSystem/PlayerStateSystem.h"
+#include "Systems/Core/RoleplayChatSystem/RoleplayChatSystem.h"
 #include "Systems/Core/PlayerVelocitySystem/PlayerVelocitySystem.h"
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
 #include "Systems/Core/WeaponSkillSystem/WeaponSkillSystem.h"
@@ -175,6 +177,7 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<ArmyGroundSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ArmyAirForceSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<BankSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PaymentSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ElectionSystem>(core, serviceRegister));
     // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до
     // того, как /camera начнёт им пользоваться.
@@ -182,6 +185,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<DebugCameraSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<EditorSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ChatSystemSystem>(core, serviceRegister));
+    // RoleplayChatSystem после ChatSystem: те же сервисы (команды/грид/локация/чат),
+    // общий с чатом барьер мута/антиспама через PlayerChatService.
+    m_systems.push_back(std::make_unique<RoleplayChatSystem>(core, serviceRegister));
 }
 
 void SystemRegister::initializeSystems(IComponentList *components)

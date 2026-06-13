@@ -17,7 +17,7 @@ class PlayerMoneyService final : public IService
 
     // --- серверные операции ---
     void setMoney(IPlayer &player, unsigned long long amount);  // абсолютная установка
-    void giveMoney(IPlayer &player, unsigned long long amount); // прибавить (может быть отрицательным)
+    void giveMoney(IPlayer &player, unsigned long long amount); // прибавить к балансу
 
     void reset(int playerId);
 
