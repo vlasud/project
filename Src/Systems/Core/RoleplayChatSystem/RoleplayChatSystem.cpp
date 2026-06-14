@@ -76,7 +76,8 @@ RoleplayChatSystem::RoleplayChatSystem(ICore &core, const ServiceRegister &servi
                      const auto formatted =
                          fmt::format_to_n(buffer, RP_BUFFER_SIZE - 1, "* {} {}", player.getName(), text);
                      broadcast(player, StringView(buffer, std::min<size_t>(formatted.size, RP_BUFFER_SIZE - 1)));
-                 });
+                 },
+                 {}, "описать своё действие в ролевом чате", PlayerCommandService::HelpCategory::ChatRP);
 
     // /do — описание окружения/состояния: "* дверь приоткрыта ((Имя))".
     commands.add("do", {{PlayerCommandService::Param::String, "текст"}},
@@ -92,7 +93,8 @@ RoleplayChatSystem::RoleplayChatSystem(ICore &core, const ServiceRegister &servi
                      const auto formatted =
                          fmt::format_to_n(buffer, RP_BUFFER_SIZE - 1, "* {} (({}))", text, player.getName());
                      broadcast(player, StringView(buffer, std::min<size_t>(formatted.size, RP_BUFFER_SIZE - 1)));
-                 });
+                 },
+                 {}, "описать обстановку или состояние вокруг", PlayerCommandService::HelpCategory::ChatRP);
 
     // /try — попытка действия с исходом 50/50: "* Имя дёргает дверь ((удачно))".
     commands.add("try", {{PlayerCommandService::Param::String, "текст"}},
@@ -109,7 +111,8 @@ RoleplayChatSystem::RoleplayChatSystem(ICore &core, const ServiceRegister &servi
                      const auto formatted = fmt::format_to_n(buffer, RP_BUFFER_SIZE - 1, "* {} {} (({}))",
                                                              player.getName(), text, result);
                      broadcast(player, StringView(buffer, std::min<size_t>(formatted.size, RP_BUFFER_SIZE - 1)));
-                 });
+                 },
+                 {}, "описать действие с исходом удача/провал", PlayerCommandService::HelpCategory::ChatRP);
 }
 
 bool RoleplayChatSystem::passChatGate(IPlayer &player)

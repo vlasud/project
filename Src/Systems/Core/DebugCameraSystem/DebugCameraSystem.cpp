@@ -99,7 +99,8 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
 
                              showMain(player);
                          },
-                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "дев-камера: облёт по точкам (меню)",
+                         PlayerCommandService::HelpCategory::Hidden);
 
     m_commandService.add("cpoint", {},
                          [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -113,7 +114,8 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
                              }
                              savePoint(player);
                          },
-                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "сохранить точку маршрута дев-камеры",
+                         PlayerCommandService::HelpCategory::Hidden);
 
     m_commandService.add("cplay", {},
                          [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -130,7 +132,8 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
                              }
                              startPlayback(player);
                          },
-                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "проиграть облёт по сохранённым точкам",
+                         PlayerCommandService::HelpCategory::Hidden);
 }
 
 void DebugCameraSystem::initialize(IComponentList *components)

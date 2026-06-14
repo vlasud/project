@@ -103,5 +103,6 @@ PaymentSystem::PaymentSystem(ICore &core, const ServiceRegister &serviceRegister
 
             player.sendClientMessage(PAY_COLOUR, line);
             target->sendClientMessage(PAY_COLOUR, line);
-        });
+        },
+        {}, "передать наличные игроку рядом", PlayerCommandService::HelpCategory::Economy);
 }

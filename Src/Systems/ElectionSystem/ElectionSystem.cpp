@@ -45,7 +45,8 @@ ElectionSystem::ElectionSystem(ICore &core, const ServiceRegister &serviceRegist
 {
     // Дев-меню админа (до системы ролей открыто, как и прочие дев-тулзы).
     serviceRegister.getService<PlayerCommandService>().add(
-        "edev", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showDevMenu(player); });
+        "edev", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showDevMenu(player); }, {},
+        "дев-меню выборов (меню)", PlayerCommandService::HelpCategory::Hidden);
 }
 
 void ElectionSystem::initialize(IComponentList *components)

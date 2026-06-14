@@ -177,7 +177,8 @@ TextDrawEditorSystem::TextDrawEditorSystem(ICore &core, const ServiceRegister &s
                                  showMain(player);
                              }
                          },
-                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "редактор текстдро (меню)",
+                         PlayerCommandService::HelpCategory::Hidden);
 }
 
 TextDrawEditorSystem::Session &TextDrawEditorSystem::sessionOf(const IPlayer &player)

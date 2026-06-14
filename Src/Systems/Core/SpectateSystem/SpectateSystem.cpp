@@ -52,7 +52,8 @@ SpectateSystem::SpectateSystem(ICore &core, const ServiceRegister &serviceRegist
                          Colour::White(), u(fmt::format("Наблюдение за {} (id {}). /specoff — выйти.",
                                                         target->getName().to_string(), target->getID())));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "наблюдать за игроком по id",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("specoff", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -65,7 +66,8 @@ SpectateSystem::SpectateSystem(ICore &core, const ServiceRegister &serviceRegist
                      m_spectateService.stop(player);
                      player.sendClientMessage(Colour::White(), u("Спектейт завершён"));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "выйти из режима наблюдения",
+                 PlayerCommandService::HelpCategory::Hidden);
 }
 
 void SpectateSystem::initialize(IComponentList *components)

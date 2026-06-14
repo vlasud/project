@@ -41,11 +41,13 @@ GridDebugSystem::GridDebugSystem(ICore &core, const ServiceRegister &serviceRegi
 
     commands.add("gridtest", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { buildTestField(player); },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "построить тестовое поле объектов вокруг себя",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("gridclear", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { clearTestField(player); },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "убрать тестовое поле объектов",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("gridcell", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -56,7 +58,8 @@ GridDebugSystem::GridDebugSystem(ICore &core, const ServiceRegister &serviceRegi
                      player.sendClientMessage(
                          DEBUG_COLOUR, u(state.cellNotify ? "Уведомления о ячейках: ВКЛ" : "Уведомления о ячейках: выкл"));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL),
+                 "включить или выключить уведомления о смене ячейки", PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("streamdebug", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -66,12 +69,14 @@ GridDebugSystem::GridDebugSystem(ICore &core, const ServiceRegister &serviceRegi
                      player.sendClientMessage(
                          DEBUG_COLOUR, u(state.streamNotify ? "Стрим-уведомления: ВКЛ" : "Стрим-уведомления: выкл"));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL),
+                 "включить или выключить уведомления стримера", PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("near", {{PlayerCommandService::Param::Int, "радиус"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  { reportNear(player, args.getInt(0)); },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "показать сущности в заданном радиусе",
+                 PlayerCommandService::HelpCategory::Hidden);
 }
 
 void GridDebugSystem::buildTestField(IPlayer &player)

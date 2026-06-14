@@ -120,13 +120,27 @@ class PlayerCommandService final : public IService
 
     using Handler = std::function<void(IPlayer &, const CommandArgs &)>;
 
-    // Доступная игроку админ-команда: имя (нижний регистр, как хранится) и её
-    // порог по уровню. Используется /ahelp для построения списка тем же
-    // резолвером, что и dispatch.
+    // Категория команды для /help: задаёт секцию справки и попадание в неё.
+    // Hidden — НЕ показывать в /help (админ/dev/модерация — для них /ahelp).
+    // Фильтрацию фракционной секции по членству делает вызывающий /help (сервису
+    // команд про фракции знать не нужно).
+    enum class HelpCategory : std::uint8_t
+    {
+        Hidden,
+        ChatRP,
+        Economy,
+        Faction,
+        Misc
+    };
+
+    // Доступная игроку админ-команда: имя (нижний регистр, как хранится), её
+    // порог по уровню и описание (utf-8). Используется /ahelp для построения
+    // списка тем же резолвером, что и dispatch.
     struct AccessibleCommand
     {
         std::string name;
         int adminLevel;
+        std::string description; // utf-8; кодируется один раз вместе с телом диалога
     };
 
     // Перечислить АДМИН-команды (Kind::AdminLevel), доступные игроку прямо сейчас
@@ -135,10 +149,28 @@ class PlayerCommandService final : public IService
     // не включаются. Редкий путь (по команде): O(числа команд) + аллокация вектора.
     std::vector<AccessibleCommand> collectAccessible(IPlayer &player) const;
 
+    // Команда для /help: имя (нижний регистр, как хранится), описание (utf-8) и
+    // категория. Фильтрацию по фракции делает вызывающий (/help).
+    struct HelpCommand
+    {
+        std::string name;
+        std::string description; // utf-8
+        HelpCategory category;
+    };
+
+    // Перечислить ВСЕ команды с helpCategory != Hidden (для /help). Категория и
+    // описание берутся как заявлены при регистрации; фильтр по правам тут НЕ
+    // применяется (фракционные команды — Kind::None, право проверяется внутри
+    // обработчика). Холодный путь (по команде): O(числа команд) + аллокация вектора.
+    std::vector<HelpCommand> collectHelpCommands() const;
+
     // Зарегистрировать команду. name — без '/'. Вызывается из конструктора системы.
     // perm — порог прав (по умолчанию None — открыта всем). Проверяется в
-    // dispatch заданным резолвером.
-    void add(std::string name, std::vector<Param> params, Handler handler, PermissionSpec perm = {});
+    // dispatch заданным резолвером. description — utf-8 (НЕ cp1251): собирается в
+    // тело диалога /help|/ahelp и кодируется один раз вместе со всем телом.
+    // helpCategory — секция /help (Hidden — в /help не показывать).
+    void add(std::string name, std::vector<Param> params, Handler handler, PermissionSpec perm = {},
+             std::string description = {}, HelpCategory helpCategory = HelpCategory::Hidden);
 
     // Резолвер прав — общий для всех команд, задаёт владелец сервиса
     // (PlayerCommandSystem). Транслирует PermissionSpec в факты сервисов
@@ -164,7 +196,9 @@ class PlayerCommandService final : public IService
         std::vector<ParamInfo> params; // описания параметров; размер = их число
         std::string usage;             // готовая строка-подсказка, уже в cp1251
         Handler handler;
-        PermissionSpec perm; // порог прав; None — открыта всем
+        PermissionSpec perm;                            // порог прав; None — открыта всем
+        std::string description;                        // utf-8; для /help|/ahelp
+        HelpCategory helpCategory = HelpCategory::Hidden; // секция /help (Hidden — не показывать)
     };
 
     // Транспарентные хэш/сравнение по нижнему ASCII-регистру. Ключи хранятся уже

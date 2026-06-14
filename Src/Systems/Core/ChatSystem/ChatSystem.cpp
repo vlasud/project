@@ -73,7 +73,8 @@ ChatSystemSystem::ChatSystemSystem(ICore &core, const ServiceRegister &serviceRe
                                               u(fmt::format("Игрок {} замучен на {} сек", args.getInt(0), seconds)));
                      target->sendClientMessage(Colour::White(),
                                                u(fmt::format("Вам выдан мут на {} сек", seconds)));
-                 });
+                 },
+                 {}, "замутить игрока в чате на N секунд", PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("unmute", {{PlayerCommandService::Param::Int, "id игрока"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -87,7 +88,8 @@ ChatSystemSystem::ChatSystemSystem(ICore &core, const ServiceRegister &serviceRe
                      m_chatService.unmute(target->getID());
                      player.sendClientMessage(Colour::White(), u(fmt::format("Мут снят с {}", args.getInt(0))));
                      target->sendClientMessage(Colour::White(), u("Мут снят"));
-                 });
+                 },
+                 {}, "снять мут с игрока", PlayerCommandService::HelpCategory::Hidden);
 }
 
 bool ChatSystemSystem::onPlayerText(IPlayer &player, StringView message)

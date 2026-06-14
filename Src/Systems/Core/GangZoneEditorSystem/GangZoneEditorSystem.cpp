@@ -121,7 +121,8 @@ GangZoneEditorSystem::GangZoneEditorSystem(ICore &core, const ServiceRegister &s
                              }
                              showMain(player);
                          },
-                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "редактор ганг-зон (меню)",
+                         PlayerCommandService::HelpCategory::Hidden);
 
     // Проверка членства по реальной (обрезанной) геометрии — точка всегда
     // принадлежит максимум одной зоне.
@@ -139,7 +140,8 @@ GangZoneEditorSystem::GangZoneEditorSystem(ICore &core, const ServiceRegister &s
                                  player.sendClientMessage(Colour::White(), u("Вы вне зон"));
                              }
                          },
-                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL),
+                         "показать, в какой ганг-зоне вы стоите", PlayerCommandService::HelpCategory::Hidden);
 }
 
 GangZoneEditorSystem::Session &GangZoneEditorSystem::sessionOf(const IPlayer &player)

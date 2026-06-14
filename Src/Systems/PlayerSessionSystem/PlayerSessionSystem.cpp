@@ -35,7 +35,8 @@ PlayerSessionSystem::PlayerSessionSystem(ICore &core, const ServiceRegister &ser
             player.sendClientMessage(DEBUG_COLOUR, u(fmt::format("Аккаунт #{} | сессия №{} | в игре {} мин",
                                                                  session->accountId, session->serial,
                                                                  minutes.count())));
-        });
+        },
+        {}, "показать данные своей сессии: аккаунт, время в игре", PlayerCommandService::HelpCategory::Hidden);
 }
 
 void PlayerSessionSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)

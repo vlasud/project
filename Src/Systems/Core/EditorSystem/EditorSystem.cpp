@@ -350,7 +350,8 @@ EditorSystem::EditorSystem(ICore &core, const ServiceRegister &serviceRegister)
 
                              showMain(player);
                          },
-                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "редактор объектов (меню)",
+                         PlayerCommandService::HelpCategory::Hidden);
 }
 
 void EditorSystem::initialize(IComponentList *components)

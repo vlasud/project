@@ -86,7 +86,8 @@ FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister
                          showLeaderMenu(player);
                      else
                          showFactionInfo(player);
-                 });
+                 },
+                 {}, "меню организации: состав, ранги, бюджет", PlayerCommandService::HelpCategory::Faction);
 
     // --- команды лидера по людям ---
 
@@ -94,43 +95,50 @@ FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
                      inviteMember(player, args.getInt(0));
-                 });
+                 },
+                 {}, "пригласить игрока в организацию", PlayerCommandService::HelpCategory::Faction);
 
     commands.add("uninvite", {{PlayerCommandService::Param::Int, "id игрока"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
                      uninviteMember(player, args.getInt(0));
-                 });
+                 },
+                 {}, "уволить игрока из организации", PlayerCommandService::HelpCategory::Faction);
 
     commands.add("setrank", {{PlayerCommandService::Param::Int, "id игрока"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
                      showSetRankDialog(player, args.getInt(0));
-                 });
+                 },
+                 {}, "назначить игроку ранг в организации", PlayerCommandService::HelpCategory::Faction);
 
     commands.add("setsalary", {{PlayerCommandService::Param::Int, "id игрока"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
                      showSetSalaryDialog(player, args.getInt(0));
-                 });
+                 },
+                 {}, "назначить игроку зарплату", PlayerCommandService::HelpCategory::Faction);
 
     // Рация организации: сообщение всем членам.
     commands.add("r", {{PlayerCommandService::Param::String, "текст"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
                      radioChat(player, args.getString(0));
-                 });
+                 },
+                 {}, "рация: написать всем в своей организации", PlayerCommandService::HelpCategory::Faction);
 
     // Смена скина из пула организации (право «Смена скина»).
     commands.add("skin", {},
-                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showSkinDialog(player); });
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showSkinDialog(player); },
+                 {}, "сменить скин из пула организации", PlayerCommandService::HelpCategory::Faction);
 
     // Куратор (министр/президент): управление лидерами подопечных фракций.
     commands.add("gov", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
                  {
                      showGovMenu(player);
-                 });
+                 },
+                 {}, "управление лидерами подопечных фракций", PlayerCommandService::HelpCategory::Faction);
 
     // Единое дев-меню фракций; доступ только разработчику (admin level 6).
     commands.add("fdev", {},
@@ -138,7 +146,8 @@ FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister
                  {
                      showDevMenu(player);
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "дев-меню фракций (меню)",
+                 PlayerCommandService::HelpCategory::Hidden);
 }
 
 void FactionSystem::initialize(IComponentList *components)

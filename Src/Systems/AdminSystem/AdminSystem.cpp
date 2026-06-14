@@ -40,76 +40,6 @@ const char *levelName(int level)
     return LEVEL_NAMES[level];
 }
 
-// Каталог кратких описаний админ- и dev-команд для /ahelp. Ключ — имя команды в
-// нижнем регистре (как хранит PlayerCommandService). Источник истины набора
-// команд — РЕЗОЛВЕР (collectAccessible); этот каталог лишь подписывает их. Нет
-// записи → строка показывается без описания (граничный случай, не падать).
-struct CommandDesc
-{
-    const char *name;
-    const char *desc;
-};
-constexpr CommandDesc COMMAND_DESCRIPTIONS[] = {
-    // --- админ ---
-    {"ahelp", "список доступных вам админ-команд"},
-    {"a", "админ-чат: написать всем админам онлайн"},
-    {"kick", "кикнуть игрока с сервера с указанием причины"},
-    {"ban", "забанить аккаунт на срок в днях с указанием причины"},
-    {"setadmin", "выдать или снять уровень админки (0–5)"},
-    {"alogin", "войти в админку по паролю"},
-    // --- dev: машины ---
-    {"veh", "заспавнить машину по модели и сесть в неё"},
-    {"vput", "сесть в ближайшую машину (до 50 м)"},
-    {"vdel", "удалить машину, в которой сидишь"},
-    {"vrespawn", "переспавнить машину (HP до 1000)"},
-    {"vinfo", "информация о машине: HP сервер/клиент, посадочное место"},
-    {"vhp", "задать HP машины (0–1000)"},
-    {"vrepair", "отремонтировать машину"},
-    {"vengine", "завести или заглушить двигатель"},
-    {"vlock", "запереть или отпереть двери машины"},
-    {"vmod", "установить тюнинг-компонент"},
-    {"vhack", "тест анти-чита: имитировать чит ремонта машины"},
-    // --- dev: локация ---
-    {"pos", "показать свои координаты, мир и интерьер"},
-    {"tp", "телепортироваться в координаты X Y Z"},
-    {"tpup", "подбросить себя вверх на N метров (тест падения)"},
-    {"vw", "сменить виртуальный мир"},
-    {"int", "сменить интерьер"},
-    {"hackpos", "тест анти-чита: имитировать чит телепорта"},
-    {"vel", "показать текущую скорость"},
-    {"veldebug", "включить или выключить уведомления о скорости"},
-    {"violations", "показать свой журнал нарушений анти-чита"},
-    {"acclear", "очистить свой журнал нарушений"},
-    // --- dev: редакторы/камера ---
-    {"editor", "редактор объектов (меню)"},
-    {"td", "редактор текстдро (меню)"},
-    {"gzone", "редактор ганг-зон (меню)"},
-    {"gzhere", "показать, в какой ганг-зоне вы стоите"},
-    {"camera", "дев-камера: облёт по точкам (меню)"},
-    {"cpoint", "сохранить точку маршрута дев-камеры"},
-    {"cplay", "проиграть облёт по сохранённым точкам"},
-    // --- dev: грид/стримлер ---
-    {"gridtest", "построить тестовое поле объектов вокруг себя"},
-    {"gridclear", "убрать тестовое поле объектов"},
-    {"gridcell", "включить или выключить уведомления о смене ячейки"},
-    {"streamdebug", "включить или выключить уведомления стримера"},
-    {"near", "показать сущности в заданном радиусе"},
-    // --- dev: прочее ---
-    {"rof", "замерить темп стрельбы (тест анти-rapid-fire)"},
-    {"spec", "наблюдать за игроком по id"},
-    {"specoff", "выйти из режима наблюдения"},
-    {"fdev", "дев-меню фракций (меню)"},
-};
-
-// Описание команды из каталога; нет записи — пустая строка (показ без описания).
-const char *commandDescription(const std::string &name)
-{
-    for (const CommandDesc &entry : COMMAND_DESCRIPTIONS)
-        if (name == entry.name)
-            return entry.desc;
-    return "";
-}
-
 constexpr std::size_t MAX_ADMIN_CHAT_BYTES = 180; // utf-8, ~90 кириллических (как рация)
 constexpr std::size_t MIN_ADMIN_PASSWORD = 8;
 
@@ -161,27 +91,31 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
     // кого есть пароль; единый отказ скрывает, кто админ).
     commands.add("alogin", {{PlayerCommandService::Param::String, "пароль"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
-                 { cmdLogin(player, args.getString(0)); });
+                 { cmdLogin(player, args.getString(0)); },
+                 {}, "войти в админку по паролю", PlayerCommandService::HelpCategory::Hidden);
 
     // /setadmin — Главный администратор (уровень 5) и выше (Разработчик, 6).
     commands.add("setadmin",
                  {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::Int, "уровень"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  { cmdSetAdmin(player, args.getInt(0), args.getInt(1)); },
-                 PermissionSpec::admin(AdminService::MAX_ASSIGNABLE_LEVEL));
+                 PermissionSpec::admin(AdminService::MAX_ASSIGNABLE_LEVEL), "выдать или снять уровень админки (0–5)",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     // /a — админ-чат (уровень 1+).
     commands.add("a", {{PlayerCommandService::Param::String, "текст"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  { cmdAdminChat(player, args.getString(0)); },
-                 PermissionSpec::admin(1));
+                 PermissionSpec::admin(1), "админ-чат: написать всем админам онлайн",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     // /kick — кик игрока (уровень 1+). Причина — обязательный параметр команды.
     commands.add("kick",
                  {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::String, "причина"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  { cmdKick(player, args.getInt(0), args.getString(1)); },
-                 PermissionSpec::admin(1));
+                 PermissionSpec::admin(1), "кикнуть игрока с сервера с указанием причины",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     // /ban — бан аккаунта на дни (уровень 3+). Причина обязательна (жадный
     // последний параметр).
@@ -191,13 +125,15 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
                   {PlayerCommandService::Param::String, "причина"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  { cmdBan(player, args.getInt(0), args.getInt(1), args.getString(2)); },
-                 PermissionSpec::admin(3));
+                 PermissionSpec::admin(3), "забанить аккаунт на срок в днях с указанием причины",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     // /ahelp — список доступных игроку админ-команд (любой залогиненный админ,
     // уровень 1+). Список строит резолвер по эфф. уровню: видно ровно то, что
     // доступно «прямо сейчас» (разработчик с эфф. 6 — весь dev-тулинг).
     commands.add("ahelp", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { cmdAdminHelp(player); },
-                 PermissionSpec::admin(1));
+                 PermissionSpec::admin(1), "список доступных вам админ-команд",
+                 PlayerCommandService::HelpCategory::Hidden);
 }
 
 void AdminSystem::loadAdmin(IPlayer &player, const PlayerSessionService::Session &session)
@@ -489,7 +425,7 @@ void AdminSystem::cmdAdminHelp(IPlayer &player)
             // всплывают над белыми строками. Длинное тире вместо U+2500 (нет в cp1251).
             body += fmt::format("{{FFB400}}—— {} (ур. {}) ——\t\n", levelName(currentLevel), currentLevel);
         }
-        body += fmt::format("/{}\t{}\n", cmd.name, commandDescription(cmd.name));
+        body += fmt::format("/{}\t{}\n", cmd.name, cmd.description);
     }
     if (list.empty())
         body += "Нет доступных команд\t\n";

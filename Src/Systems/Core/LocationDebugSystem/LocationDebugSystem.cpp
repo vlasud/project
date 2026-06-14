@@ -58,7 +58,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 
     commands.add("pos", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showPos(player); },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "показать свои координаты, мир и интерьер",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("tp", {{PlayerCommandService::Param::Int, "x"}, {PlayerCommandService::Param::Int, "y"},
                         {PlayerCommandService::Param::Int, "z"}},
@@ -71,7 +72,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                                                                           "Нарушений быть не должно — /violations",
                                                                           target.x, target.y, target.z)));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "телепортироваться в координаты X Y Z",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("tpup", {{PlayerCommandService::Param::Int, "метры"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -87,7 +89,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                                                      "смотри вертикальную скорость; SpeedHack быть не должно",
                                                      meters)));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "подбросить себя вверх на N метров (тест падения)",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vw", {{PlayerCommandService::Param::Int, "id"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -95,7 +98,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                      m_locationService.setVirtualWorld(player, args.getInt(0));
                      player.sendClientMessage(DEBUG_COLOUR, u(fmt::format("Виртуальный мир: {}", args.getInt(0))));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "сменить виртуальный мир",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("int", {{PlayerCommandService::Param::Int, "id"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -104,7 +108,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                      m_locationService.setInterior(player, static_cast<unsigned>(interior));
                      player.sendClientMessage(DEBUG_COLOUR, u(fmt::format("Интерьер: {}", interior)));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "сменить интерьер",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("hackpos", {{PlayerCommandService::Param::Int, "метры"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -124,10 +129,12 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                                                      "в /violations",
                                                      meters)));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "тест анти-чита: имитировать чит телепорта",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vel", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showVel(player); },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "показать текущую скорость",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("veldebug", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -137,11 +144,13 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                      player.sendClientMessage(DEBUG_COLOUR,
                                               u(state.velNotify ? "Поток скорости: ВКЛ" : "Поток скорости: выкл"));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL),
+                 "включить или выключить уведомления о скорости", PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("violations", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showViolations(player); },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "показать свой журнал нарушений анти-чита",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("acclear", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -151,7 +160,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                      m_antiCheatService.clear(player.getID());
                      player.sendClientMessage(DEBUG_COLOUR, u("Журнал нарушений очищен"));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "очистить свой журнал нарушений",
+                 PlayerCommandService::HelpCategory::Hidden);
 }
 
 void LocationDebugSystem::showPos(IPlayer &player)

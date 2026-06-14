@@ -64,7 +64,8 @@ WeaponProficiencySystem::WeaponProficiencySystem(ICore &core, const ServiceRegis
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
                  {
                      showSkills(player);
-                 });
+                 },
+                 {}, "навыки владения оружием", PlayerCommandService::HelpCategory::Misc);
 }
 
 void WeaponProficiencySystem::onPlayerConnect(IPlayer &player)

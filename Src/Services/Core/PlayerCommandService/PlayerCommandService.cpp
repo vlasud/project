@@ -59,7 +59,8 @@ bool PlayerCommandService::CiEqual::operator()(StringView a, StringView b) const
     return true;
 }
 
-void PlayerCommandService::add(std::string name, std::vector<Param> params, Handler handler, PermissionSpec perm)
+void PlayerCommandService::add(std::string name, std::vector<Param> params, Handler handler, PermissionSpec perm,
+                               std::string description, HelpCategory helpCategory)
 {
     for (char &c : name)
         c = asciiLower(c);
@@ -79,8 +80,10 @@ void PlayerCommandService::add(std::string name, std::vector<Param> params, Hand
         infos.push_back({param.type, std::move(numberError)});
     }
 
-    m_commands.emplace(std::move(name),
-                       Command{std::move(infos), Encoding::utf8Tocp1251(usage), std::move(handler), perm});
+    // description хранится как utf-8 (НЕ кодируем): он попадает в тело диалога
+    // /help|/ahelp и кодируется один раз вместе со всем телом.
+    m_commands.emplace(std::move(name), Command{std::move(infos), Encoding::utf8Tocp1251(usage), std::move(handler),
+                                                perm, std::move(description), helpCategory});
 }
 
 void PlayerCommandService::setPermissionResolver(PermissionResolver resolver)
@@ -100,7 +103,23 @@ std::vector<PlayerCommandService::AccessibleCommand> PlayerCommandService::colle
         if (cmd.perm.kind != PermissionSpec::Kind::AdminLevel)
             continue;
         if (m_permissionResolver && m_permissionResolver(player, cmd.perm))
-            result.push_back({name, cmd.perm.adminLevel});
+            result.push_back({name, cmd.perm.adminLevel, cmd.description});
+    }
+    return result;
+}
+
+std::vector<PlayerCommandService::HelpCommand> PlayerCommandService::collectHelpCommands() const
+{
+    std::vector<HelpCommand> result;
+    // Все команды с заявленной категорией (Hidden исключаем — это /ahelp).
+    // Право тут НЕ проверяем: фракционные команды зарегистрированы как Kind::None
+    // (право внутри обработчика), поэтому охват /help задаётся категорией + членством
+    // во фракции (членство проверяет вызывающий). Имя — как хранится (нижний регистр).
+    for (const auto &[name, cmd] : m_commands)
+    {
+        if (cmd.helpCategory == HelpCategory::Hidden)
+            continue;
+        result.push_back({name, cmd.description, cmd.helpCategory});
     }
     return result;
 }

@@ -33,7 +33,8 @@ WeaponDebugSystem::WeaponDebugSystem(ICore &core, const ServiceRegister &service
 
     serviceRegister.getService<PlayerCommandService>().add(
         "rof", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { toggle(player); },
-        PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+        PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "замерить темп стрельбы (тест анти-rapid-fire)",
+        PlayerCommandService::HelpCategory::Hidden);
 }
 
 void WeaponDebugSystem::toggle(IPlayer &player)

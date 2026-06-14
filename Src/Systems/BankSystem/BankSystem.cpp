@@ -40,5 +40,6 @@ BankSystem::BankSystem(ICore &core, const ServiceRegister &serviceRegister)
                         player->sendClientMessage(INFO_COLOUR,
                                                   u(fmt::format("Счёт в банке: ${}", balance)));
                 });
-        });
+        },
+        {}, "показать баланс банковского счёта", PlayerCommandService::HelpCategory::Economy);
 }

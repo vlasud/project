@@ -32,6 +32,7 @@
 #include "Systems/Core/GangZoneSystem/GangZoneSystem.h"
 #include "Systems/Core/GridDebugSystem/GridDebugSystem.h"
 #include "Systems/Core/GridSystem/GridSystem.h"
+#include "Systems/Core/HelpSystem/HelpSystem.h"
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 #include "Systems/Core/MapIconSystem/MapIconSystem.h"
 #include "Systems/Core/MovingObjectSystem/MovingObjectSystem.h"
@@ -192,6 +193,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // RoleplayChatSystem после ChatSystem: те же сервисы (команды/грид/локация/чат),
     // общий с чатом барьер мута/антиспама через PlayerChatService.
     m_systems.push_back(std::make_unique<RoleplayChatSystem>(core, serviceRegister));
+    // HelpSystem последней: строит /help из реестра команд — все команды уже
+    // зарегистрированы конструкторами выше (порядок для неё некритичен).
+    m_systems.push_back(std::make_unique<HelpSystem>(core, serviceRegister));
 }
 
 void SystemRegister::initializeSystems(IComponentList *components)

@@ -27,7 +27,8 @@ WeaponSkillSystem::WeaponSkillSystem(ICore &core, const ServiceRegister &service
 
     // Дев-тулза: одна команда -> диалог-меню (серверная правда + максимум/сброс).
     serviceRegister.getService<PlayerCommandService>().add(
-        "wskill", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showSkillMenu(player); });
+        "wskill", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showSkillMenu(player); }, {},
+        "дев-меню навыков оружия (меню)", PlayerCommandService::HelpCategory::Hidden);
 }
 
 void WeaponSkillSystem::showSkillMenu(IPlayer &player)

@@ -63,7 +63,8 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                                                      "быть пуст",
                                                      model, vehicle->getID())));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "заспавнить машину по модели и сесть в неё",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vput", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -87,7 +88,8 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                                               u(fmt::format("Посажен в машину {} ({:.1f} м)", nearest.id,
                                                             std::sqrt(nearest.distSq))));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "сесть в ближайшую машину (до 50 м)",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vdel", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -100,7 +102,8 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                      m_vehicles->release(id);
                      player.sendClientMessage(DEBUG_COLOUR, u(fmt::format("Машина {} удалена", id)));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "удалить машину, в которой сидишь",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vrespawn", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -112,7 +115,8 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                      vehicle->respawn();
                      player.sendClientMessage(DEBUG_COLOUR, u("Машина переспавнена (HP снова 1000)"));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "переспавнить машину (HP → 1000)",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vinfo", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -129,7 +133,9 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                                        vehicleId, m_vehicleService.getSeat(player.getID()), serverHp, clientHp,
                                        clientHp - serverHp)));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL),
+                 "информация о машине: HP сервер/клиент, посадочное место",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vhp", {{PlayerCommandService::Param::Int, "hp"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -143,7 +149,8 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                      m_vehicleService.setHealth(*vehicle, static_cast<float>(hp));
                      player.sendClientMessage(DEBUG_COLOUR, u(fmt::format("HP машины: {} (серверно)", hp)));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "задать HP машины (0–1000)",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vrepair", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -154,7 +161,8 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                      m_vehicleService.repair(*vehicle);
                      player.sendClientMessage(DEBUG_COLOUR, u("Отремонтирована (серверно — без нарушений)"));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "отремонтировать машину",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vengine", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -166,7 +174,8 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                      m_vehicleService.setEngine(*vehicle, on);
                      player.sendClientMessage(DEBUG_COLOUR, u(on ? "Двигатель: ВКЛ" : "Двигатель: выкл"));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "завести или заглушить двигатель",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vlock", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -178,7 +187,8 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                      m_vehicleService.setLocked(*vehicle, lock);
                      player.sendClientMessage(DEBUG_COLOUR, u(lock ? "Двери: ЗАПЕРТЫ" : "Двери: открыты"));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "запереть или отпереть двери машины",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vmod", {{PlayerCommandService::Param::Int, "компонент"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -194,7 +204,8 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                      player.sendClientMessage(DEBUG_COLOUR,
                                               u(fmt::format("Компонент {} установлен серверно", component)));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "установить тюнинг-компонент",
+                 PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("vhack", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -209,7 +220,8 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                          DEBUG_COLOUR, u("Сырой setHealth(1000): жди отката HP и VehicleHack в /violations "
                                          "(сначала побей машину /vhp 400)"));
                  },
-                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "тест анти-чита: имитировать чит ремонта машины",
+                 PlayerCommandService::HelpCategory::Hidden);
 }
 
 void VehicleDebugSystem::initialize(IComponentList *components)
