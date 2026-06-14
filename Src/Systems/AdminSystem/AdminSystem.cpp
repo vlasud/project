@@ -50,6 +50,18 @@ constexpr int MIN_BAN_DAYS = 1;
 constexpr int MAX_BAN_DAYS = 365;
 constexpr std::size_t MAX_BAN_REASON_BYTES = 120; // utf-8 байт до записи; < VARCHAR(128)
 
+// Смещение точки прибытия телепорта по горизонтали: ~1.5 м в сторону, чтобы
+// исполнитель и цель не оказались ровно в одной модели (толчок/«застрял в тебе»).
+constexpr float TELEPORT_OFFSET = 1.5f;
+
+// Играбельное состояние: позиция игрока осмысленна (заспавнен, не мёртв/спектатор).
+// Источник телепорта берём только у такого игрока — иначе перенос в/из мусорной
+// позиции (часто {0,0,0}).
+bool isPlayingState(PlayerState state)
+{
+    return state == PlayerState_OnFoot || state == PlayerState_Driver || state == PlayerState_Passenger;
+}
+
 std::string u(const std::string &text)
 {
     return Encoding::utf8Tocp1251(text);
@@ -74,7 +86,8 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_banService(serviceRegister.getService<BanService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
-      m_commandService(serviceRegister.getService<PlayerCommandService>())
+      m_commandService(serviceRegister.getService<PlayerCommandService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
     m_sessionService.subscribeStart(
         [this](IPlayer &player, const PlayerSessionService::Session &session) { loadAdmin(player, session); });
@@ -115,6 +128,20 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  { cmdKick(player, args.getInt(0), args.getString(1)); },
                  PermissionSpec::admin(1), "кикнуть игрока с сервера с указанием причины",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /goto — телепорт админа К игроку (уровень 1+). Без иерархии: админ идёт сам.
+    commands.add("goto", {{PlayerCommandService::Param::Int, "id игрока"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 { cmdGoto(player, args.getInt(0)); },
+                 PermissionSpec::admin(1), "телепортироваться к игроку по id",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /gethere — телепорт игрока К АДМИНУ (уровень 1+). Иерархия как у /kick.
+    commands.add("gethere", {{PlayerCommandService::Param::Int, "id игрока"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 { cmdGetHere(player, args.getInt(0)); },
+                 PermissionSpec::admin(1), "телепортировать игрока к себе по id",
                  PlayerCommandService::HelpCategory::Hidden);
 
     // /ban — бан аккаунта на дни (уровень 3+). Причина обязательна (жадный
@@ -398,6 +425,87 @@ void AdminSystem::cmdBan(IPlayer &actor, int targetId, int days, StringView rawR
                                targetId, days, reasonText));
     target->sendClientMessage(ADMIN_COLOUR, u(fmt::format("Вы забанены на {} дн. Причина: {}", days, reasonText)));
     target->kick();
+}
+
+void AdminSystem::cmdGoto(IPlayer &actor, int targetId)
+{
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    if (!target)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    if (targetId == actor.getID())
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Нельзя применить к самому себе"));
+        return;
+    }
+    // Источник — позиция ЦЕЛИ (принятая сервером), и сам исполнитель должны быть в
+    // играбельном состоянии: иначе перенос в/из мусорной позиции (рывок в {0,0,0}).
+    if (!isPlayingState(target->getState()) || !isPlayingState(actor.getState()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+
+    // Берём принятую сервером позицию/интерьер/мир цели (источник правды, не сырой
+    // клиентский getPosition) и смещаем точку прибытия в сторону.
+    Vector3 position = m_locationService.getPosition(targetId);
+    position.x += TELEPORT_OFFSET;
+    const unsigned interior = m_locationService.getInterior(targetId);
+    const int virtualWorld = m_locationService.getVirtualWorld(targetId);
+
+    const std::string actorName = actor.getName().to_string();
+    const std::string targetName = target->getName().to_string();
+
+    // teleport переносит позицию + интерьер + мир разом и ставит грейс анти-чита.
+    m_locationService.teleport(actor, position, interior, virtualWorld);
+
+    actor.sendClientMessage(ADMIN_COLOUR, u(fmt::format("Вы телепортированы к {}[{}]", targetName, targetId)));
+    // Цель НЕ уведомляется (скрытность модерации); прозрачность — в [A] и файл-лог.
+    logAdminAction(fmt::format("{}[{}] телепортировался к {}[{}]", actorName, actor.getID(), targetName, targetId));
+}
+
+void AdminSystem::cmdGetHere(IPlayer &actor, int targetId)
+{
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    if (!target)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    if (targetId == actor.getID())
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Нельзя применить к самому себе"));
+        return;
+    }
+    // Иерархия как у /kick: нельзя дёрнуть с места равного/старшего по СОХРАНЁННОМУ
+    // уровню (текст не называет уровень — иерархию через ошибку не прощупать).
+    if (m_adminService.getStoredLevel(targetId) >= m_adminService.getStoredLevel(actor.getID()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Нельзя применить к этому игроку"));
+        return;
+    }
+    // Источник — позиция АДМИНА, двигаем цель: оба должны быть играбельны.
+    if (!isPlayingState(actor.getState()) || !isPlayingState(target->getState()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+
+    Vector3 position = m_locationService.getPosition(actor.getID());
+    position.x += TELEPORT_OFFSET;
+    const unsigned interior = m_locationService.getInterior(actor.getID());
+    const int virtualWorld = m_locationService.getVirtualWorld(actor.getID());
+
+    const std::string actorName = actor.getName().to_string();
+    const std::string targetName = target->getName().to_string();
+
+    m_locationService.teleport(*target, position, interior, virtualWorld);
+
+    actor.sendClientMessage(ADMIN_COLOUR, u(fmt::format("{}[{}] телепортирован к вам", targetName, targetId)));
+    // Перемещаемому игроку — никакого сообщения (скрытность модерации).
+    logAdminAction(fmt::format("{}[{}] телепортировал к себе {}[{}]", actorName, actor.getID(), targetName, targetId));
 }
 
 void AdminSystem::cmdAdminHelp(IPlayer &player)

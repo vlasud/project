@@ -4,6 +4,7 @@
 #include "Services/BanService/BanService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
+#include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
@@ -38,6 +39,9 @@ class AdminSystem : public BaseSystem
     void cmdAdminChat(IPlayer &player, StringView rawText);
     void cmdKick(IPlayer &actor, int targetId, StringView rawReason);
     void cmdBan(IPlayer &actor, int targetId, int days, StringView rawReason);
+    // Парный админ-телепорт (ур.1): /goto — к игроку, /gethere — игрока к себе.
+    void cmdGoto(IPlayer &actor, int targetId);
+    void cmdGetHere(IPlayer &actor, int targetId);
     // /ahelp — диалог со списком доступных игроку админ-команд (по эфф. уровню).
     void cmdAdminHelp(IPlayer &player);
 
@@ -55,6 +59,7 @@ class AdminSystem : public BaseSystem
     PlayerSessionService &m_sessionService;
     PlayerDialogService &m_dialogService;
     PlayerCommandService &m_commandService; // нужен в /ahelp для перечисления доступных команд
+    PlayerLocationService &m_locationService; // легитимный для анти-чита перенос (/goto, /gethere)
 
     // Пер-цель состояние регистрации админа (шаги диалога пароля). serial —
     // сессии ЦЕЛИ на момент старта: колбэк диалога/финал сверяет его (в слот мог
