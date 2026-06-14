@@ -7,10 +7,47 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+// Декларативные права команды. Команда объявляет ГРУППУ и ПОРОГ, не зная, КАК
+// они проверяются — резолвер (его задаёт владелец сервиса) транслирует Spec в
+// факты сервисов. Так одна механика гейтит и админов (числовой уровень 1..5,
+// AdminLevel), и орг-команды (членство/битовая маска фракции — это НЕ числовая
+// лестница, поэтому отдельные ветки). Тегированный union: значение читается по
+// kind.
+struct PermissionSpec
+{
+    enum class Kind : std::uint8_t
+    {
+        None,             // без проверки
+        AdminLevel,       // мин. админ-уровень
+        FactionMember,    // членство в конкретной фракции
+        FactionPermission // членство + биты доступа фракции
+    };
+    Kind kind = Kind::None;
+    int adminLevel = 0;            // Kind::AdminLevel: мин. уровень 1..5
+    int factionId = 0;             // Faction*: какая фракция
+    std::uint64_t factionMask = 0; // FactionPermission: нужные биты (0 = только членство)
+    // Инвариант фабрик фракций: id — реальный id фракции (> 0). factionId == 0 это
+    // NO_FACTION, и резолвер пропустил бы любого не-члена — такой спек запрещён.
+    static PermissionSpec admin(int level)
+    {
+        return {Kind::AdminLevel, level, 0, 0};
+    }
+    static PermissionSpec factionMember(int id)
+    {
+        return {Kind::FactionMember, 0, id, 0};
+    }
+    static PermissionSpec faction(int id, std::uint64_t mask)
+    {
+        return {Kind::FactionPermission, 0, id, mask};
+    }
+};
+using PermissionResolver = std::function<bool(IPlayer &, const PermissionSpec &)>;
 
 // Реестр команд чата. Другие системы регистрируют команды через add(), указывая
 // тип каждого параметра (целое число или строка). Сервис сам:
@@ -83,8 +120,31 @@ class PlayerCommandService final : public IService
 
     using Handler = std::function<void(IPlayer &, const CommandArgs &)>;
 
+    // Доступная игроку админ-команда: имя (нижний регистр, как хранится) и её
+    // порог по уровню. Используется /ahelp для построения списка тем же
+    // резолвером, что и dispatch.
+    struct AccessibleCommand
+    {
+        std::string name;
+        int adminLevel;
+    };
+
+    // Перечислить АДМИН-команды (Kind::AdminLevel), доступные игроку прямо сейчас
+    // по его эффективному уровню — фильтр тем же резолвером, что и dispatch. Так
+    // список не дрейфует от набора зарегистрированных команд. Игровые/None/Faction
+    // не включаются. Редкий путь (по команде): O(числа команд) + аллокация вектора.
+    std::vector<AccessibleCommand> collectAccessible(IPlayer &player) const;
+
     // Зарегистрировать команду. name — без '/'. Вызывается из конструктора системы.
-    void add(std::string name, std::vector<Param> params, Handler handler);
+    // perm — порог прав (по умолчанию None — открыта всем). Проверяется в
+    // dispatch заданным резолвером.
+    void add(std::string name, std::vector<Param> params, Handler handler, PermissionSpec perm = {});
+
+    // Резолвер прав — общий для всех команд, задаёт владелец сервиса
+    // (PlayerCommandSystem). Транслирует PermissionSpec в факты сервисов
+    // (AdminService/FactionService). До установки — все perm != None считаются
+    // НЕдоступными (см. dispatch).
+    void setPermissionResolver(PermissionResolver resolver);
 
     // Разобрать сообщение и вызвать обработчик. Возвращает true, если команда найдена.
     bool dispatch(IPlayer &player, StringView message);
@@ -104,6 +164,7 @@ class PlayerCommandService final : public IService
         std::vector<ParamInfo> params; // описания параметров; размер = их число
         std::string usage;             // готовая строка-подсказка, уже в cp1251
         Handler handler;
+        PermissionSpec perm; // порог прав; None — открыта всем
     };
 
     // Транспарентные хэш/сравнение по нижнему ASCII-регистру. Ключи хранятся уже
@@ -140,4 +201,5 @@ class PlayerCommandService final : public IService
 
     std::unordered_map<std::string, Command, CiHash, CiEqual> m_commands;
     std::array<State, MAX_PLAYERS> m_state;
+    PermissionResolver m_permissionResolver;
 };

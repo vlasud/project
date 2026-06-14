@@ -1,5 +1,7 @@
 #include "Services/ServiceRegister.h"
 
+#include "Services/AdminService/AdminService.h"
+#include "Services/BanService/BanService.h"
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
 #include "Services/Core/AttachmentService/AttachmentService.h"
 #include "Services/BankService/BankService.h"
@@ -94,4 +96,10 @@ void ServiceRegister::registerServices()
     registerService<FactionService>();
     registerService<ElectionService>();
     registerService<PlayerAuthService>();
+    // Админ-доступ (источник правды об уровне/пароле/логине). Без зависимостей;
+    // PlayerCommandSystem (резолвер прав) и AdminSystem берут из регистра.
+    registerService<AdminService>();
+    // Баны аккаунтов (источник правды в БД). Без зависимостей; AdminSystem пишет
+    // (/ban), PlayerAuthSystem читает на логине.
+    registerService<BanService>();
 }

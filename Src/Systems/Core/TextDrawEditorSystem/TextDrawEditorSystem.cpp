@@ -1,5 +1,6 @@
 #include "Systems/Core/TextDrawEditorSystem/TextDrawEditorSystem.h"
 
+#include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
@@ -175,7 +176,8 @@ TextDrawEditorSystem::TextDrawEditorSystem(ICore &core, const ServiceRegister &s
                              {
                                  showMain(player);
                              }
-                         });
+                         },
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 }
 
 TextDrawEditorSystem::Session &TextDrawEditorSystem::sessionOf(const IPlayer &player)

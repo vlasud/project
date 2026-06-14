@@ -1,6 +1,8 @@
 #pragma once
 
+#include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
+#include "Services/FactionService/FactionService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 
@@ -16,4 +18,9 @@ class PlayerCommandSystem : public BaseSystem, public PlayerTextEventHandler, pu
 
   private:
     PlayerCommandService &m_commandService;
+    // Владелец сервиса команд: здесь задаётся общий резолвер прав, транслирующий
+    // PermissionSpec в факты этих сервисов. Все сервисы конструируются до систем,
+    // поэтому ссылки валидны на всё время жизни.
+    AdminService &m_adminService;
+    FactionService &m_factionService;
 };

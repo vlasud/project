@@ -2,6 +2,7 @@
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
+#include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
@@ -131,12 +132,13 @@ FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister
                      showGovMenu(player);
                  });
 
-    // Единое дев-меню (до системы ролей открыто, как и прочие дев-тулзы).
+    // Единое дев-меню фракций; доступ только разработчику (admin level 6).
     commands.add("fdev", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
                  {
                      showDevMenu(player);
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 }
 
 void FactionSystem::initialize(IComponentList *components)

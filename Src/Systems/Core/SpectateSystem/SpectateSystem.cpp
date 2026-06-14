@@ -1,5 +1,6 @@
 #include "Systems/Core/SpectateSystem/SpectateSystem.h"
 
+#include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
@@ -24,7 +25,6 @@ SpectateSystem::SpectateSystem(ICore &core, const ServiceRegister &serviceRegist
 
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 
-    // Дев-команды (до системы прав — открыты, как и остальные тулзы).
     commands.add("spec", {{PlayerCommandService::Param::Int, "id игрока"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
@@ -51,7 +51,8 @@ SpectateSystem::SpectateSystem(ICore &core, const ServiceRegister &serviceRegist
                      player.sendClientMessage(
                          Colour::White(), u(fmt::format("Наблюдение за {} (id {}). /specoff — выйти.",
                                                         target->getName().to_string(), target->getID())));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("specoff", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -63,7 +64,8 @@ SpectateSystem::SpectateSystem(ICore &core, const ServiceRegister &serviceRegist
                      }
                      m_spectateService.stop(player);
                      player.sendClientMessage(Colour::White(), u("Спектейт завершён"));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 }
 
 void SpectateSystem::initialize(IComponentList *components)

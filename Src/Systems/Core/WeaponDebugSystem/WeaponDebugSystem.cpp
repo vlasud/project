@@ -1,5 +1,6 @@
 #include "Systems/Core/WeaponDebugSystem/WeaponDebugSystem.h"
 
+#include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Utils/Encoding/Encoding.h"
@@ -31,7 +32,8 @@ WeaponDebugSystem::WeaponDebugSystem(ICore &core, const ServiceRegister &service
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
 
     serviceRegister.getService<PlayerCommandService>().add(
-        "rof", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { toggle(player); });
+        "rof", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { toggle(player); },
+        PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 }
 
 void WeaponDebugSystem::toggle(IPlayer &player)

@@ -1,5 +1,6 @@
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 
+#include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
 #include "glm/geometric.hpp"
@@ -56,7 +57,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
 
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 
-    commands.add("pos", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showPos(player); });
+    commands.add("pos", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showPos(player); },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("tp", {{PlayerCommandService::Param::Int, "x"}, {PlayerCommandService::Param::Int, "y"},
                         {PlayerCommandService::Param::Int, "z"}},
@@ -68,7 +70,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                      player.sendClientMessage(DEBUG_COLOUR, u(fmt::format("Телепорт в {:.0f} {:.0f} {:.0f}. "
                                                                           "Нарушений быть не должно — /violations",
                                                                           target.x, target.y, target.z)));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("tpup", {{PlayerCommandService::Param::Int, "метры"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -83,14 +86,16 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                          DEBUG_COLOUR, u(fmt::format("Подброшен на {} м — свободное падение. Включи /veldebug и "
                                                      "смотри вертикальную скорость; SpeedHack быть не должно",
                                                      meters)));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("vw", {{PlayerCommandService::Param::Int, "id"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
                      m_locationService.setVirtualWorld(player, args.getInt(0));
                      player.sendClientMessage(DEBUG_COLOUR, u(fmt::format("Виртуальный мир: {}", args.getInt(0))));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("int", {{PlayerCommandService::Param::Int, "id"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -98,7 +103,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                      const int interior = args.getInt(0) < 0 ? 0 : args.getInt(0);
                      m_locationService.setInterior(player, static_cast<unsigned>(interior));
                      player.sendClientMessage(DEBUG_COLOUR, u(fmt::format("Интерьер: {}", interior)));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("hackpos", {{PlayerCommandService::Param::Int, "метры"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -117,9 +123,11 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                          DEBUG_COLOUR, u(fmt::format("Сырой скачок на {} м: жди отката на место и TeleportHack "
                                                      "в /violations",
                                                      meters)));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
-    commands.add("vel", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showVel(player); });
+    commands.add("vel", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showVel(player); },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("veldebug", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -128,10 +136,12 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                      state.velNotify = !state.velNotify;
                      player.sendClientMessage(DEBUG_COLOUR,
                                               u(state.velNotify ? "Поток скорости: ВКЛ" : "Поток скорости: выкл"));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("violations", {},
-                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showViolations(player); });
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showViolations(player); },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("acclear", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -140,7 +150,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                      // намеренных нарушений не добиралась до порога кика.
                      m_antiCheatService.clear(player.getID());
                      player.sendClientMessage(DEBUG_COLOUR, u("Журнал нарушений очищен"));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 }
 
 void LocationDebugSystem::showPos(IPlayer &player)

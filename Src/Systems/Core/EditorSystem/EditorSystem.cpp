@@ -1,5 +1,6 @@
 #include "Systems/Core/EditorSystem/EditorSystem.h"
 
+#include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
 #include "anim.hpp"
@@ -348,7 +349,8 @@ EditorSystem::EditorSystem(ICore &core, const ServiceRegister &serviceRegister)
                              }
 
                              showMain(player);
-                         });
+                         },
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 }
 
 void EditorSystem::initialize(IComponentList *components)

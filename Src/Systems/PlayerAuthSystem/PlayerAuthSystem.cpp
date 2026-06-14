@@ -14,8 +14,21 @@
 #include <optional>
 #include <sodium.h>
 #include <string>
-#include <tuple>
 #include <utility>
+
+namespace
+{
+// Результат логин-запроса (по имени): аккаунт + активный бан одним SELECT.
+// banDaysLeft — остаток дней активного бана (CEIL), 0 — бана нет. Вычитывается
+// на воркере; mysqlx-объекты границу потока не пересекают (контракт).
+struct LoginRow
+{
+    std::int64_t accountId = 0;
+    std::string passwordHash;
+    int skin = 0;
+    int banDaysLeft = 0;
+};
+} // namespace
 
 PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_authService(serviceRegister.getService<PlayerAuthService>()),
@@ -91,27 +104,39 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
     std::string name = player.getName().to_string();
     const int requestConnectionVersion = m_connectionVersionService.getVersion(player.getID());
 
-    DatabaseManager::selectQuery<std::optional<std::tuple<std::int64_t, std::string, int>>>(
+    DatabaseManager::selectQuery<std::optional<LoginRow>>(
         [name = std::move(name)](mysqlx::Schema schema)
         {
-            mysqlx::RowResult result = schema.getTable("player")
-                                           .select("id", "password_hash", "skin")
-                                           .where("name = :name")
-                                           .limit(1)
-                                           .bind("name", name)
-                                           .execute();
-            std::optional<std::tuple<std::int64_t, std::string, int>> account;
+            // LEFT JOIN ban активной строки (banned_until > NOW()): остаток дней
+            // считает БД (CEIL по секундам), бана нет → NULL → 0. Один SELECT на
+            // логин (а не отдельный запрос), без гонки за активностью бана.
+            mysqlx::SqlResult result =
+                schema.getSession()
+                    .sql("SELECT p.id, p.password_hash, p.skin, "
+                         "CEIL(TIMESTAMPDIFF(SECOND, NOW(), b.banned_until) / 86400) "
+                         "FROM player p "
+                         "LEFT JOIN ban b ON b.account_id = p.id AND b.banned_until > NOW() "
+                         "WHERE p.name = ? LIMIT 1")
+                    .bind(name)
+                    .execute();
+            std::optional<LoginRow> account;
             if (mysqlx::Row row = result.fetchOne())
-                // skin читаем как int64 и сужаем: таблица player ВНЕШНЯЯ, её схему
-                // мы не контролируем. Значение вне диапазона int не должно ронять
-                // get<int>() (иначе битый ряд = вечный kick аккаунта) — мусор
-                // отфильтрует isValidSkin в finalize (фолбэк на дефолт).
-                account = std::make_tuple(row.get(0).get<std::int64_t>(), row.get(1).get<std::string>(),
-                                          static_cast<int>(row.get(2).get<std::int64_t>()));
+            {
+                LoginRow data;
+                data.accountId = row.get(0).get<std::int64_t>();
+                data.passwordHash = row.get(1).get<std::string>();
+                // skin читаем как int64 и сужаем: значение вне диапазона int не
+                // должно ронять get<int>() при рассинхроне схемы (иначе битый ряд =
+                // вечный kick аккаунта) — мусор отфильтрует isValidSkin в finalize.
+                data.skin = static_cast<int>(row.get(2).get<std::int64_t>());
+                // banDaysLeft: NULL (нет активного бана) → 0; иначе CEIL дней.
+                if (!row.get(3).isNull())
+                    data.banDaysLeft = static_cast<int>(row.get(3).get<std::int64_t>());
+                account = std::move(data);
+            }
             return account;
         },
-        [this, requestConnectionVersion,
-         playerId = player.getID()](std::optional<std::tuple<std::int64_t, std::string, int>> account)
+        [this, requestConnectionVersion, playerId = player.getID()](std::optional<LoginRow> account)
         {
             if (m_connectionVersionService.getVersion(playerId) != requestConnectionVersion)
             {
@@ -124,11 +149,26 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
                 return;
             }
 
-            m_loginData[playerId].accountId = std::get<0>(*account);
-            m_loginData[playerId].passwordHash = std::get<1>(*account);
+            // Аккаунт под активным баном — НЕ пускаем (доступ не выдаём, сессию не
+            // стартуем): сообщаем остаток и кикаем. Проверка серверная, до логина.
+            if (account->banDaysLeft > 0)
+            {
+                if (IPlayer *player = m_core.getPlayers().get(playerId))
+                {
+                    player->sendClientMessage(
+                        Colour::White(),
+                        Encoding::utf8Tocp1251(fmt::format("Аккаунт заблокирован. Осталось: {} дн.",
+                                                           account->banDaysLeft)));
+                    player->kick();
+                }
+                return;
+            }
+
+            m_loginData[playerId].accountId = account->accountId;
+            m_loginData[playerId].passwordHash = std::move(account->passwordHash);
             // Личный скин из БД; валидируется при применении в finalize (фолбэк
             // на дефолт там же). Невалидное значение из БД безопасно.
-            m_loginData[playerId].personalSkin = std::get<2>(*account);
+            m_loginData[playerId].personalSkin = account->skin;
             runLogin(playerId);
         },
         [this, requestConnectionVersion, playerId = player.getID()](const std::string &)

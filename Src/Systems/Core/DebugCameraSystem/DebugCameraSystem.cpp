@@ -1,5 +1,6 @@
 #include "Systems/Core/DebugCameraSystem/DebugCameraSystem.h"
 
+#include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
 #include "glm/geometric.hpp"
@@ -97,7 +98,8 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
                              }
 
                              showMain(player);
-                         });
+                         },
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     m_commandService.add("cpoint", {},
                          [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -110,7 +112,8 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
                                  return;
                              }
                              savePoint(player);
-                         });
+                         },
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     m_commandService.add("cplay", {},
                          [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -126,7 +129,8 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
                                  return; // уже играет
                              }
                              startPlayback(player);
-                         });
+                         },
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 }
 
 void DebugCameraSystem::initialize(IComponentList *components)

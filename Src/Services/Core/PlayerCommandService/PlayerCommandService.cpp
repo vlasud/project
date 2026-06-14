@@ -59,7 +59,7 @@ bool PlayerCommandService::CiEqual::operator()(StringView a, StringView b) const
     return true;
 }
 
-void PlayerCommandService::add(std::string name, std::vector<Param> params, Handler handler)
+void PlayerCommandService::add(std::string name, std::vector<Param> params, Handler handler, PermissionSpec perm)
 {
     for (char &c : name)
         c = asciiLower(c);
@@ -79,7 +79,30 @@ void PlayerCommandService::add(std::string name, std::vector<Param> params, Hand
         infos.push_back({param.type, std::move(numberError)});
     }
 
-    m_commands.emplace(std::move(name), Command{std::move(infos), Encoding::utf8Tocp1251(usage), std::move(handler)});
+    m_commands.emplace(std::move(name),
+                       Command{std::move(infos), Encoding::utf8Tocp1251(usage), std::move(handler), perm});
+}
+
+void PlayerCommandService::setPermissionResolver(PermissionResolver resolver)
+{
+    m_permissionResolver = std::move(resolver);
+}
+
+std::vector<PlayerCommandService::AccessibleCommand> PlayerCommandService::collectAccessible(IPlayer &player) const
+{
+    std::vector<AccessibleCommand> result;
+    // Только AdminLevel-команды (админ- и dev-тулинг); фильтр — тем же резолвером,
+    // что и dispatch, по эффективному уровню игрока. Резолвер не задан → ни одна
+    // команда с порогом недоступна (как в dispatch). Имя возвращаем как хранится
+    // (нижний регистр).
+    for (const auto &[name, cmd] : m_commands)
+    {
+        if (cmd.perm.kind != PermissionSpec::Kind::AdminLevel)
+            continue;
+        if (m_permissionResolver && m_permissionResolver(player, cmd.perm))
+            result.push_back({name, cmd.perm.adminLevel});
+    }
+    return result;
 }
 
 bool PlayerCommandService::dispatch(IPlayer &player, StringView message)
@@ -100,6 +123,18 @@ bool PlayerCommandService::dispatch(IPlayer &player, StringView message)
     if (it == m_commands.end())
         return false;
 
+    const Command &cmd = it->second;
+
+    // Гейт прав — ДО антифлуда и разбора аргументов. Отказ возвращает false (как
+    // будто команды нет): вызывающая система покажет «неизвестная команда»,
+    // скрывая само существование недоступной команды (защита от прощупывания).
+    // Стоит ПЕРЕД антифлудом намеренно: иначе блок-сообщение по недоступной
+    // команде выдало бы её существование. Резолвер не задан и команда с порогом —
+    // тоже отказ (открыто только то, что явно разрешено). Спек None всегда проходит.
+    if (cmd.perm.kind != PermissionSpec::Kind::None &&
+        !(m_permissionResolver && m_permissionResolver(player, cmd.perm)))
+        return false;
+
     // Корневой антифлуд — ДО разбора аргументов/usage, чтобы ловить и спам
     // usage-сообщений. «Та же команда» = вся строка после '/' (имя+параметры),
     // ASCII-регистронезависимо; нормализуем в стековый буфер (без аллокаций).
@@ -114,7 +149,6 @@ bool PlayerCommandService::dispatch(IPlayer &player, StringView message)
             return true;
     }
 
-    const Command &cmd = it->second;
     const std::size_t paramCount = cmd.params.size();
 
     // Начало области аргументов.

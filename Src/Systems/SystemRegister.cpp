@@ -1,5 +1,6 @@
 #include "Systems/SystemRegister.h"
 
+#include "Systems/AdminSystem/AdminSystem.h"
 #include "Systems/Core/AntiCheatSystem/AntiCheatSystem.h"
 #include "Systems/Core/AttachmentSystem/AttachmentSystem.h"
 #include "Systems/Core/AudioSystem/AudioSystem.h"
@@ -176,6 +177,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // пикап-маркер базы.
     m_systems.push_back(std::make_unique<ArmyGroundSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ArmyAirForceSystem>(core, serviceRegister));
+    // Админ-система после auth/session/faction: персист уровня по старту сессии
+    // (serial-guard), резолвер прав команд берёт уровень из AdminService.
+    m_systems.push_back(std::make_unique<AdminSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<BankSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PaymentSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ElectionSystem>(core, serviceRegister));

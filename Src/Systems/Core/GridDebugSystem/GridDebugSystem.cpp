@@ -1,5 +1,6 @@
 #include "Systems/Core/GridDebugSystem/GridDebugSystem.h"
 
+#include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
 #include <cmath>
@@ -39,10 +40,12 @@ GridDebugSystem::GridDebugSystem(ICore &core, const ServiceRegister &serviceRegi
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 
     commands.add("gridtest", {},
-                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { buildTestField(player); });
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { buildTestField(player); },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("gridclear", {},
-                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { clearTestField(player); });
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { clearTestField(player); },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("gridcell", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -52,7 +55,8 @@ GridDebugSystem::GridDebugSystem(ICore &core, const ServiceRegister &serviceRegi
                      state.lastCx = -1;
                      player.sendClientMessage(
                          DEBUG_COLOUR, u(state.cellNotify ? "Уведомления о ячейках: ВКЛ" : "Уведомления о ячейках: выкл"));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("streamdebug", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
@@ -61,11 +65,13 @@ GridDebugSystem::GridDebugSystem(ICore &core, const ServiceRegister &serviceRegi
                      state.streamNotify = !state.streamNotify;
                      player.sendClientMessage(
                          DEBUG_COLOUR, u(state.streamNotify ? "Стрим-уведомления: ВКЛ" : "Стрим-уведомления: выкл"));
-                 });
+                 },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     commands.add("near", {{PlayerCommandService::Param::Int, "радиус"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
-                 { reportNear(player, args.getInt(0)); });
+                 { reportNear(player, args.getInt(0)); },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 }
 
 void GridDebugSystem::buildTestField(IPlayer &player)

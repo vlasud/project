@@ -1,5 +1,6 @@
 #include "Systems/Core/GangZoneEditorSystem/GangZoneEditorSystem.h"
 
+#include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
@@ -119,7 +120,8 @@ GangZoneEditorSystem::GangZoneEditorSystem(ICore &core, const ServiceRegister &s
                                  return;
                              }
                              showMain(player);
-                         });
+                         },
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 
     // Проверка членства по реальной (обрезанной) геометрии — точка всегда
     // принадлежит максимум одной зоне.
@@ -136,7 +138,8 @@ GangZoneEditorSystem::GangZoneEditorSystem(ICore &core, const ServiceRegister &s
                              {
                                  player.sendClientMessage(Colour::White(), u("Вы вне зон"));
                              }
-                         });
+                         },
+                         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL));
 }
 
 GangZoneEditorSystem::Session &GangZoneEditorSystem::sessionOf(const IPlayer &player)
