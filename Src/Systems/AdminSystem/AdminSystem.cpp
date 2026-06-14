@@ -10,6 +10,7 @@
 #include "sodium/crypto_pwhash.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
 #include <optional>
@@ -54,6 +55,22 @@ constexpr std::size_t MAX_BAN_REASON_BYTES = 120; // utf-8 байт до зап�
 // исполнитель и цель не оказались ровно в одной модели (толчок/«застрял в тебе»).
 constexpr float TELEPORT_OFFSET = 1.5f;
 
+// /slap — фиксированный подброс по вертикали (ю.е. San Andreas). Заметный
+// толчок с небольшим уроном падения, но без «полёта в стратосферу»; параметр
+// высоты намеренно не даём — иначе модераторский шлепок стал бы орудием убийства.
+constexpr float SLAP_HEIGHT = 5.0f;
+
+// Границы клиентских чисел силовых команд — валидируем ДО применения (клиенту не
+// верим). HP/броня: 0..100 — игровой максимум; верх запрещает невидимый god-режим
+// через «сверх-HP». Оружие: 0..46 (диапазон движка), патроны 1..9999 (минимум —
+// чтобы выдача не была «пустыми руками», максимум — заведомо избыточный боезапас).
+constexpr int MIN_VITAL = 0;
+constexpr int MAX_VITAL = 100;
+constexpr int MIN_GUN_ID = 0;
+constexpr int MAX_GUN_ID = 46;
+constexpr int MIN_AMMO = 1;
+constexpr int MAX_AMMO = 9999;
+
 // Играбельное состояние: позиция игрока осмысленна (заспавнен, не мёртв/спектатор).
 // Источник телепорта берём только у такого игрока — иначе перенос в/из мусорной
 // позиции (часто {0,0,0}).
@@ -87,7 +104,12 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_commandService(serviceRegister.getService<PlayerCommandService>()),
-      m_locationService(serviceRegister.getService<PlayerLocationService>())
+      m_locationService(serviceRegister.getService<PlayerLocationService>()),
+      m_healthService(serviceRegister.getService<PlayerHealthService>()),
+      m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
+      m_skinService(serviceRegister.getService<PlayerSkinService>()),
+      m_personalSkinService(serviceRegister.getService<PlayerPersonalSkinService>()),
+      m_savedLocationService(serviceRegister.getService<PlayerSavedLocationService>())
 {
     m_sessionService.subscribeStart(
         [this](IPlayer &player, const PlayerSessionService::Session &session) { loadAdmin(player, session); });
@@ -96,6 +118,9 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
         {
             m_adminService.reset(player.getID());
             m_pending[player.getID()] = PendingRegistration{};
+            // Личная закладка координат живёт сессию: сброс, чтобы координаты не
+            // утекли в переиспользованный слот к следующему игроку.
+            m_savedLocationService.reset(player.getID());
         });
 
     auto &commands = m_commandService;
@@ -151,6 +176,67 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  { cmdGetHere(player, args.getInt(0)); },
                  PermissionSpec::admin(1), "телепортировать игрока к себе по id",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /sethp — задать здоровье (уровень 4+). Иерархия как у /kick; диапазон 0..100.
+    commands.add("sethp",
+                 {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::Int, "hp"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 { cmdSetHp(player, args.getInt(0), args.getInt(1)); },
+                 PermissionSpec::admin(4), "задать игроку здоровье (0–100)",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /setarmour — задать броню (уровень 4+). Иерархия как у /sethp; диапазон 0..100.
+    commands.add("setarmour",
+                 {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::Int, "броня"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 { cmdSetArmour(player, args.getInt(0), args.getInt(1)); },
+                 PermissionSpec::admin(4), "задать игроку броню (0–100)",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /slap — подброс игрока вверх на фикс. высоту (уровень 2+). Иерархия как у
+    // /gethere: силовое воздействие против воли цели.
+    commands.add("slap", {{PlayerCommandService::Param::Int, "id игрока"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 { cmdSlap(player, args.getInt(0)); },
+                 PermissionSpec::admin(2), "подбросить игрока вверх",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /agun — выдать оружие с патронами (уровень 5+). Иерархия ДА.
+    commands.add("agun",
+                 {{PlayerCommandService::Param::Int, "id игрока"},
+                  {PlayerCommandService::Param::Int, "оружие"},
+                  {PlayerCommandService::Param::Int, "патроны"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 { cmdGiveWeapon(player, args.getInt(0), args.getInt(1), args.getInt(2)); },
+                 PermissionSpec::admin(5), "выдать игроку оружие с патронами",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /askin — временный скин сессии (уровень 4+). Иерархии НЕТ (косметика, не в БД).
+    commands.add("askin",
+                 {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::Int, "скин"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 { cmdAskin(player, args.getInt(0), args.getInt(1)); },
+                 PermissionSpec::admin(4), "выдать игроку временный скин",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /devskin — основной скин (память + БД), только Разработчик (уровень 6).
+    // Иерархии НЕТ: уровень 6 — вершина, выше никого.
+    commands.add("devskin",
+                 {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::Int, "скин"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 { cmdDevSkin(player, args.getInt(0), args.getInt(1)); },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "сменить игроку основной скин",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /savepos — запомнить свои координаты (уровень 1+). На себя, без иерархии.
+    commands.add("savepos", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { cmdSavePos(player); },
+                 PermissionSpec::admin(1), "запомнить свои координаты",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /tppos — телепорт к запомненным координатам (уровень 1+). На себя.
+    commands.add("tppos", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { cmdTpPos(player); },
+                 PermissionSpec::admin(1), "телепортироваться к запомненным координатам",
                  PlayerCommandService::HelpCategory::Hidden);
 
     // /ban — бан аккаунта на дни (уровень 3+). Причина обязательна (жадный
@@ -544,6 +630,261 @@ void AdminSystem::cmdGetHere(IPlayer &actor, int targetId)
     actor.sendClientMessage(ADMIN_COLOUR, u(fmt::format("{}[{}] телепортирован к вам", targetName, targetId)));
     // Перемещаемому игроку — никакого сообщения (скрытность модерации).
     logAdminAction(fmt::format("{}[{}] телепортировал к себе {}[{}]", actorName, actor.getID(), targetName, targetId));
+}
+
+void AdminSystem::cmdSetHp(IPlayer &actor, int targetId, int hp)
+{
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    if (!target)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    // Иерархия как у /kick: /sethp 0 убивает — по силе это необратимое
+    // вмешательство, равного/старшего трогать нельзя.
+    if (m_adminService.getStoredLevel(targetId) >= m_adminService.getStoredLevel(actor.getID()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Нельзя применить к этому игроку"));
+        return;
+    }
+    // HP осмысленно только у играбельного игрока (мёртвый/спектатор — мусор).
+    if (!isPlayingState(target->getState()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    // Клиентскому числу не верим: 0..100, без god-режима через «сверх-HP».
+    if (hp < MIN_VITAL || hp > MAX_VITAL)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Здоровье должно быть от 0 до 100"));
+        return;
+    }
+
+    const std::string actorName = actor.getName().to_string();
+    const std::string targetName = target->getName().to_string();
+
+    // Через сервис: ставит грейс — иначе валидатор счёл бы рост HP за HealthHack.
+    m_healthService.setHealth(*target, static_cast<float>(hp));
+
+    actor.sendClientMessage(ADMIN_COLOUR, u(fmt::format("Игроку {}[{}] установлено здоровье {}", targetName, targetId, hp)));
+    // Цель не уведомляем — видит свою полоску HP; прозрачность в [A] и файл-логе.
+    logAdminAction(fmt::format("{}[{}] установил {}[{}] здоровье {}", actorName, actor.getID(), targetName, targetId, hp));
+}
+
+void AdminSystem::cmdSetArmour(IPlayer &actor, int targetId, int armour)
+{
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    if (!target)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    // Та же иерархия, что у /sethp (пара «обнулить защиту и добить»).
+    if (m_adminService.getStoredLevel(targetId) >= m_adminService.getStoredLevel(actor.getID()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Нельзя применить к этому игроку"));
+        return;
+    }
+    if (!isPlayingState(target->getState()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    if (armour < MIN_VITAL || armour > MAX_VITAL)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Броня должна быть от 0 до 100"));
+        return;
+    }
+
+    const std::string actorName = actor.getName().to_string();
+    const std::string targetName = target->getName().to_string();
+
+    m_healthService.setArmour(*target, static_cast<float>(armour));
+
+    actor.sendClientMessage(ADMIN_COLOUR,
+                            u(fmt::format("Игроку {}[{}] установлена броня {}", targetName, targetId, armour)));
+    logAdminAction(
+        fmt::format("{}[{}] установил {}[{}] броню {}", actorName, actor.getID(), targetName, targetId, armour));
+}
+
+void AdminSystem::cmdSlap(IPlayer &actor, int targetId)
+{
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    if (!target)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    // Иерархия как у /gethere: подброс — силовое воздействие против воли цели.
+    if (m_adminService.getStoredLevel(targetId) >= m_adminService.getStoredLevel(actor.getID()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Нельзя применить к этому игроку"));
+        return;
+    }
+    // Подбрасывать мёртвого/спектатора бессмысленно, и позиция у него мусорная.
+    if (!isPlayingState(target->getState()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+
+    // Принятая сервером позиция цели (источник правды) + вертикальный импульс.
+    // teleport переносит и интерьер, и мир разом и ставит грейс анти-чита.
+    Vector3 position = m_locationService.getPosition(targetId);
+    position.z += SLAP_HEIGHT;
+    const unsigned interior = m_locationService.getInterior(targetId);
+    const int virtualWorld = m_locationService.getVirtualWorld(targetId);
+
+    const std::string actorName = actor.getName().to_string();
+    const std::string targetName = target->getName().to_string();
+
+    m_locationService.teleport(*target, position, interior, virtualWorld);
+
+    actor.sendClientMessage(ADMIN_COLOUR, u(fmt::format("Вы подбросили {}[{}]", targetName, targetId)));
+    logAdminAction(fmt::format("{}[{}] подбросил {}[{}]", actorName, actor.getID(), targetName, targetId));
+}
+
+void AdminSystem::cmdGiveWeapon(IPlayer &actor, int targetId, int weaponId, int ammo)
+{
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    if (!target)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    // Иерархия ДА на чужого (не дарить/«вооружать» против равного/старшего), но на
+    // СЕБЯ /agun разрешён: вооружить себя мимо иерархии безвредно.
+    if (targetId != actor.getID() &&
+        m_adminService.getStoredLevel(targetId) >= m_adminService.getStoredLevel(actor.getID()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Нельзя применить к этому игроку"));
+        return;
+    }
+    // id оружия валиден в движке 0..46 И ложится в реальный слот (отсекает
+    // дыры диапазона, которые giveWeapon молча проигнорировал бы).
+    if (weaponId < MIN_GUN_ID || weaponId > MAX_GUN_ID ||
+        WeaponSlotData(static_cast<std::uint8_t>(weaponId)).slot() == INVALID_WEAPON_SLOT)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Оружие должно быть от 0 до 46"));
+        return;
+    }
+    // Патроны 1..9999: 0 — «пустые руки», верх отсекает мусор из клиента.
+    if (ammo < MIN_AMMO || ammo > MAX_AMMO)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Патронов должно быть от 1 до 9999"));
+        return;
+    }
+
+    const std::string actorName = actor.getName().to_string();
+    const std::string targetName = target->getName().to_string();
+
+    // Через сервис: регистрирует выдачу + грейс — иначе WeaponHack на «чужое» оружие.
+    m_weaponService.giveWeapon(*target, static_cast<std::uint8_t>(weaponId), static_cast<std::uint32_t>(ammo));
+
+    actor.sendClientMessage(
+        ADMIN_COLOUR, u(fmt::format("Игроку {}[{}] выдано оружие {} ({} патр.)", targetName, targetId, weaponId, ammo)));
+    logAdminAction(fmt::format("{}[{}] выдал {}[{}] оружие {} ({} патр.)", actorName, actor.getID(), targetName, targetId,
+                               weaponId, ammo));
+}
+
+void AdminSystem::cmdAskin(IPlayer &actor, int targetId, int skin)
+{
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    if (!target)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    // Иерархии НЕТ: временный скин косметичен, в БД не пишется, состоянию цели вреда нет.
+    if (!PlayerSkinService::isValidSkin(skin))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Скин должен быть от 1 до 311 (кроме 74)"));
+        return;
+    }
+
+    const std::string actorName = actor.getName().to_string();
+    const std::string targetName = target->getName().to_string();
+
+    // Применяется сразу и переживает респаун в сессии; PersonalSkin и БД не трогаем.
+    m_skinService.setSkin(*target, skin);
+
+    actor.sendClientMessage(ADMIN_COLOUR,
+                            u(fmt::format("Игроку {}[{}] установлен скин {} (временно)", targetName, targetId, skin)));
+    logAdminAction(
+        fmt::format("{}[{}] выдал {}[{}] временный скин {}", actorName, actor.getID(), targetName, targetId, skin));
+}
+
+void AdminSystem::cmdDevSkin(IPlayer &actor, int targetId, int skin)
+{
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    // Активная сессия цели обязательна: основной скин пишется по accountId.
+    if (!target || !m_sessionService.isActive(targetId))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    // Иерархии НЕТ: команда только у уровня 6 (вершина), проверка не сработала бы.
+    if (!PlayerSkinService::isValidSkin(skin))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Скин должен быть от 1 до 311 (кроме 74)"));
+        return;
+    }
+
+    const PlayerSessionService::AccountId accountId = m_sessionService.getAccountId(targetId);
+    const std::string actorName = actor.getName().to_string();
+    const std::string targetName = target->getName().to_string();
+
+    // Основной скин аккаунта: память (источник правды на сессию) + применить сразу.
+    m_personalSkinService.setSkin(targetId, skin);
+    m_skinService.setSkin(*target, skin);
+
+    // Write-through в БД по accountId. UPDATE без чтения обратно — к игроку в
+    // колбэке не обращаемся (он мог выйти), serial-guard здесь не нужен.
+    DatabaseManager::throwQuery(
+        [accountId, skin](mysqlx::Schema schema)
+        {
+            schema.getTable("player").update().set("skin", skin).where("id = :id").bind("id", accountId).execute();
+        },
+        [](const std::string &error)
+        { LogManager::log(Error, "AdminSystem: failed to persist devskin: " + error); });
+
+    actor.sendClientMessage(ADMIN_COLOUR,
+                            u(fmt::format("Игроку {}[{}] изменён основной скин на {}", targetName, targetId, skin)));
+    logAdminAction(
+        fmt::format("{}[{}] изменил {}[{}] основной скин на {}", actorName, actor.getID(), targetName, targetId, skin));
+}
+
+void AdminSystem::cmdSavePos(IPlayer &actor)
+{
+    // На себя: позиция осмысленна только у играбельного игрока — иначе запомним
+    // мусорную позицию мёртвого/спектатора.
+    if (!isPlayingState(actor.getState()))
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Сейчас нельзя сохранить координаты"));
+        return;
+    }
+
+    const int id = actor.getID();
+    // Принятая сервером позиция/интерьер/мир (источник правды, не сырой клиент).
+    m_savedLocationService.save(id, m_locationService.getPosition(id), m_locationService.getInterior(id),
+                                m_locationService.getVirtualWorld(id));
+
+    actor.sendClientMessage(ADMIN_COLOUR, u("Координаты сохранены"));
+}
+
+void AdminSystem::cmdTpPos(IPlayer &actor)
+{
+    const PlayerSavedLocationService::Saved *saved = m_savedLocationService.get(actor.getID());
+    if (!saved)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Сначала сохраните координаты: /savepos"));
+        return;
+    }
+
+    // teleport ставит грейс анти-чита и переносит интерьер/мир разом.
+    m_locationService.teleport(actor, saved->position, saved->interior, saved->virtualWorld);
+
+    actor.sendClientMessage(ADMIN_COLOUR, u("Вы телепортированы к сохранённым координатам"));
 }
 
 void AdminSystem::cmdAdminHelp(IPlayer &player)

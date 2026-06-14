@@ -4,7 +4,12 @@
 #include "Services/BanService/BanService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
+#include "Services/Core/PlayerHealthService/PlayerHealthService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
+#include "Services/Core/PlayerSavedLocationService/PlayerSavedLocationService.h"
+#include "Services/Core/PlayerSkinService/PlayerSkinService.h"
+#include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
+#include "Services/PlayerPersonalSkinService/PlayerPersonalSkinService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
@@ -44,6 +49,16 @@ class AdminSystem : public BaseSystem
     // Парный админ-телепорт (ур.1): /goto — к игроку, /gethere — игрока к себе.
     void cmdGoto(IPlayer &actor, int targetId);
     void cmdGetHere(IPlayer &actor, int targetId);
+    // Воздействие на состояние игрока (всё через сервисы — анти-чит уважает грейс).
+    void cmdSetHp(IPlayer &actor, int targetId, int hp);
+    void cmdSetArmour(IPlayer &actor, int targetId, int armour);
+    void cmdSlap(IPlayer &actor, int targetId);
+    void cmdGiveWeapon(IPlayer &actor, int targetId, int weaponId, int ammo);
+    void cmdAskin(IPlayer &actor, int targetId, int skin);   // временный скин сессии
+    void cmdDevSkin(IPlayer &actor, int targetId, int skin); // основной скин (память + БД)
+    // Личная закладка координат админа (на себя): /savepos — запомнить, /tppos — вернуться.
+    void cmdSavePos(IPlayer &actor);
+    void cmdTpPos(IPlayer &actor);
     // /ahelp — диалог со списком доступных игроку админ-команд (по эфф. уровню).
     void cmdAdminHelp(IPlayer &player);
 
@@ -61,7 +76,12 @@ class AdminSystem : public BaseSystem
     PlayerSessionService &m_sessionService;
     PlayerDialogService &m_dialogService;
     PlayerCommandService &m_commandService; // нужен в /ahelp для перечисления доступных команд
-    PlayerLocationService &m_locationService; // легитимный для анти-чита перенос (/goto, /gethere)
+    PlayerLocationService &m_locationService; // легитимный для анти-чита перенос (/goto, /gethere, /slap, /tppos)
+    PlayerHealthService &m_healthService;     // /sethp, /setarmour — грейс анти-чита HealthHack
+    PlayerWeaponService &m_weaponService;     // /agun — грейс анти-чита WeaponHack
+    PlayerSkinService &m_skinService;         // /askin, /devskin — применить скин
+    PlayerPersonalSkinService &m_personalSkinService; // /devskin — основной скин аккаунта
+    PlayerSavedLocationService &m_savedLocationService; // /savepos, /tppos — личная закладка
 
     // Пер-цель состояние регистрации админа (шаги диалога пароля). serial —
     // сессии ЦЕЛИ на момент старта: колбэк диалога/финал сверяет его (в слот мог

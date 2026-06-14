@@ -32,6 +32,7 @@
 #include "Services/Core/PlayerHealthService/PlayerHealthService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
+#include "Services/Core/PlayerSavedLocationService/PlayerSavedLocationService.h"
 #include "Services/Core/PlayerSkinService/PlayerSkinService.h"
 #include "Services/PlayerPersonalSkinService/PlayerPersonalSkinService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
@@ -53,6 +54,7 @@ void ServiceRegister::registerServices()
     registerService<NicknameService>();
     registerService<PlayerConnectionVersionService>();
     registerService<PlayerLocationService>();
+    registerService<PlayerSavedLocationService>();
     registerService<PlayerStateService>();
     registerService<PlayerVelocityService>();
     registerService<PlayerWeaponService>();
