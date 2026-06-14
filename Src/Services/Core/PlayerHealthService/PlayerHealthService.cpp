@@ -81,6 +81,21 @@ void PlayerHealthService::setArmour(IPlayer &player, float armour)
     player.setArmour(st.armour);
 }
 
+void PlayerHealthService::setInvulnerable(IPlayer &player, bool on)
+{
+    const int id = player.getID();
+    if (id < 0 || id >= MAX_PLAYERS)
+        return;
+    m_state[id].invulnerable = on;
+}
+
+bool PlayerHealthService::isInvulnerable(int playerId) const
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return false;
+    return m_state[playerId].invulnerable;
+}
+
 void PlayerHealthService::applyDamage(IPlayer &player, float amount)
 {
     if (amount <= 0.0f)
@@ -89,6 +104,18 @@ void PlayerHealthService::applyDamage(IPlayer &player, float amount)
     State &st = m_state[player.getID()];
     if (!st.alive || st.dying)
         return;
+
+    if (st.invulnerable)
+    {
+        // God mode: урон игнорируем, серверное HP неизменно. Клиент мог применить
+        // урон локально — форсим серверное значение обратно (откат), чтобы HP не
+        // разошёлся. Окно синхронизации — чтобы verify не счёл откат расхождением.
+        st.lastChange = now();
+        st.confirmed = false;
+        player.setArmour(st.armour);
+        player.setHealth(st.health);
+        return;
+    }
 
     // Модель GTA: урон сначала съедает броню, остаток уходит в HP.
     float remaining = amount;
@@ -195,6 +222,20 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
         return outcome;
     }
 
+    // God mode: держим HP на серверном значении, любой локальный урон/рост клиента
+    // откатываем, нарушения не пишем. Только для живого (dying пусть завершится).
+    if (st.invulnerable && !st.dying)
+    {
+        const float rh = player.getHealth();
+        const float ra = player.getArmour();
+        if (std::abs((rh + ra) - (st.health + st.armour)) > EPS)
+        {
+            player.setHealth(st.health);
+            player.setArmour(st.armour);
+        }
+        return outcome;
+    }
+
     const float reportedHealth = player.getHealth();
     const float reportedArmour = player.getArmour();
 
@@ -274,5 +315,7 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
 
 void PlayerHealthService::reset(int playerId)
 {
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return;
     m_state[playerId] = State{};
 }

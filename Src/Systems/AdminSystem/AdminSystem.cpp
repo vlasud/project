@@ -202,6 +202,11 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
                  PermissionSpec::admin(2), "подбросить игрока вверх",
                  PlayerCommandService::HelpCategory::Hidden);
 
+    // /gm — тоггл бессмертия на СЕБЯ (уровень 1+). Self-тулза без цели, без параметров.
+    commands.add("gm", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { cmdGodMode(player); },
+                 PermissionSpec::admin(1), "включить или выключить бессмертие",
+                 PlayerCommandService::HelpCategory::Hidden);
+
     // /agun — выдать оружие с патронами (уровень 5+). Иерархия ДА.
     commands.add("agun",
                  {{PlayerCommandService::Param::Int, "id игрока"},
@@ -742,6 +747,23 @@ void AdminSystem::cmdSlap(IPlayer &actor, int targetId)
 
     actor.sendClientMessage(ADMIN_COLOUR, u(fmt::format("Вы подбросили {}[{}]", targetName, targetId)));
     logAdminAction(fmt::format("{}[{}] подбросил {}[{}]", actorName, actor.getID(), targetName, targetId));
+}
+
+void AdminSystem::cmdGodMode(IPlayer &player)
+{
+    // Тоггл на себя: инвертируем серверный флаг бессмертия. HP держит сервис
+    // (verify/applyDamage) — сырой setHealth тут не зовём.
+    const bool on = !m_healthService.isInvulnerable(player.getID());
+    m_healthService.setInvulnerable(player, on);
+
+    player.sendClientMessage(ADMIN_COLOUR, u(on ? "Бессмертие: ВКЛ" : "Бессмертие: выкл"));
+    if (on)
+        player.sendClientMessage(ADMIN_COLOUR, u("Повторный /gm — выключить"));
+
+    // Аудит только в файл-лог: god — частый self-тоггл, поток вкл/выкл заглушил бы
+    // [A]. Поэтому НЕ logAdminAction (он шлёт и в [A]), а прямой LogManager.
+    LogManager::log(Message, fmt::format("[ADMIN] {}[{}] god mode {}", player.getName().to_string(), player.getID(),
+                                         on ? "on" : "off"));
 }
 
 void AdminSystem::cmdGiveWeapon(IPlayer &actor, int targetId, int weaponId, int ammo)

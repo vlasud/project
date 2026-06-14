@@ -23,6 +23,10 @@
 // КОНТРАКТ: любое легальное изменение HP/брони (хил, аптечка, броня, админ-команды,
 // кастомный спавн) обязано идти ТОЛЬКО через этот сервис. Прямой player.setHealth()
 // мимо сервиса валидатор воспримет как несанкционированный рост и зафиксирует чит.
+//
+// God mode (бессмертие) — серверный режим игнора урона: переключается ТОЛЬКО этим
+// сервисом (setInvulnerable). Пока включён, applyDamage урон отбрасывает и форсит
+// серверное HP назад, а verify держит HP на серверном значении без записи нарушения.
 class PlayerHealthService final : public IService
 {
   public:
@@ -35,6 +39,11 @@ class PlayerHealthService final : public IService
     // Авторизованные изменения. setHealth(0) — серверное убийство.
     void setHealth(IPlayer &player, float health);
     void setArmour(IPlayer &player, float armour);
+
+    // God mode: переключатель серверного игнора урона (синхронизацию HP сделают
+    // verify/applyDamage). isInvulnerable bounds-checked — вне диапазона false.
+    void setInvulnerable(IPlayer &player, bool on);
+    bool isInvulnerable(int playerId) const;
 
     // Серверно-авторитетный урон: списывает броню, затем HP, и форсит клиент.
     // Вызывается игровой логикой и системой (по валидированному onPlayerGiveDamage
@@ -65,9 +74,10 @@ class PlayerHealthService final : public IService
   private:
     struct State
     {
-        bool alive = false;     // слот в игре (заспавнен, не отключён)
-        bool dying = false;     // серверное HP=0, ждём подтверждения смерти от клиента
-        bool confirmed = false; // клиент сошёлся к серверному значению
+        bool alive = false;        // слот в игре (заспавнен, не отключён)
+        bool dying = false;        // серверное HP=0, ждём подтверждения смерти от клиента
+        bool confirmed = false;    // клиент сошёлся к серверному значению
+        bool invulnerable = false; // god mode (сбрасывается в reset через State{})
         float health = 0.0f;    // серверно-авторитетное HP
         float armour = 0.0f;    // серверно-авторитетная броня
         TimePoint lastChange;   // последнее серверное изменение (окно синхронизации)

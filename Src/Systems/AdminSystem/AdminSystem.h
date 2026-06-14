@@ -53,6 +53,7 @@ class AdminSystem : public BaseSystem
     void cmdSetHp(IPlayer &actor, int targetId, int hp);
     void cmdSetArmour(IPlayer &actor, int targetId, int armour);
     void cmdSlap(IPlayer &actor, int targetId);
+    void cmdGodMode(IPlayer &player); // /gm — тоггл бессмертия на себя (god mode)
     void cmdGiveWeapon(IPlayer &actor, int targetId, int weaponId, int ammo);
     void cmdAskin(IPlayer &actor, int targetId, int skin);   // временный скин сессии
     void cmdDevSkin(IPlayer &actor, int targetId, int skin); // основной скин (память + БД)
