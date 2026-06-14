@@ -37,6 +37,8 @@ class AdminSystem : public BaseSystem
     void cmdLogin(IPlayer &player, StringView password);
     void cmdSetAdmin(IPlayer &actor, int targetId, int level);
     void cmdAdminChat(IPlayer &player, StringView rawText);
+    // /an — личный ответ администрации игроку (обезличенно, без имени/уровня админа).
+    void cmdAdminNotice(IPlayer &actor, int targetId, StringView rawText);
     void cmdKick(IPlayer &actor, int targetId, StringView rawReason);
     void cmdBan(IPlayer &actor, int targetId, int days, StringView rawReason);
     // Парный админ-телепорт (ур.1): /goto — к игроку, /gethere — игрока к себе.

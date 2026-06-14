@@ -122,6 +122,15 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
                  PermissionSpec::admin(1), "админ-чат: написать всем админам онлайн",
                  PlayerCommandService::HelpCategory::Hidden);
 
+    // /an — личный ответ администрации игроку (уровень 1+). Параметры как у /kick:
+    // id + жадный текст. Сообщение цели обезличено (имя/уровень админа не палятся).
+    commands.add("an",
+                 {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::String, "текст"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 { cmdAdminNotice(player, args.getInt(0), args.getString(1)); },
+                 PermissionSpec::admin(1), "отправить игроку личное сообщение от администрации",
+                 PlayerCommandService::HelpCategory::Hidden);
+
     // /kick — кик игрока (уровень 1+). Причина — обязательный параметр команды.
     commands.add("kick",
                  {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::String, "причина"}},
@@ -351,6 +360,35 @@ void AdminSystem::cmdAdminChat(IPlayer &player, StringView rawText)
         if (other && m_adminService.isLoggedIn(other->getID()))
             other->sendClientMessage(ADMIN_COLOUR, message);
     }
+}
+
+void AdminSystem::cmdAdminNotice(IPlayer &actor, int targetId, StringView rawText)
+{
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    if (!target)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+
+    // Ввод клиента: cp1251 -> utf-8, чистка и обрезка без разрыва символа (как /a).
+    // Пусто после санитизации — молча выйти (отправлять нечего, см. cmdAdminChat).
+    const std::string text = Encoding::sanitizeUserText(
+        Encoding::cp1251Toutf8(std::string(rawText.data(), rawText.size())), MAX_ADMIN_CHAT_BYTES);
+    if (text.empty())
+        return;
+
+    const std::string actorName = actor.getName().to_string();
+    const std::string targetName = target->getName().to_string();
+    const int actorLevel = m_adminService.getStoredLevel(actor.getID());
+
+    // Цели — должность и имя админа (адресный ответ; осознанное исключение из
+    // столпа «кто админ — не палится»), без id.
+    target->sendClientMessage(ADMIN_COLOUR, u(fmt::format("{} {}: {}", levelName(actorLevel), actorName, text)));
+    // Исполнителю — эхо отправленного (что именно дошло после санитизации).
+    actor.sendClientMessage(ADMIN_COLOUR, u(fmt::format("Игроку {}[{}] отправлено: {}", targetName, targetId, text)));
+    // В [A] исполнитель назван — внутри админки прозрачность важнее анонимности.
+    logAdminAction(fmt::format("{}[{}] ответил {}[{}]: {}", actorName, actor.getID(), targetName, targetId, text));
 }
 
 void AdminSystem::cmdKick(IPlayer &actor, int targetId, StringView rawReason)
