@@ -235,22 +235,20 @@ void WeaponProficiencySystem::showSkills(IPlayer &player)
         {"Sniper Rifle", WeaponProficiencyService::WEAPON_SNIPER},
     };
 
-    std::string body;
+    // TABLIST_HEADERS: колонки «Оружие | Владение». Первая строка — шапка колонок,
+    // далее по строке на оружие, последней — жёлтая подсказка (2-я колонка пустая).
+    std::string body = "Оружие\tВладение\n";
     for (const Entry &e : entries)
-        body += fmt::format("{}: {}/{}\n", e.name, m_proficiencyService.getSkill(playerId, e.weapon),
+        body += fmt::format("{}\t{}/{}\n", e.name, m_proficiencyService.getSkill(playerId, e.weapon),
                             WeaponProficiencyService::MAX_SKILL);
-
-    body += "\n\nСтреляйте, чтобы повысить свои навыки стрельбы";
+    body += "{FFB400}Стреляйте из этого оружия, чтобы повысить владение\t";
 
     Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
+    dialog.style = DialogStyle_TABLIST_HEADERS;
     dialog.title = u("Владение оружием");
     dialog.body = u(body);
     dialog.leftButton = u("Закрыть");
     dialog.rightButton = u(""); // одна кнопка — диалог только для просмотра
     // Просмотр: реакции на ответ нет (любая кнопка просто закрывает).
-    m_dialogService.show(player, dialog,
-                         [](DialogResponse, int, StringView)
-                         {
-                         });
+    m_dialogService.show(player, dialog, [](DialogResponse, int, StringView) {});
 }
