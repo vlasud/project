@@ -20,11 +20,13 @@
 #include "Systems/Factions/BallasSystem/BallasSystem.h"
 #include "Systems/Factions/FbiSystem/FbiSystem.h"
 #include "Systems/Factions/GroveStreetSystem/GroveStreetSystem.h"
+#include "Systems/Factions/ItalianMafiaSystem/ItalianMafiaSystem.h"
 #include "Systems/Factions/PoliceLasVenturasSystem/PoliceLasVenturasSystem.h"
 #include "Systems/Factions/PoliceLosSantosSystem/PoliceLosSantosSystem.h"
 #include "Systems/Factions/PoliceSanFierroSystem/PoliceSanFierroSystem.h"
 #include "Systems/Factions/PresidentAdministrationSystem/PresidentAdministrationSystem.h"
 #include "Systems/Factions/RifaSystem/RifaSystem.h"
+#include "Systems/Factions/RussianMafiaSystem/RussianMafiaSystem.h"
 #include "Systems/Factions/TriadSystem/TriadSystem.h"
 #include "Systems/Factions/VagosSystem/VagosSystem.h"
 #include "Systems/Core/GameTextSystem/GameTextSystem.h"
@@ -172,6 +174,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<FbiSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<TriadSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<RifaSystem>(core, serviceRegister));
+    // Мафии (криминал без куратора): база-интерьер с входом/выходом, как Триада/Rifa.
+    m_systems.push_back(std::make_unique<RussianMafiaSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<ItalianMafiaSystem>(core, serviceRegister));
     // Уличные банды (криминал без куратора): без базы/интерьера — спавн на турфе,
     // цвет, пул скинов и пикап-маркер территории.
     m_systems.push_back(std::make_unique<GroveStreetSystem>(core, serviceRegister));
