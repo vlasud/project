@@ -1,6 +1,7 @@
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 
 #include "glm/geometric.hpp"
+#include <algorithm>
 #include <chrono>
 #include <fmt/format.h>
 
@@ -34,9 +35,15 @@ constexpr float ARRIVE_MIN = 5.0f;
 constexpr float ARRIVE_FRACTION = 0.4f;
 
 // Пешком после паузы позиция не должна была измениться (на паузе клиент заморожен).
-// Допуск щедрый — на рассинхрон и редкие толчки. В транспорте лимита нет:
-// пассажира на паузе машина легально увозит куда угодно.
+// Допуск щедрый — на рассинхрон и редкие толчки. Только для пешего: в транспорте
+// машину за время разрыва (Esc-пауза или сетевой лаг) могло легально унести, поэтому
+// там допуск считается по достижимости VEHICLE_MAX_SPEED × время разрыва, а не отсюда.
 constexpr float PAUSE_MOVE_TOLERANCE = 100.0f;
+
+// Потолок «времени разрыва» для расчёта допустимого смещения в транспорте на
+// паузе: лаг редко длиннее, а долгая Esc-пауза машину не двигает (dist≈0 и так
+// проходит). Ограничивает допуск, чтобы длинная фейк-пауза не давала огромный.
+constexpr float MAX_PAUSE_REACH_SECONDS = 12.0f;
 
 float clampDt(float seconds)
 {
@@ -211,6 +218,9 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
 
     const bool resumedFromPause =
         st.lastUpdate.time_since_epoch().count() != 0 && (now - st.lastUpdate) >= PAUSE_GAP;
+    // Реальное время разрыва — для расчёта достижимого смещения в транспорте на паузе.
+    // Отдельно от dt: dt клампится к 1с (анти-спидхак), а нам нужен фактический разрыв.
+    const float pauseSeconds = std::chrono::duration<float>(now - st.lastUpdate).count();
     const float dt = clampDt(std::chrono::duration<float>(now - st.lastUpdate).count());
     st.lastUpdate = now;
 
@@ -243,13 +253,36 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
         return outcome; // во время грейса правда — точка телепорта
     }
 
-    // Пауза клиента: пешком на паузе игрок заморожен — позиция после возврата
-    // должна совпадать с принятой (иначе «пауза + скачок» = бесплатный телепорт).
-    // В транспорте принимаем как есть: пассажира на паузе машина легально увозит.
+    // Пауза клиента (Esc) ИЛИ сетевой лаг: разрыв sync >= PAUSE_GAP, dt не копится.
+    // В транспорте за это время машину могло легально унести, пеший — заморожен.
     if (resumedFromPause)
     {
-        const bool inVehicle = playerState == PlayerState_Driver || playerState == PlayerState_Passenger;
-        if (inVehicle || glm::distance(st.position, reported) <= PAUSE_MOVE_TOLERANCE)
+        // В транспорте машина за время разрыва могла легально уехать: при сетевом
+        // лаге клиент-водитель продолжает движение, пассажира везёт водитель.
+        // Допуск — по машинной скорости за ФАКТИЧЕСКОЕ время разрыва (с потолком).
+        // Так лагающего честного водителя не выбьет из ТС, легитимный пассажир
+        // принимается, а чит-телепорт через карту превышает достижимое и ловится —
+        // одинаково для водителя и пассажира (закрывает и обход через машину без
+        // водителя). Пеший на паузе заморожен — для него жёсткий допуск ниже.
+        if (playerState == PlayerState_Driver || playerState == PlayerState_Passenger)
+        {
+            const float reach = VEHICLE_MAX_SPEED * std::min(pauseSeconds, MAX_PAUSE_REACH_SECONDS) + DIST_SLACK;
+            if (inWorldBounds(reported) && glm::distance(st.position, reported) <= reach)
+            {
+                st.position = reported;
+                ++st.discontinuity;
+                return outcome;
+            }
+            forceTo(player, st.position, now);
+            outcome.teleportHack = true;
+            outcome.detail = fmt::format("teleport during pause in vehicle: {:.0f}m (max {:.0f}m over {:.1f}s)",
+                                         glm::distance(st.position, reported), reach,
+                                         std::min(pauseSeconds, MAX_PAUSE_REACH_SECONDS));
+            return outcome;
+        }
+
+        // Пеший на паузе заморожен — позиция после возврата должна совпасть с принятой.
+        if (glm::distance(st.position, reported) <= PAUSE_MOVE_TOLERANCE)
         {
             st.position = reported;
             ++st.discontinuity;
