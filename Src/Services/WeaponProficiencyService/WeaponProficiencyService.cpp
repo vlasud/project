@@ -52,14 +52,16 @@ void WeaponProficiencyService::registerShot(int playerId, std::uint8_t weaponId)
     if (p.skill[idx] >= MAX_SKILL)
         return; // кап достигнут — не копим остаток дальше, чтобы не крутить впустую
 
-    if (++p.shotRemainder[idx] >= SHOTS_PER_SKILL)
+    // Порог пер-оружие; idx уже в [0; WEAPON_COUNT) (проверен выше), таблица того
+    // же размера WEAPON_COUNT — индексация без OOB.
+    if (++p.shotRemainder[idx] >= SHOTS_PER_SKILL[idx])
     {
         p.shotRemainder[idx] = 0;
         ++p.skill[idx]; // не превысит MAX_SKILL: выше отсекли уже-капнутый случай
 
         // Level-up: уведомляем наблюдателей (система применит нативный скилл).
-        // Обход только на +1 (раз в SHOTS_PER_SKILL выстрелов) — обычная пуля сюда
-        // не заходит, hot path остаётся O(1). weaponId уже учтённый (idx>=0).
+        // Обход только на +1 (раз в SHOTS_PER_SKILL[idx] выстрелов) — обычная пуля
+        // сюда не заходит, hot path остаётся O(1). weaponId уже учтённый (idx>=0).
         const int newSkill = p.skill[idx];
         for (const LevelUpObserver &observer : m_levelUpObservers)
             observer(playerId, weaponId, newSkill);

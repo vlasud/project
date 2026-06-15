@@ -48,7 +48,7 @@ WeaponProficiencySystem::WeaponProficiencySystem(ICore &core, const ServiceRegis
             persistProficiency(player, session);
         });
 
-    // Level-up владения (+1, раз в SHOTS_PER_SKILL валидных выстрелов) → поднимаем
+    // Level-up владения (+1, раз в SHOTS_PER_SKILL[weapon] валидных выстрелов) → поднимаем
     // соответствующий нативный weapon skill. Кросс-сервисная связка живёт здесь, в
     // системе: сервис владения остаётся без зависимости от WeaponSkillService.
     m_proficiencyService.subscribeLevelUp(

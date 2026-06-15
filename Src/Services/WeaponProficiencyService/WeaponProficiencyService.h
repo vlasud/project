@@ -16,9 +16,10 @@ class WeaponProficiencySystem;
 // стрельбой и персистится в свою таблицу `player_weapon_skill`.
 //
 // Учитываются ровно 5 оружий (диглы/дробовик/AK-47/M4/снайперка); прочие — мимо.
-// Прогрессия: каждые SHOTS_PER_SKILL валидных выстрелов из оружия → +1 скилл,
-// кап MAX_SKILL. Остаток выстрелов (0..SHOTS_PER_SKILL-1) копится в памяти и НЕ
-// персистится (потеря недобора на логауте допустима — так договорено).
+// Прогрессия: каждые SHOTS_PER_SKILL[idx] валидных выстрелов из оружия → +1 скилл,
+// кап MAX_SKILL. Порог пер-оружие (см. таблицу SHOTS_PER_SKILL). Остаток выстрелов
+// (0..SHOTS_PER_SKILL[idx]-1) копится в памяти и НЕ персистится (потеря недобора
+// на логауте допустима).
 //
 // Чистый контейнер состояния (как PlayerPersonalSkinService): загрузка/запись в
 // БД и привязка к сессии — на WeaponProficiencySystem; хук валидного выстрела —
@@ -34,9 +35,18 @@ class WeaponProficiencyService final : public IService
     friend WeaponProficiencySystem;
 
   public:
-    // Скилл всегда в [0; MAX_SKILL]. Каждые SHOTS_PER_SKILL выстрелов → +1.
+    // Скилл всегда в [0; MAX_SKILL]. Каждые SHOTS_PER_SKILL[idx] выстрелов → +1.
     static constexpr int MAX_SKILL = 100;
-    static constexpr int SHOTS_PER_SKILL = 5;
+
+    // Кол-во учитываемых оружий (= размер per-player массивов и таблицы порогов).
+    static constexpr std::size_t WEAPON_COUNT = 5;
+
+    // Выстрелов на +1 скилл — НАСТРАИВАЕТСЯ ПЕР-ОРУЖИЕ. Индекс = weaponIndex():
+    // 0 Desert Eagle, 1 Shotgun, 2 AK-47, 3 M4, 4 Sniper Rifle. Чтобы изменить темп
+    // прокачки конкретного оружия — поправь его число здесь и пересобери. Значение
+    // ДОЛЖНО быть >= 1 (0 дал бы +1 скилл на каждый выстрел). Стартовые значения
+    // равны прежнему единому порогу (5) — баланс не меняется, пока их не настроят.
+    static constexpr std::array<int, WEAPON_COUNT> SHOTS_PER_SKILL = {5, 5, 5, 5, 5};
 
     // Все слоты инициализируются нулём в конструкторе (массивы фиксированной
     // длины, без «не сидировано»: дефолт скилла и есть 0 — то же, что отсутствие
@@ -50,16 +60,14 @@ class WeaponProficiencyService final : public IService
     static constexpr std::uint8_t WEAPON_M4 = 31;
     static constexpr std::uint8_t WEAPON_SNIPER = 34;
 
-    // Кол-во учитываемых оружий (= размер per-player массивов).
-    static constexpr std::size_t WEAPON_COUNT = 5;
-
     // true — оружие учитывается прогрессией (есть в таблице из 5).
     static bool isTrackedWeapon(std::uint8_t weaponId);
 
     // HOT PATH (каждый валидный выстрел). Строго O(1), без аллокаций, без БД.
-    // weaponId не из 5 учитываемых — тихо игнорируется. Каждый SHOTS_PER_SKILL-й
+    // weaponId не из 5 учитываемых — тихо игнорируется. Каждый SHOTS_PER_SKILL[idx]-й
     // выстрел из учтённого оружия даёт +1 скилл (кап MAX_SKILL), счётчик-остаток
-    // обнуляется. Вызывать ТОЛЬКО на серверно-валидном выстреле (см. шапку).
+    // обнуляется. Порог берётся пер-оружие по indexу. Вызывать ТОЛЬКО на
+    // серверно-валидном выстреле (см. шапку).
     void registerShot(int playerId, std::uint8_t weaponId);
 
     // Текущий скилл владения [0; MAX_SKILL]. Невалидный playerId/оружие → 0.
@@ -71,7 +79,7 @@ class WeaponProficiencyService final : public IService
     void setSkill(int playerId, std::uint8_t weaponId, int value);
 
     // Наблюдатель level-up: зовётся СИНХРОННО из registerShot ровно тогда, когда
-    // владение оружием поднялось на +1 (раз в SHOTS_PER_SKILL валидных выстрелов).
+    // владение оружием поднялось на +1 (раз в SHOTS_PER_SKILL[idx] валидных выстрелов).
     // newSkill — уже обновлённое значение [1; MAX_SKILL]. Через этот сигнал
     // WeaponProficiencySystem применяет нативный weapon skill, НЕ заставляя сервис
     // зависеть от WeaponSkillService (источников правды по-прежнему два разных
@@ -90,7 +98,7 @@ class WeaponProficiencyService final : public IService
     struct PlayerProficiency
     {
         // skill[i] — скилл владения i-м оружием [0; MAX_SKILL].
-        // shotRemainder[i] — выстрелы сверх последнего +1 (0..SHOTS_PER_SKILL-1).
+        // shotRemainder[i] — выстрелы сверх последнего +1 (0..SHOTS_PER_SKILL[i]-1).
         std::array<int, WEAPON_COUNT> skill{};         // value-init → все 0
         std::array<int, WEAPON_COUNT> shotRemainder{}; // value-init → все 0
     };
@@ -99,7 +107,7 @@ class WeaponProficiencyService final : public IService
 
     // Подписчики на level-up. Обходятся синхронно в registerShot при каждом +1.
     // Подписка — на старте (конструктор системы), в hot path только обход вектора
-    // (обычно один элемент). Уведомление происходит лишь раз в SHOTS_PER_SKILL
+    // (обычно один элемент). Уведомление происходит лишь раз в SHOTS_PER_SKILL[idx]
     // выстрелов, поэтому обычная пуля наблюдателей не трогает (O(1) без обхода).
     std::vector<LevelUpObserver> m_levelUpObservers;
 };
