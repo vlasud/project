@@ -18,6 +18,7 @@
 #include "Systems/Factions/ArmyGroundSystem/ArmyGroundSystem.h"
 #include "Systems/Factions/AztecasSystem/AztecasSystem.h"
 #include "Systems/Factions/BallasSystem/BallasSystem.h"
+#include "Systems/Factions/BankFactionSystem/BankFactionSystem.h"
 #include "Systems/Factions/FbiSystem/FbiSystem.h"
 #include "Systems/Factions/GroveStreetSystem/GroveStreetSystem.h"
 #include "Systems/Factions/ItalianMafiaSystem/ItalianMafiaSystem.h"
@@ -177,6 +178,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // Мафии (криминал без куратора): база-интерьер с входом/выходом, как Триада/Rifa.
     m_systems.push_back(std::make_unique<RussianMafiaSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ItalianMafiaSystem>(core, serviceRegister));
+    // Банк (самостоятельная организация без куратора): база-интерьер с
+    // входом/выходом, как Триада/Rifa/мафии. Не путать с BankSystem (счета игроков).
+    m_systems.push_back(std::make_unique<BankFactionSystem>(core, serviceRegister));
     // Уличные банды (криминал без куратора): без базы/интерьера — спавн на турфе,
     // цвет, пул скинов и пикап-маркер территории.
     m_systems.push_back(std::make_unique<GroveStreetSystem>(core, serviceRegister));
