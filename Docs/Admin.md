@@ -70,6 +70,7 @@ INSERT в БД). Любому другому игроку команда отв�
 | `GridDebugSystem` | `/gridtest`, `/gridclear`, `/gridcell`, `/streamdebug`, `/near` |
 | `SpectateSystem` | `/spec`, `/specoff` |
 | `WeaponDebugSystem` | `/rof` |
+| `ElectionSystem` | `/edev` (только дев-меню выборов; голосование через урны НЕ гейтится) |
 | `FactionSystem` | `/fdev` (только дев-меню фракций; игровые `/faction`/`/invite`/… НЕ гейтятся) |
 
 Гейт декларативный: только хвостовой `perm` в `add(...)`, тела обработчиков не

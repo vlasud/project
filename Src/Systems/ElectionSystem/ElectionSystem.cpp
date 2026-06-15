@@ -2,6 +2,7 @@
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
+#include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
 #include <chrono>
@@ -43,10 +44,12 @@ ElectionSystem::ElectionSystem(ICore &core, const ServiceRegister &serviceRegist
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_timerService(serviceRegister.getService<TimerService>())
 {
-    // Дев-меню админа (до системы ролей открыто, как и прочие дев-тулзы).
+    // Единое дев-меню выборов; доступ только разработчику (admin level 6) — иначе
+    // любой игрок мог бы стартовать/завершать выборы и сделать себя президентом.
     serviceRegister.getService<PlayerCommandService>().add(
-        "edev", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showDevMenu(player); }, {},
-        "дев-меню выборов (меню)", PlayerCommandService::HelpCategory::Hidden);
+        "edev", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showDevMenu(player); },
+        PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "дев-меню выборов (меню)",
+        PlayerCommandService::HelpCategory::Hidden);
 }
 
 void ElectionSystem::initialize(IComponentList *components)

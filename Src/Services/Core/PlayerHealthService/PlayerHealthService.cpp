@@ -98,7 +98,10 @@ bool PlayerHealthService::isInvulnerable(int playerId) const
 
 void PlayerHealthService::applyDamage(IPlayer &player, float amount)
 {
-    if (amount <= 0.0f)
+    // NaN/Inf клиент шлёт через give-damage и take-damage (from==nullptr): open.mp
+    // отбраковывает только <0 (NaN<0==false проходит). Без isfinite-гарда NaN ушёл
+    // бы в st.health/st.armour — жертва навсегда неубиваема и кикается античитом.
+    if (!std::isfinite(amount) || amount <= 0.0f)
         return;
 
     State &st = m_state[player.getID()];
@@ -228,7 +231,9 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
     {
         const float rh = player.getHealth();
         const float ra = player.getArmour();
-        if (std::abs((rh + ra) - (st.health + st.armour)) > EPS)
+        // Форсим серверное и при расхождении, и при non-finite reported: NaN-урон в
+        // god дал бы abs(NaN)>EPS == false, и NaN залип бы на клиенте до выхода из god.
+        if (!std::isfinite(rh) || !std::isfinite(ra) || std::abs((rh + ra) - (st.health + st.armour)) > EPS)
         {
             player.setHealth(st.health);
             player.setArmour(st.armour);
@@ -238,6 +243,20 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
 
     const float reportedHealth = player.getHealth();
     const float reportedArmour = player.getArmour();
+
+    // Клиент мог зашить NaN/Inf в синхронизируемый HP — сравнения по сумме с таким
+    // значением неопределены (всё <= серверного и наоборот ложно). Трактуем как
+    // health-hack: форсим серверное значение обратно, не давая NaN отравить правду.
+    if (!std::isfinite(reportedHealth) || !std::isfinite(reportedArmour))
+    {
+        st.lastChange = timeNow;
+        st.confirmed = false;
+        player.setHealth(st.health);
+        player.setArmour(st.armour);
+        outcome.healthHack = true;
+        outcome.detail = fmt::format("non-finite reported HP {}+{}", reportedHealth, reportedArmour);
+        return outcome;
+    }
 
     if (st.dying)
     {

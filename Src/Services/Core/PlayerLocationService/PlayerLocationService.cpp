@@ -38,10 +38,6 @@ constexpr float ARRIVE_FRACTION = 0.4f;
 // пассажира на паузе машина легально увозит куда угодно.
 constexpr float PAUSE_MOVE_TOLERANCE = 100.0f;
 
-// Минимальный интервал между грейсами за смену интерьера: чит, спамящий
-// interior-change ради легализации телепортов, упрётся в лимит.
-constexpr std::chrono::milliseconds INTERIOR_GRACE_COOLDOWN{2000};
-
 float clampDt(float seconds)
 {
     if (seconds < 0.01f)
@@ -166,18 +162,14 @@ void PlayerLocationService::onSpawn(IPlayer &player)
 
 void PlayerLocationService::onInteriorChange(IPlayer &player, unsigned newInterior, TimePoint now)
 {
-    State &st = m_state[player.getID()];
-    if (st.interior == newInterior)
-        return;
-    st.interior = newInterior;
-
-    // Enex-маркер легально телепортирует клиента — даём разовый грейс позиции,
-    // но не чаще INTERIOR_GRACE_COOLDOWN: спам интерьерами не легализует телепорты.
-    if (now - st.lastInteriorGrace >= INTERIOR_GRACE_COOLDOWN)
-    {
-        st.lastInteriorGrace = now;
-        st.acceptNext = true;
-    }
+    // Чисто клиентский RPC. Встроенные enex-маркеры GTA выключены (WorldSystem) —
+    // легальной клиентской смены интерьера с переносом позиции не бывает; серверные
+    // переносы (двери баз, телепорты) идут через teleport()/setInterior() и берут
+    // грейс позиции из pendingTeleport. Поэтому здесь грейс позиции НЕ выдаём: иначе
+    // чит чередованием интерьеров (1/0/1/0) легализовал бы телепорт куда угодно.
+    // Обновляем только источник правды об интерьере; позицию валидирует обычная проверка.
+    (void)now;
+    m_state[player.getID()].interior = newInterior;
 }
 
 PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &player, TimePoint now)
@@ -205,7 +197,8 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
         return outcome;
     }
 
-    // Первый игровой апдейт или разовый грейс — принимаем как есть.
+    // Первый игровой апдейт или разовый грейс (спавн/байпас — серверные скачки) —
+    // принимаем как есть.
     if (!st.tracking || st.acceptNext)
     {
         st.tracking = true;

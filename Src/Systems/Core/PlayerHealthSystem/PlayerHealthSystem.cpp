@@ -4,6 +4,7 @@
 #include "Systems/Core/PlayerHealthSystem/WeaponLimits.h"
 #include "glm/geometric.hpp"
 #include <chrono>
+#include <cmath>
 #include <fmt/format.h>
 
 namespace
@@ -91,6 +92,14 @@ bool PlayerHealthSystem::validateGiveDamage(IPlayer &attacker, IPlayer &victim, 
                                   timeNow);
         return false;
     };
+
+    // NaN/Inf-урон open.mp пропускает (отсекает только <0). Табличный лимит ниже
+    // его бы не поймал (NaN>max==false), а applyDamage отравил бы HP жертвы —
+    // фиксируем фейк на атакующего и не применяем.
+    if (!std::isfinite(amount))
+    {
+        return reject(fmt::format("non-finite damage {} from weapon {}", amount, weapon));
+    }
 
     const WeaponLimits::Info *info = WeaponLimits::get(weapon);
     if (!info)
