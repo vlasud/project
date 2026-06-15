@@ -37,6 +37,7 @@
 #include "Services/PlayerPersonalSkinService/PlayerPersonalSkinService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
+#include "Services/ReportService/ReportService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/WeaponSkillService/WeaponSkillService.h"
 #include "Services/WeaponProficiencyService/WeaponProficiencyService.h"
@@ -87,6 +88,9 @@ void ServiceRegister::registerServices()
     registerService<PlayerPersonalSkinService>();
     registerService<AttachmentService>();
     registerService<PlayerCommandService>();
+    // Кулдаун репортов + журнал обращений (/mn -> «Связь с администрацией»). Без
+    // зависимостей; рассылку залогиненным админам делает MenuSystem.
+    registerService<ReportService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
     registerService<PlayerChatService>();

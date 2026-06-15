@@ -1,20 +1,12 @@
-#include "Systems/Core/HelpSystem/HelpSystem.h"
+#include "Systems/HelpSystem/HelpDialog.h"
 
-#include "Server/Components/Dialogs/dialogs.hpp"
-#include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <fmt/format.h>
-#include <string>
 #include <vector>
 
 namespace
 {
 using HelpCategory = PlayerCommandService::HelpCategory;
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 
 // Порядок секций /help (фиксированное «оглавление», не зависит от порядка
 // регистрации систем). Hidden сюда не доходит (отфильтрован реестром).
@@ -54,24 +46,15 @@ const char *categoryLabel(HelpCategory category)
 }
 } // namespace
 
-HelpSystem::HelpSystem(ICore &core, const ServiceRegister &serviceRegister)
-    : BaseSystem(core, serviceRegister), m_commandService(serviceRegister.getService<PlayerCommandService>()),
-      m_factionService(serviceRegister.getService<FactionService>()),
-      m_dialogService(serviceRegister.getService<PlayerDialogService>())
-{
-    m_commandService.add("help", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { cmdHelp(player); },
-                         {}, "список доступных вам команд", PlayerCommandService::HelpCategory::Misc);
-}
-
-void HelpSystem::cmdHelp(IPlayer &player)
+std::string buildHelpDialogBody(const PlayerCommandService &commands, const FactionService &factions, int playerId)
 {
     // Список строит реестр команд (единый источник истины). Клиентский ввод на
     // него не влияет; описания берутся как заявлены при регистрации.
-    std::vector<PlayerCommandService::HelpCommand> list = m_commandService.collectHelpCommands();
+    std::vector<PlayerCommandService::HelpCommand> list = commands.collectHelpCommands();
 
     // Фракционная секция — только реальному члену организации (серверный факт,
     // не клиентский ввод). Не член — выкидываем фракционные строки целиком.
-    const bool inFaction = m_factionService.getMemberFaction(player.getID()) != FactionService::NO_FACTION;
+    const bool inFaction = factions.getMemberFaction(playerId) != FactionService::NO_FACTION;
     if (!inFaction)
         list.erase(std::remove_if(list.begin(), list.end(),
                                   [](const PlayerCommandService::HelpCommand &cmd)
@@ -107,13 +90,5 @@ void HelpSystem::cmdHelp(IPlayer &player)
         body += "Нет доступных команд\t\n";
     body.pop_back(); // убрать хвостовой '\n' — иначе пустая строка-фантом в tablist
 
-    Dialog dialog;
-    dialog.style = DialogStyle_TABLIST_HEADERS;
-    dialog.title = u("Команды");
-    dialog.body = u(body);
-    dialog.leftButton = u("Закрыть");
-    dialog.rightButton = u("");
-
-    // Just-read список: на любой ответ просто закрыть (реакции на выбор нет).
-    m_dialogService.show(player, dialog, [](DialogResponse, int, StringView) {});
+    return body;
 }

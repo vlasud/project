@@ -32,9 +32,10 @@
 #include "Systems/Core/GangZoneSystem/GangZoneSystem.h"
 #include "Systems/Core/GridDebugSystem/GridDebugSystem.h"
 #include "Systems/Core/GridSystem/GridSystem.h"
-#include "Systems/Core/HelpSystem/HelpSystem.h"
+#include "Systems/HelpSystem/HelpSystem.h"
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 #include "Systems/Core/MapIconSystem/MapIconSystem.h"
+#include "Systems/MenuSystem/MenuSystem.h"
 #include "Systems/Core/MovingObjectSystem/MovingObjectSystem.h"
 #include "Systems/Core/NicknameSystem/NicknameSystem.h"
 #include "Systems/Core/ObjectEditSystem/ObjectEditSystem.h"
@@ -196,6 +197,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // HelpSystem последней: строит /help из реестра команд — все команды уже
     // зарегистрированы конструкторами выше (порядок для неё некритичен).
     m_systems.push_back(std::make_unique<HelpSystem>(core, serviceRegister));
+    // MenuSystem (/mn) — холодный путь (по команде/диалогу); порядок некритичен.
+    // Пункт «Помощь» зовёт тот же help-слой; «Связь с администрацией» рассылает
+    // репорт залогиненным админам и пишет в журнал ReportService.
+    m_systems.push_back(std::make_unique<MenuSystem>(core, serviceRegister));
 }
 
 void SystemRegister::initializeSystems(IComponentList *components)
