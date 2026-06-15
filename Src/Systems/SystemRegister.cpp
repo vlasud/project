@@ -60,6 +60,7 @@
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
 #include "Systems/Core/WeaponSkillSystem/WeaponSkillSystem.h"
 #include "Systems/WeaponProficiencySystem/WeaponProficiencySystem.h"
+#include "Systems/ServerLogoSystem/ServerLogoSystem.h"
 #include "Systems/Core/SpectateSystem/SpectateSystem.h"
 #include "Systems/Core/StreamerSystem/StreamerSystem.h"
 #include "Systems/Core/TextDrawEditorSystem/TextDrawEditorSystem.h"
@@ -132,6 +133,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // как редактор начнёт регистрировать обработчики.
     m_systems.push_back(std::make_unique<TextDrawSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<TextDrawEditorSystem>(core, serviceRegister));
+    // ServerLogoSystem после TextDrawSystem: к моменту его initialize() сервис уже
+    // получил компонент textdraw, и логотип создаётся успешно.
+    m_systems.push_back(std::make_unique<ServerLogoSystem>(core, serviceRegister));
     // GangZoneSystem раньше редактора: сервис должен получить компонент до того,
     // как тулза начнёт создавать зоны.
     m_systems.push_back(std::make_unique<GangZoneSystem>(core, serviceRegister));
