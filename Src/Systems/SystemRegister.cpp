@@ -12,6 +12,7 @@
 #include "Systems/Core/EditorSystem/EditorSystem.h"
 #include "Systems/BankSystem/BankSystem.h"
 #include "Systems/PaymentSystem/PaymentSystem.h"
+#include "Systems/DeathPenaltySystem/DeathPenaltySystem.h"
 #include "Systems/ElectionSystem/ElectionSystem.h"
 #include "Systems/FactionSystem/FactionSystem.h"
 #include "Systems/Factions/ArmyAirForceSystem/ArmyAirForceSystem.h"
@@ -198,6 +199,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<BankSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PaymentSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<ElectionSystem>(core, serviceRegister));
+    // DeathPenaltySystem ПОСЛЕ PlayerHealthSystem (его onPlayerSpawn -> HP=100
+    // должен отработать раньше, чтобы наш setMaxHealth зажал уже выставленное HP) и
+    // ПОСЛЕ PlayerSessionSystem (штраф привязан к аккаунту — сессия должна быть
+    // доступна). Бизнес-фича — вне Core.
+    m_systems.push_back(std::make_unique<DeathPenaltySystem>(core, serviceRegister));
     // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до
     // того, как /camera начнёт им пользоваться.
     m_systems.push_back(std::make_unique<CameraSystem>(core, serviceRegister));

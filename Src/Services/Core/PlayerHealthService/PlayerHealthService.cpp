@@ -62,6 +62,8 @@ void PlayerHealthService::setHealth(IPlayer &player, float health)
 {
     State &st = m_state[player.getID()];
     st.health = health < 0.0f ? 0.0f : health;
+    if (st.capActive && st.health > st.maxHealth)
+        st.health = st.maxHealth; // общий потолок HP держим и тут (player.setHealth ниже форсит зажатое)
     st.lastChange = now();
     st.confirmed = false;
     player.setHealth(st.health);
@@ -94,6 +96,34 @@ bool PlayerHealthService::isInvulnerable(int playerId) const
     if (playerId < 0 || playerId >= MAX_PLAYERS)
         return false;
     return m_state[playerId].invulnerable;
+}
+
+void PlayerHealthService::setMaxHealth(IPlayer &player, float cap)
+{
+    const int id = player.getID();
+    if (id < 0 || id >= MAX_PLAYERS)
+        return;
+    State &st = m_state[id];
+    st.capActive = true;
+    st.maxHealth = cap < 0.0f ? 0.0f : cap;
+    if (st.health > st.maxHealth)
+    {
+        // Текущее HP выше нового потолка — зажимаем и форсим клиент тем же путём,
+        // что setHealth (новое серверное значение + сброс confirmed/окно синхронизации).
+        st.health = st.maxHealth;
+        st.lastChange = now();
+        st.confirmed = false;
+        player.setHealth(st.health);
+    }
+}
+
+void PlayerHealthService::clearMaxHealth(int playerId)
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return;
+    // Снимаем только потолок — текущее HP не трогаем (к клиенту не обращаемся):
+    // дальше игрок лечится сам, восстановление до 100 не форсим.
+    m_state[playerId].capActive = false;
 }
 
 void PlayerHealthService::applyDamage(IPlayer &player, float amount)
@@ -169,6 +199,11 @@ void PlayerHealthService::onSpawn(int playerId)
     st.dying = false;
     st.confirmed = false;
     st.health = 100.0f; // дефолт спавна GTA; кастомное HP — через setHealth()
+    // Общий потолок HP переживает респавн (capActive/maxHealth НЕ сбрасываем —
+    // снимаются только clearMaxHealth/reset). Это покрывает повторную смерть под
+    // активным кэпом: после респавна HP сразу зажат к потолку.
+    if (st.capActive && st.health > st.maxHealth)
+        st.health = st.maxHealth;
     st.armour = 0.0f;
     st.lastChange = now();
     st.lastUpdate = st.lastChange;
@@ -302,6 +337,17 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
             st.confirmed = true;
             st.health = reportedHealth;
             st.armour = reportedArmour;
+            // Под кэпом сумма может совпасть, а раскладка нарушать потолок: имея броню,
+            // читер шлёт высокий HP + 0 брони (та же сумма) и переливает броню в HP в
+            // обход кэпа. Зажимаем HP к потолку и форсим клиент вниз; бронь не трогаем
+            // (она под кэп не попадает).
+            if (st.capActive && st.health > st.maxHealth)
+            {
+                st.health = st.maxHealth;
+                st.lastChange = timeNow;
+                st.confirmed = false;
+                player.setHealth(st.maxHealth);
+            }
             return outcome;
         }
         if (timeNow - st.lastChange < SYNC_GRACE)
@@ -315,6 +361,16 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
         // (падение, огонь, утопление, столкновение). Принимаем как новую правду.
         st.health = reportedHealth;
         st.armour = reportedArmour;
+        // Та же дыра, что и в ветке совпадения сумм: при равной сумме клиент мог
+        // переписать раскладку «высокий HP + 0 брони» и перелить броню в HP в обход
+        // кэпа. Зажимаем HP к потолку и форсим клиент; бронь под кэп не попадает.
+        if (st.capActive && st.health > st.maxHealth)
+        {
+            st.health = st.maxHealth;
+            st.lastChange = timeNow;
+            st.confirmed = false;
+            player.setHealth(st.maxHealth);
+        }
         if (st.health <= 0.0f)
             enterDying(player); // самоубился об окружение — смерть серверная сразу
         return outcome;

@@ -27,6 +27,14 @@
 // God mode (бессмертие) — серверный режим игнора урона: переключается ТОЛЬКО этим
 // сервисом (setInvulnerable). Пока включён, applyDamage урон отбрасывает и форсит
 // серверное HP назад, а verify держит HP на серверном значении без записи нарушения.
+//
+// Общий потолок HP — серверный максимум здоровья: setMaxHealth(cap) включает кэп,
+// clearMaxHealth снимает. Пока кэп активен, серверное HP НИКОГДА не превышает
+// maxHealth: зажим стоит во всех точках, где HP пишется вверх — setHealth, onSpawn
+// (кэп переживает респавн, снимается только clearMaxHealth/reset) и verify (включая
+// попытку клиента переписать раскладку «высокий HP + 0 брони» при той же сумме).
+// Бронь под кэп НЕ попадает — её можно поднимать свободно. Кэп и god mode
+// ортогональны. Семантика кэпа — чистая инфраструктура (без знания о причине).
 class PlayerHealthService final : public IService
 {
   public:
@@ -44,6 +52,12 @@ class PlayerHealthService final : public IService
     // verify/applyDamage). isInvulnerable bounds-checked — вне диапазона false.
     void setInvulnerable(IPlayer &player, bool on);
     bool isInvulnerable(int playerId) const;
+
+    // Общий потолок HP. setMaxHealth включает кэп и сразу зажимает текущее HP, если
+    // оно выше cap (форсит клиент тем же путём, что setHealth). cap<0 трактуется как
+    // 0. clearMaxHealth снимает кэп, текущее HP НЕ трогает (к клиенту не обращается).
+    void setMaxHealth(IPlayer &player, float cap);
+    void clearMaxHealth(int playerId);
 
     // Серверно-авторитетный урон: списывает броню, затем HP, и форсит клиент.
     // Вызывается игровой логикой и системой (по валидированному onPlayerGiveDamage
@@ -78,6 +92,8 @@ class PlayerHealthService final : public IService
         bool dying = false;        // серверное HP=0, ждём подтверждения смерти от клиента
         bool confirmed = false;    // клиент сошёлся к серверному значению
         bool invulnerable = false; // god mode (сбрасывается в reset через State{})
+        bool capActive = false;    // активен общий потолок HP (см. maxHealth)
+        float maxHealth = 0.0f; // потолок HP при capActive (бронь под него не попадает)
         float health = 0.0f;    // серверно-авторитетное HP
         float armour = 0.0f;    // серверно-авторитетная броня
         TimePoint lastChange;   // последнее серверное изменение (окно синхронизации)
