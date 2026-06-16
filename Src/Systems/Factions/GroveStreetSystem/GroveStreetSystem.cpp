@@ -8,7 +8,6 @@ namespace
 const char *const FACTION_NAME = "Grove Street";
 const Colour FACTION_COLOUR{0, 153, 0}; // зелёный
 const Vector3 TURF_POS{2495.0f, -1688.0f, 13.5f}; // турф Гантон
-constexpr float TURF_ANGLE = 0.0f;
 constexpr int MARKER_MODEL = 1239; // иконка «i»
 constexpr int MARKER_TYPE = 1;     // подбор по касанию, всегда виден
 
@@ -27,13 +26,23 @@ GroveStreetSystem::GroveStreetSystem(ICore &core, const ServiceRegister &service
     m_factionService.registerColour(FACTION_ID, FACTION_COLOUR);
     m_factionService.registerSkins(FACTION_ID, {105, 106, 107});
 
-    // Уличная банда: базы/интерьера нет (registerBase не вызывается). Спавн на
-    // турфе — публичная улица (интерьер 0, мир 0): члены видят друг друга и всех.
+    // База банды: вход с улицы, интерьер 3; изоляция по виртуальному
+    // миру (= id фракции), как у прочих организаций с базой.
+    FactionService::Base base;
+    base.pickupModel = 1318;
+    base.interior = 3;
+    // Вход с улицы -> внутрь базы (интерьер 3).
+    base.entrances.push_back({{2495.3560f, -1691.1332f, 14.7656f}, {2496.3589f, -1695.5648f, 1014.7422f}, 177.9277f});
+    // Выход из базы -> на улицу.
+    base.exits.push_back({{2495.9290f, -1692.0836f, 1014.7422f}, {2495.2234f, -1687.9604f, 13.5161f}, 1.3725f});
+    m_factionService.registerBase(FACTION_ID, base);
+
+    // Спавн членов — внутри базы (мир базы = id фракции).
     FactionService::Spawn spawn;
-    spawn.position = TURF_POS;
-    spawn.angle = TURF_ANGLE;
-    spawn.interior = 0;
-    spawn.virtualWorld = 0;
+    spawn.position = {2494.8315f, -1707.3843f, 1018.3368f};
+    spawn.angle = 269.3986f;
+    spawn.interior = 3;
+    spawn.virtualWorld = FACTION_ID;
     m_factionService.registerSpawn(FACTION_ID, spawn);
 }
 

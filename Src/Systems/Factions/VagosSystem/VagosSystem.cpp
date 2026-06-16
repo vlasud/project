@@ -8,7 +8,6 @@ namespace
 const char *const FACTION_NAME = "Vagos";
 const Colour FACTION_COLOUR{255, 204, 0}; // жёлтый
 const Vector3 TURF_POS{2710.0f, -1370.0f, 13.5f}; // турф Восточный ЛС
-constexpr float TURF_ANGLE = 0.0f;
 constexpr int MARKER_MODEL = 1239; // иконка «i»
 constexpr int MARKER_TYPE = 1;     // подбор по касанию, всегда виден
 
@@ -27,13 +26,23 @@ VagosSystem::VagosSystem(ICore &core, const ServiceRegister &serviceRegister)
     m_factionService.registerColour(FACTION_ID, FACTION_COLOUR);
     m_factionService.registerSkins(FACTION_ID, {108, 109, 110});
 
-    // Уличная банда: базы/интерьера нет (registerBase не вызывается). Спавн на
-    // турфе — публичная улица (интерьер 0, мир 0): члены видят друг друга и всех.
+    // База банды: вход с улицы, интерьер 2; изоляция по виртуальному
+    // миру (= id фракции), как у прочих организаций с базой.
+    FactionService::Base base;
+    base.pickupModel = 1318;
+    base.interior = 2;
+    // Вход с улицы -> внутрь базы (интерьер 2).
+    base.entrances.push_back({{2756.3308f, -1182.8099f, 69.4035f}, {222.9930f, 1240.0991f, 1082.1406f}, 89.2970f});
+    // Выход из базы -> на улицу.
+    base.exits.push_back({{226.7888f, 1239.9597f, 1082.1406f}, {2756.4854f, -1179.6387f, 69.3991f}, 1.2913f});
+    m_factionService.registerBase(FACTION_ID, base);
+
+    // Спавн членов — внутри базы (мир базы = id фракции).
     FactionService::Spawn spawn;
-    spawn.position = TURF_POS;
-    spawn.angle = TURF_ANGLE;
-    spawn.interior = 0;
-    spawn.virtualWorld = 0;
+    spawn.position = {223.6305f, 1252.4435f, 1082.1406f};
+    spawn.angle = 115.9073f;
+    spawn.interior = 2;
+    spawn.virtualWorld = FACTION_ID;
     m_factionService.registerSpawn(FACTION_ID, spawn);
 }
 

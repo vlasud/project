@@ -8,7 +8,6 @@ namespace
 const char *const FACTION_NAME = "Ballas";
 const Colour FACTION_COLOUR{170, 60, 190}; // фиолетовый
 const Vector3 TURF_POS{2178.0f, -1791.0f, 13.4f}; // турф Айдлвуд
-constexpr float TURF_ANGLE = 0.0f;
 constexpr int MARKER_MODEL = 1239; // иконка «i»
 constexpr int MARKER_TYPE = 1;     // подбор по касанию, всегда виден
 
@@ -27,13 +26,23 @@ BallasSystem::BallasSystem(ICore &core, const ServiceRegister &serviceRegister)
     m_factionService.registerColour(FACTION_ID, FACTION_COLOUR);
     m_factionService.registerSkins(FACTION_ID, {102, 103, 104});
 
-    // Уличная банда: базы/интерьера нет (registerBase не вызывается). Спавн на
-    // турфе — публичная улица (интерьер 0, мир 0): члены видят друг друга и всех.
+    // База банды: вход с улицы, интерьер 2; изоляция по виртуальному
+    // миру (= id фракции), как у прочих организаций с базой.
+    FactionService::Base base;
+    base.pickupModel = 1318;
+    base.interior = 2;
+    // Вход с улицы -> внутрь базы (интерьер 2).
+    base.entrances.push_back({{1939.0682f, -1114.4838f, 27.4523f}, {2465.1985f, -1698.3708f, 1013.5078f}, 88.8212f});
+    // Выход из базы -> на улицу.
+    base.exits.push_back({{2468.8420f, -1698.2937f, 1013.5078f}, {1939.1842f, -1117.1135f, 26.4455f}, 180.7641f});
+    m_factionService.registerBase(FACTION_ID, base);
+
+    // Спавн членов — внутри базы (мир базы = id фракции).
     FactionService::Spawn spawn;
-    spawn.position = TURF_POS;
-    spawn.angle = TURF_ANGLE;
-    spawn.interior = 0;
-    spawn.virtualWorld = 0;
+    spawn.position = {2450.2490f, -1692.5789f, 1013.5078f};
+    spawn.angle = 154.7030f;
+    spawn.interior = 2;
+    spawn.virtualWorld = FACTION_ID;
     m_factionService.registerSpawn(FACTION_ID, spawn);
 }
 
