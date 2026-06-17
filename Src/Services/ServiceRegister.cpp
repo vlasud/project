@@ -7,6 +7,7 @@
 #include "Services/BankService/BankService.h"
 #include "Services/ElectionService/ElectionService.h"
 #include "Services/FactionService/FactionService.h"
+#include "Services/InventoryService/InventoryService.h"
 #include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/CameraService/CameraService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
@@ -101,6 +102,10 @@ void ServiceRegister::registerServices()
     registerService<BankService>();
     registerService<FactionService>();
     registerService<ElectionService>();
+    // Базовая система вещей (источник правды о предметах игроков онлайн). Без
+    // зависимостей; типы регистрируют системы-владельцы (MedkitSystem) в своих
+    // конструкторах, persist по сессии делает InventorySystem.
+    registerService<InventoryService>();
     registerService<PlayerAuthService>();
     // Админ-доступ (источник правды об уровне/пароле/логине). Без зависимостей;
     // PlayerCommandSystem (резолвер прав) и AdminSystem берут из регистра.

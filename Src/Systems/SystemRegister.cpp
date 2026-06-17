@@ -37,6 +37,8 @@
 #include "Systems/Core/GridDebugSystem/GridDebugSystem.h"
 #include "Systems/Core/GridSystem/GridSystem.h"
 #include "Systems/HelpSystem/HelpSystem.h"
+#include "Systems/InventorySystem/InventorySystem.h"
+#include "Systems/MedkitSystem/MedkitSystem.h"
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 #include "Systems/Core/MapIconSystem/MapIconSystem.h"
 #include "Systems/MenuSystem/MenuSystem.h"
@@ -204,6 +206,13 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // ПОСЛЕ PlayerSessionSystem (штраф привязан к аккаунту — сессия должна быть
     // доступна). Бизнес-фича — вне Core.
     m_systems.push_back(std::make_unique<DeathPenaltySystem>(core, serviceRegister));
+    // Вещи (базовая система предметов): персист по сессии (после PlayerSessionSystem
+    // — подписка на старт/конец сессии) + дев-выдача /idev. Бизнес-фича, вне Core.
+    m_systems.push_back(std::make_unique<InventorySystem>(core, serviceRegister));
+    // Аптечка (первый предмет поверх вещей): регистрирует свой тип в InventoryService
+    // в конструкторе и добавляет /healme. После InventorySystem логически
+    // (порядок реестра типов от порядка систем не зависит — сервис уже сконструирован).
+    m_systems.push_back(std::make_unique<MedkitSystem>(core, serviceRegister));
     // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до
     // того, как /camera начнёт им пользоваться.
     m_systems.push_back(std::make_unique<CameraSystem>(core, serviceRegister));

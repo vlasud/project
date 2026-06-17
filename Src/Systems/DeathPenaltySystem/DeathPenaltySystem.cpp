@@ -20,7 +20,12 @@ void DeathPenaltySystem::onPlayerSpawn(IPlayer &player)
     const int id = player.getID();
     const AccountId account = m_sessionService.getAccountId(id);
     if (account == PlayerSessionService::NO_ACCOUNT)
-        return; // не залогинен — штраф привязан к аккаунту, привязывать некуда
+    {
+        // Не залогинен — штрафовать некого (штраф привязан к аккаунту). Сбрасываем
+        // pending: смерть до авторизации не должна навесить штраф на первый логин-спавн.
+        m_pendingPenalty[id] = false;
+        return;
+    }
 
     const TimePoint now = std::chrono::steady_clock::now();
 

@@ -53,16 +53,32 @@ class PlayerHealthService final : public IService
     void setInvulnerable(IPlayer &player, bool on);
     bool isInvulnerable(int playerId) const;
 
+    // Дефолтный потолок HP (спавн-дефолт GTA). heal не лечит выше него, пока не
+    // активен более низкий per-player cap (setMaxHealth).
+    static constexpr float MAX_HEALTH = 100.0f;
+
     // Общий потолок HP. setMaxHealth включает кэп и сразу зажимает текущее HP, если
     // оно выше cap (форсит клиент тем же путём, что setHealth). cap<0 трактуется как
     // 0. clearMaxHealth снимает кэп, текущее HP НЕ трогает (к клиенту не обращается).
     void setMaxHealth(IPlayer &player, float cap);
     void clearMaxHealth(int playerId);
 
+    // Геттер общего потолка HP: true — кэп активен (через setMaxHealth), HP поднять
+    // нельзя (heal/setHealth/verify держат потолок). bounds-check по id — вне
+    // диапазона false. Бизнес-логике (напр. отказ лечиться под штрафом смерти)
+    // нужно знать о кэпе, не зная его причину.
+    bool hasMaxHealth(int playerId) const;
+
     // Серверно-авторитетный урон: списывает броню, затем HP, и форсит клиент.
     // Вызывается игровой логикой и системой (по валидированному onPlayerGiveDamage
     // от атакующего — жертва-god-mode не может подавить чужой give-damage).
     void applyDamage(IPlayer &player, float amount);
+
+    // Серверно-авторитетное лечение: прибавляет amount к текущему HP, НЕ превышая
+    // потолок (активный per-player cap, иначе MAX_HEALTH). amount<=0/NaN/Inf — no-op;
+    // мёртвого/умирающего не лечит (в обход серверной смерти не воскрешает); HP
+    // никогда не понижает. Идёт через setHealth — клиент форсится, окно синхр. даётся.
+    void heal(IPlayer &player, float amount);
 
     // Серверно-авторитетные значения (НЕ то, что заявляет клиент).
     float getHealth(int playerId) const;

@@ -107,14 +107,18 @@ void PlayerHealthService::setMaxHealth(IPlayer &player, float cap)
     st.capActive = true;
     st.maxHealth = cap < 0.0f ? 0.0f : cap;
     if (st.health > st.maxHealth)
-    {
-        // Текущее HP выше нового потолка — зажимаем и форсим клиент тем же путём,
-        // что setHealth (новое серверное значение + сброс confirmed/окно синхронизации).
-        st.health = st.maxHealth;
-        st.lastChange = now();
-        st.confirmed = false;
-        player.setHealth(st.health);
-    }
+        st.health = st.maxHealth; // зажимаем текущее HP к новому потолку
+
+    // Форсим клиенту серверное HP ВСЕГДА (даже если зажимать не пришлось) и открываем
+    // окно синхронизации. Иначе повторная смерть под уже активным кэпом теряет форс:
+    // onSpawn уже опустил ВНУТРЕННЕЕ HP до потолка (10), здесь st.health == maxHealth и
+    // условный «форс только если выше» промолчал бы, а клиент после респавна реально на
+    // 100 (дефолт GTA) и setHealth ни разу не получил — verify счёл бы это HealthHack
+    // (ложный кик честного игрока) и ~1.5с игрок был бы на 100 HP. setHealth идемпотентен,
+    // лишний RPC на спавне дёшев.
+    st.lastChange = now();
+    st.confirmed = false;
+    player.setHealth(st.health);
 }
 
 void PlayerHealthService::clearMaxHealth(int playerId)
@@ -124,6 +128,13 @@ void PlayerHealthService::clearMaxHealth(int playerId)
     // Снимаем только потолок — текущее HP не трогаем (к клиенту не обращаемся):
     // дальше игрок лечится сам, восстановление до 100 не форсим.
     m_state[playerId].capActive = false;
+}
+
+bool PlayerHealthService::hasMaxHealth(int playerId) const
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return false;
+    return m_state[playerId].capActive;
 }
 
 void PlayerHealthService::applyDamage(IPlayer &player, float amount)
@@ -168,6 +179,30 @@ void PlayerHealthService::applyDamage(IPlayer &player, float amount)
         enterDying(player);
 }
 
+void PlayerHealthService::heal(IPlayer &player, float amount)
+{
+    if (!std::isfinite(amount) || amount <= 0.0f)
+        return; // лечить можно только конечной положительной величиной
+
+    const int id = player.getID();
+    if (id < 0 || id >= MAX_PLAYERS)
+        return;
+    State &st = m_state[id];
+    if (!st.alive || st.dying)
+        return; // мёртвого/умирающего не лечим — иначе обход серверной смерти
+
+    // Потолок: активный per-player cap, иначе обычный максимум. Уже на потолке (или
+    // выше) — лечить нечего; HP не понижаем (heal только прибавляет).
+    const float ceiling = st.capActive ? st.maxHealth : MAX_HEALTH;
+    if (st.health >= ceiling)
+        return;
+
+    float target = st.health + amount;
+    if (target > ceiling)
+        target = ceiling;
+    setHealth(player, target); // форс клиента + окно синхр.; target уже под потолком
+}
+
 float PlayerHealthService::getHealth(int playerId) const
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)
@@ -198,10 +233,11 @@ void PlayerHealthService::onSpawn(int playerId)
     st.alive = true;
     st.dying = false;
     st.confirmed = false;
-    st.health = 100.0f; // дефолт спавна GTA; кастомное HP — через setHealth()
+    st.health = MAX_HEALTH; // дефолт спавна GTA; кастомное HP — через setHealth()
     // Общий потолок HP переживает респавн (capActive/maxHealth НЕ сбрасываем —
-    // снимаются только clearMaxHealth/reset). Это покрывает повторную смерть под
-    // активным кэпом: после респавна HP сразу зажат к потолку.
+    // снимаются только clearMaxHealth/reset). Здесь зажимаем лишь ВНУТРЕННЕЕ значение;
+    // клиента к зажатому HP форсит setMaxHealth (его зовёт DeathPenaltySystem на этом же
+    // спавне и шлёт setHealth всегда) — без того форса клиент остался бы на 100.
     if (st.capActive && st.health > st.maxHealth)
         st.health = st.maxHealth;
     st.armour = 0.0f;
@@ -333,10 +369,17 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
     {
         if (std::abs(reportedTotal - serverTotal) <= EPS)
         {
-            // Клиент сошёлся — принимаем его раскладку HP/брони (суммы совпали).
+            // Клиент сошёлся к серверной сумме (в пределах float-допуска).
             st.confirmed = true;
-            st.health = reportedHealth;
-            st.armour = reportedArmour;
+            // Принимаем раскладку клиента, ТОЛЬКО если сумма не выросла над серверной:
+            // EPS здесь — допуск на шум, а не право на прирост. Иначе клиент мог бы по
+            // +EPS на каждой серверной правке тихо наращивать HP (тот же ратчет, что в
+            // ветке ниже). Прирост сверх серверного игнорируем — серверное держим.
+            if (reportedTotal <= serverTotal)
+            {
+                st.health = reportedHealth;
+                st.armour = reportedArmour;
+            }
             // Под кэпом сумма может совпасть, а раскладка нарушать потолок: имея броню,
             // читер шлёт высокий HP + 0 брони (та же сумма) и переливает броню в HP в
             // обход кэпа. Зажимаем HP к потолку и форсим клиент вниз; бронь не трогаем
@@ -357,22 +400,31 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
 
     if (reportedTotal <= serverTotal + EPS)
     {
-        // Снижение или равенство — легальный урон, который сервер не наблюдал
-        // (падение, огонь, утопление, столкновение). Принимаем как новую правду.
-        st.health = reportedHealth;
-        st.armour = reportedArmour;
-        // Та же дыра, что и в ветке совпадения сумм: при равной сумме клиент мог
-        // переписать раскладку «высокий HP + 0 брони» и перелить броню в HP в обход
-        // кэпа. Зажимаем HP к потолку и форсим клиент; бронь под кэп не попадает.
-        if (st.capActive && st.health > st.maxHealth)
+        // Снижение/равенство — легальный урон, который сервер не наблюдал (падение,
+        // огонь, утопление, столкновение). КОММИТИМ раскладку, только если сумма НЕ
+        // выросла над серверной: +EPS в условии — допуск на float-шум, а не право на
+        // прирост. Без этого клиент по +EPS за тик тихо «ратчетил» бы HP вверх
+        // (принятое становилось новой правдой, окно EPS ползло вместе с ним) — медленный
+        // god mode мимо античита. Рост HP легален только через серверные setHealth/heal.
+        if (reportedTotal <= serverTotal)
         {
-            st.health = st.maxHealth;
-            st.lastChange = timeNow;
-            st.confirmed = false;
-            player.setHealth(st.maxHealth);
+            st.health = reportedHealth;
+            st.armour = reportedArmour;
+            // При равной сумме клиент мог переписать раскладку «высокий HP + 0 брони» и
+            // перелить броню в HP в обход кэпа. Зажимаем HP к потолку и форсим клиент;
+            // бронь под кэп не попадает.
+            if (st.capActive && st.health > st.maxHealth)
+            {
+                st.health = st.maxHealth;
+                st.lastChange = timeNow;
+                st.confirmed = false;
+                player.setHealth(st.maxHealth);
+            }
+            if (st.health <= 0.0f)
+                enterDying(player); // самоубился об окружение — смерть серверная сразу
         }
-        if (st.health <= 0.0f)
-            enterDying(player); // самоубился об окружение — смерть серверная сразу
+        // reported в зоне (serverTotal; serverTotal+EPS] — float-шум: серверное HP не
+        // наращиваем и нарушение не пишем (в пределах допуска).
         return outcome;
     }
 
