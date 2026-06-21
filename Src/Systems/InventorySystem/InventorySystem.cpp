@@ -40,7 +40,9 @@ InventorySystem::InventorySystem(ICore &core, const ServiceRegister &serviceRegi
         {
             loadItems(player, session);
         });
-    m_sessionService.subscribeEnd(
+    // Персист в save-канал: идемпотентный REPLACE снимка. Зовётся и на конце
+    // сессии (внутри end, до teardown), и периодически автосейвом.
+    m_sessionService.subscribeSave(
         [this](IPlayer &player, const PlayerSessionService::Session &session)
         {
             persistItems(player, session);
@@ -128,13 +130,29 @@ void InventorySystem::persistItems(IPlayer &player, const PlayerSessionService::
     DatabaseManager::throwQuery(
         [accountId = session.accountId, snapshot = std::move(snapshot)](mysqlx::Schema schema)
         {
-            // REPLACE снимка: удаляем все строки аккаунта и вставляем текущие
-            // ненулевые. Так пропавшие предметы (потрачены за сессию) исчезают из БД,
-            // а нулевые количества не хранятся. quantity > 0 гарантирован snapshot'ом.
+            // REPLACE снимка В ОДНОЙ ТРАНЗАКЦИИ: удаляем все строки аккаунта и
+            // вставляем текущие ненулевые атомарно. Так пропавшие предметы (потрачены
+            // за сессию) исчезают из БД, а нулевые количества не хранятся (quantity > 0
+            // гарантирован snapshot'ом). Транзакция убирает окна отдельных авто-коммитов:
+            //  - видимое «ноль строк» между DELETE и INSERT (параллельная загрузка при
+            //    релоге прочла бы пустой инвентарь — потеря);
+            //  - частичную запись, если воркер упадёт между удалением и частью вставок.
+            // Либо всё, либо ничего; при сбое — rollback, БД остаётся в прежнем виде.
             mysqlx::Table table = schema.getTable("player_items");
-            table.remove().where("account_id = :account").bind("account", accountId).execute();
-            for (const auto &[itemType, qty] : snapshot)
-                table.insert("account_id", "item_type", "quantity").values(accountId, itemType, qty).execute();
+            mysqlx::Session &dbSession = schema.getSession();
+            dbSession.startTransaction();
+            try
+            {
+                table.remove().where("account_id = :account").bind("account", accountId).execute();
+                for (const auto &[itemType, qty] : snapshot)
+                    table.insert("account_id", "item_type", "quantity").values(accountId, itemType, qty).execute();
+                dbSession.commit();
+            }
+            catch (...)
+            {
+                dbSession.rollback(); // не оставляем аккаунт с частичным инвентарём
+                throw;                // errorCallback залогирует; сессия вернётся в пул чистой
+            }
         },
         [](const std::string &error)
         {

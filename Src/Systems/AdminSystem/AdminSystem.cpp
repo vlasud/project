@@ -225,7 +225,8 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
                  PermissionSpec::admin(4), "выдать игроку временный скин",
                  PlayerCommandService::HelpCategory::Hidden);
 
-    // /devskin — основной скин (память + БД), только Разработчик (уровень 6).
+    // /devskin — основной (личный) скин, только Разработчик (уровень 6): память +
+    // применить + write-through в БД (durable сразу, снимок — лишь к автосейву).
     // Иерархии НЕТ: уровень 6 — вершина, выше никого.
     commands.add("devskin",
                  {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::Int, "скин"}},
@@ -856,12 +857,17 @@ void AdminSystem::cmdDevSkin(IPlayer &actor, int targetId, int skin)
     const std::string actorName = actor.getName().to_string();
     const std::string targetName = target->getName().to_string();
 
-    // Основной скин аккаунта: память (источник правды на сессию) + применить сразу.
+    // Основной (личный) скин аккаунта: память (источник правды на сессию) + применить.
     m_personalSkinService.setSkin(targetId, skin);
     m_skinService.setSkin(*target, skin);
 
-    // Write-through в БД по accountId. UPDATE без чтения обратно — к игроку в
-    // колбэке не обращаемся (он мог выйти), serial-guard здесь не нужен.
+    // Write-through в БД СРАЗУ — это НЕ дубль снимка PlayerPersonalSkinSystem, а
+    // гарантия НЕМЕДЛЕННОЙ стойкости: снимок durable лишь к следующему автосейву
+    // (≤2 мин), а session-end на остановке сервера для онлайн-игроков НЕ стреляет —
+    // без write-through дев-правка теряется, если сервер остановят/убьют до автосейва.
+    // Оба писателя кладут в player.skin одно значение (devskin обновил и getSkin),
+    // расхождения нет; редкая гонка со снимком саморасхлопывается на след. автосейве.
+    // UPDATE без чтения обратно — к игроку в колбэке не обращаемся, serial не нужен.
     DatabaseManager::throwQuery(
         [accountId, skin](mysqlx::Schema schema)
         {

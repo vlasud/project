@@ -34,6 +34,11 @@ void PlayerSessionService::subscribeStart(Observer observer)
     m_startObservers.push_back(std::move(observer));
 }
 
+void PlayerSessionService::subscribeSave(Observer observer)
+{
+    m_saveObservers.push_back(std::move(observer));
+}
+
 void PlayerSessionService::subscribeEnd(Observer observer)
 {
     m_endObservers.push_back(std::move(observer));
@@ -69,15 +74,33 @@ bool PlayerSessionService::start(IPlayer &player, AccountId accountId)
     return true;
 }
 
+void PlayerSessionService::save(IPlayer &player)
+{
+    const int playerId = player.getID();
+    if (!isActive(playerId))
+        return; // offline/без сессии — сохранять нечего
+
+    // Только персист: m_online и Session не трогаем (сессия продолжается).
+    // Session копируем по значению до прогона — колбэки персистеров идемпотентны
+    // и сверяют serial сами.
+    const Session session = m_sessions[playerId];
+    for (const Observer &observer : m_saveObservers)
+        observer(player, session);
+}
+
 void PlayerSessionService::end(IPlayer &player)
 {
     const int playerId = player.getID();
     if (!isActive(playerId))
         return; // не залогинился — нечего заканчивать
 
-    // Подписчики сохраняются, пока сессия ещё числится активной (их колбэки
-    // могут читать getAccountId этого же игрока).
+    // Сессия ещё числится активной (колбэки читают getAccountId этого же игрока).
+    // Порядок строг: сперва ПЕРСИСТ (m_saveObservers), затем TEARDOWN памяти
+    // (m_endObservers). Teardown сбрасывает членство/админку в памяти — он не
+    // должен предшествовать снимку, иначе персист сохранил бы уже обнулённое.
     const Session session = m_sessions[playerId];
+    for (const Observer &observer : m_saveObservers)
+        observer(player, session);
     for (const Observer &observer : m_endObservers)
         observer(player, session);
 

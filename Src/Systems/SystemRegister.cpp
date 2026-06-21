@@ -1,6 +1,7 @@
 #include "Systems/SystemRegister.h"
 
 #include "Systems/AdminSystem/AdminSystem.h"
+#include "Systems/AutosaveSystem/AutosaveSystem.h"
 #include "Systems/Core/AntiCheatSystem/AntiCheatSystem.h"
 #include "Systems/Core/AttachmentSystem/AttachmentSystem.h"
 #include "Systems/Core/AudioSystem/AudioSystem.h"
@@ -213,6 +214,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // в конструкторе и добавляет /healme. После InventorySystem логически
     // (порядок реестра типов от порядка систем не зависит — сервис уже сконструирован).
     m_systems.push_back(std::make_unique<MedkitSystem>(core, serviceRegister));
+    // AutosaveSystem после всех save-подписчиков (Inventory/WeaponProficiency/
+    // PersonalSkin) и PlayerSessionSystem: к его initialize() (где ставится таймер)
+    // все персистеры уже подписались в своих конструкторах. Периодический автосейв
+    // онлайн-игроков (open.mp не шлёт onPlayerDisconnect на штатной остановке).
+    m_systems.push_back(std::make_unique<AutosaveSystem>(core, serviceRegister));
     // CameraSystem раньше тулзы: проигрыватель путей должен быть подключён до
     // того, как /camera начнёт им пользоваться.
     m_systems.push_back(std::make_unique<CameraSystem>(core, serviceRegister));

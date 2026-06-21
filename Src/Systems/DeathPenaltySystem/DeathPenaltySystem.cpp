@@ -8,11 +8,19 @@ DeathPenaltySystem::DeathPenaltySystem(ICore &core, const ServiceRegister &servi
       m_sessionService(serviceRegister.getService<PlayerSessionService>())
 {
     core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
 
-    // Смерть серверно-авторитетна. Штраф здесь НЕ ставим (отсчёт от респавна) —
-    // лишь помечаем pending, чтобы onPlayerSpawn запустил кэп и таймер.
-    m_healthService.subscribeDeath([this](IPlayer &player) { m_pendingPenalty[player.getID()] = true; });
+    // Смерть серверно-авторитетна. Штраф здесь НЕ включаем (отсчёт от респавна) —
+    // фиксируем ДОЛГ по аккаунту, чтобы выход до респавна не отменил штраф. Кэп и
+    // таймер запускает onPlayerSpawn. Death-хэндлер срабатывает для живого
+    // залогиненного игрока, поэтому аккаунт обычно валиден; гард по NO_ACCOUNT — на
+    // всякий случай (смерть без сессии штрафовать некого).
+    m_healthService.subscribeDeath(
+        [this](IPlayer &player)
+        {
+            const AccountId account = m_sessionService.getAccountId(player.getID());
+            if (account != PlayerSessionService::NO_ACCOUNT)
+                m_penaltyOwed.insert(account);
+        });
 }
 
 void DeathPenaltySystem::onPlayerSpawn(IPlayer &player)
@@ -20,22 +28,15 @@ void DeathPenaltySystem::onPlayerSpawn(IPlayer &player)
     const int id = player.getID();
     const AccountId account = m_sessionService.getAccountId(id);
     if (account == PlayerSessionService::NO_ACCOUNT)
-    {
-        // Не залогинен — штрафовать некого (штраф привязан к аккаунту). Сбрасываем
-        // pending: смерть до авторизации не должна навесить штраф на первый логин-спавн.
-        m_pendingPenalty[id] = false;
-        return;
-    }
+        return; // не залогинен — штраф привязан к аккаунту, на логин-спавне разберёмся
 
     const TimePoint now = std::chrono::steady_clock::now();
 
-    // Свежая смерть: новый штраф отсчитывается от ЭТОГО респавна (каждая смерть
-    // перезапускает 5 минут, перетирая прежнюю запись аккаунта).
-    if (m_pendingPenalty[id])
-    {
-        m_pendingPenalty[id] = false;
+    // Есть долг (смерть в этой ИЛИ прошлой сессии — в т.ч. с выходом до респавна):
+    // запускаем штраф от ЭТОГО респавна (каждая смерть перезапускает 5 минут,
+    // перетирая прежнюю запись аккаунта). erase возвращает число снятых записей.
+    if (m_penaltyOwed.erase(account) > 0)
         m_penaltyUntil[account] = now + PENALTY_DURATION;
-    }
 
     auto it = m_penaltyUntil.find(account);
     if (it == m_penaltyUntil.end() || it->second <= now)
@@ -73,12 +74,4 @@ void DeathPenaltySystem::endPenalty(AccountId account, TimePoint expectedUntil)
     if (pid >= 0)
         m_healthService.clearMaxHealth(pid);
     m_penaltyUntil.erase(it);
-}
-
-void DeathPenaltySystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)
-{
-    // Сбрасываем только pending слота (смерть-и-выход ДО респавна штраф не запускает).
-    // m_penaltyUntil НЕ стираем — это защита от релога (ключ аккаунт, не слот). Кэп
-    // здоровья этого слота снимет core PlayerHealthService::reset на дисконнекте.
-    m_pendingPenalty[player.getID()] = false;
 }

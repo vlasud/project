@@ -42,7 +42,9 @@ WeaponProficiencySystem::WeaponProficiencySystem(ICore &core, const ServiceRegis
         {
             loadProficiency(player, session);
         });
-    m_sessionService.subscribeEnd(
+    // Персист в save-канал: идемпотентный UPSERT скиллов. Зовётся и на конце
+    // сессии (внутри end, до teardown), и периодически автосейвом.
+    m_sessionService.subscribeSave(
         [this](IPlayer &player, const PlayerSessionService::Session &session)
         {
             persistProficiency(player, session);
@@ -137,8 +139,8 @@ void WeaponProficiencySystem::persistProficiency(IPlayer &player, const PlayerSe
 {
     // Снимок текущих скиллов на главном потоке (источник правды — сервис), затем
     // одна задача-воркер пишет UPSERT по каждому оружию. Сессия ещё активна,
-    // accountId валиден. Остаток-счётчик (<5) не персистим — потеря недобора на
-    // логауте допустима (так договорено).
+    // accountId валиден. Остаток-счётчик (<5 выстрелов до +1) не персистим: потеря
+    // недобора ниже порога допустима по дизайну.
     const int playerId = player.getID();
     // Не персистим, если загрузка скиллов не завершилась успешно: нулевой слот
     // затёр бы реальный прогресс в БД (сбой загрузки/дисконнект до её колбэка).

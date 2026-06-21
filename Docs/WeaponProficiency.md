@@ -74,9 +74,13 @@ rapid-fire, silent aim) валидатор `PlayerWeaponService::onShot` пом�
   `player_weapon_skill` (`selectQuery` + serial-guard, как
   `FactionSystem::loadMembership`). Значения клампятся в 0..100 при раскладке в
   сервис.
-- **Конец сессии** (`subscribeEnd`) — UPSERT всех 5 скиллов одним `throwQuery`
+- **Персист** (`subscribeSave`) — UPSERT всех 5 скиллов одним `throwQuery`
   (`ON DUPLICATE KEY UPDATE skill = VALUES(skill)`, как в `BankService`). В БД на
-  каждый выстрел/каждый +1 НЕ пишем — это hot path стрельбы.
+  каждый выстрел/каждый +1 НЕ пишем — это hot path стрельбы. Идемпотентен, поэтому
+  в save-канал: зовётся на конце сессии (внутри `end`, до teardown) **И**
+  периодически автосейвом онлайн-игроков (`Src/Systems/AutosaveSystem`, см.
+  `Docs/Autosave.md`) — потеря прокачки при штатном стопе/краше ограничена
+  интервалом автосейва, а не всей сессией.
 
 ## Связь с нативным weapon skill
 

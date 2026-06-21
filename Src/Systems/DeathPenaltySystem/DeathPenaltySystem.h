@@ -1,14 +1,13 @@
 #pragma once
 
-#include "Macro.h"
 #include "Services/Core/PlayerHealthService/PlayerHealthService.h"
 #include "Services/Core/TimerService/TimerService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 #include "types.hpp"
-#include <array>
 #include <unordered_map>
+#include <unordered_set>
 
 // Штраф за смерть: после гибели НА РЕСПАВНЕ здоровье игрока зажимается в 10 HP и
 // не может быть поднято ничем 5 минут (отсчёт от респавна). Кэпится ТОЛЬКО HP —
@@ -18,21 +17,22 @@
 //
 // Смерть серверно-авторитетна — ловим её через PlayerHealthService::subscribeDeath
 // (а не клиентский onPlayerDeath, который чит может не прислать). В death-хэндлере
-// штраф НЕ ставим, только помечаем pending: отсчёт идёт от РЕСПАВНА, поэтому таймер
-// и кэп включаются в onPlayerSpawn.
+// штраф НЕ включаем (отсчёт идёт от РЕСПАВНА), но фиксируем ДОЛГ по аккаунту
+// (m_penaltyOwed); кэп и таймер включаются в onPlayerSpawn. Долг по АККАУНТУ, а не
+// по слоту, чтобы выход на экране «wasted» ДО респавна не отменял штраф: при
+// перезаходе он применится на ближайшем спавне — увильнуть выходом нельзя.
 //
-// Штраф переживает релог — ключ хранения это AccountId, а не playerId/слот. Запись
-// «аккаунт -> когда штраф истекает» живёт в памяти и НЕ стирается на дисконнекте:
-// перезашедший аккаунт с активным штрафом снова получит кэп на ближайшем спавне.
-// Перезапуск сервера штраф сбрасывает (состояние только в памяти) — допустимо.
-// Каждая новая смерть перезапускает 5 минут.
-class DeathPenaltySystem : public BaseSystem, public PlayerSpawnEventHandler, public PlayerConnectEventHandler
+// Штраф переживает релог — и долг (m_penaltyOwed), и активный остаток
+// (m_penaltyUntil) хранятся по AccountId и НЕ стираются на дисконнекте: перезашедший
+// аккаунт получит/продолжит штраф на ближайшем спавне. Перезапуск сервера штраф
+// сбрасывает (состояние только в памяти) — допустимо. Каждая смерть перезапускает 5
+// минут (от соответствующего респавна).
+class DeathPenaltySystem : public BaseSystem, public PlayerSpawnEventHandler
 {
   public:
     DeathPenaltySystem(ICore &core, const ServiceRegister &serviceRegister);
 
     void onPlayerSpawn(IPlayer &player) override;
-    void onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason) override;
 
   private:
     using AccountId = PlayerSessionService::AccountId;
@@ -49,9 +49,10 @@ class DeathPenaltySystem : public BaseSystem, public PlayerSpawnEventHandler, pu
     TimerService &m_timerService;
     PlayerSessionService &m_sessionService;
 
-    // Игрок умер, ждём его респавна, чтобы запустить штраф (индекс — getID()).
-    std::array<bool, MAX_PLAYERS> m_pendingPenalty{};
-    // Аккаунт -> момент окончания штрафа (steady_clock). Нет записи или прошлое =
-    // штрафа нет. ПЕРЕЖИВАЕТ дисконнект (защита от релога).
+    // Аккаунты, которые умерли и ДОЛЖНЫ штраф, но ещё не получили кэп (ждут
+    // ближайшего спавна). По аккаунту, а не слоту — переживает выход до респавна.
+    std::unordered_set<AccountId> m_penaltyOwed;
+    // Аккаунт -> момент окончания АКТИВНОГО штрафа (steady_clock). Нет записи или
+    // прошлое = активного штрафа нет. ПЕРЕЖИВАЕТ дисконнект (защита от релога).
     std::unordered_map<AccountId, TimePoint> m_penaltyUntil;
 };
