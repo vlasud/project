@@ -109,7 +109,8 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
       m_skinService(serviceRegister.getService<PlayerSkinService>()),
       m_personalSkinService(serviceRegister.getService<PlayerPersonalSkinService>()),
-      m_savedLocationService(serviceRegister.getService<PlayerSavedLocationService>())
+      m_savedLocationService(serviceRegister.getService<PlayerSavedLocationService>()),
+      m_factionService(serviceRegister.getService<FactionService>())
 {
     m_sessionService.subscribeStart(
         [this](IPlayer &player, const PlayerSessionService::Session &session) { loadAdmin(player, session); });
@@ -828,11 +829,14 @@ void AdminSystem::cmdAskin(IPlayer &actor, int targetId, int skin)
     const std::string actorName = actor.getName().to_string();
     const std::string targetName = target->getName().to_string();
 
-    // Применяется сразу и переживает респаун в сессии; PersonalSkin и БД не трогаем.
-    m_skinService.setSkin(*target, skin);
+    // Временный оверрайд: показывается немедленно, живёт до ближайшего респауна
+    // (сбрасывается на спавне, база орг/личный возвращается). БАЗУ, PersonalSkin
+    // и БД не трогаем.
+    m_skinService.setTempSkin(*target, skin);
 
     actor.sendClientMessage(ADMIN_COLOUR,
-                            u(fmt::format("Игроку {}[{}] установлен скин {} (временно)", targetName, targetId, skin)));
+                            u(fmt::format("Игроку {}[{}] установлен скин {} (временно, до респауна)", targetName,
+                                          targetId, skin)));
     logAdminAction(
         fmt::format("{}[{}] выдал {}[{}] временный скин {}", actorName, actor.getID(), targetName, targetId, skin));
 }
@@ -857,16 +861,26 @@ void AdminSystem::cmdDevSkin(IPlayer &actor, int targetId, int skin)
     const std::string actorName = actor.getName().to_string();
     const std::string targetName = target->getName().to_string();
 
-    // Основной (личный) скин аккаунта: память (источник правды на сессию) + применить.
+    // /devskin меняет ТОЛЬКО личный скин аккаунта (источник правды на сессию).
     m_personalSkinService.setSkin(targetId, skin);
-    m_skinService.setSkin(*target, skin);
+
+    // Визуально личный скин показываем СРАЗУ лишь тем, кто НЕ во фракции: член
+    // организации носит орг-скин (база остаётся органной — её не трогаем). Если
+    // у цели активен временный скин (/askin), setSkin не перетрёт его на экране
+    // — новый личный покажется после ближайшего респауна. Сам член увидит личный
+    // только при увольнении (FactionSystem вернёт базу из PersonalSkinService).
+    if (m_factionService.getMemberFaction(targetId) == FactionService::NO_FACTION)
+    {
+        m_skinService.setSkin(*target, skin);
+    }
 
     // Write-through в БД СРАЗУ — это НЕ дубль снимка PlayerPersonalSkinSystem, а
     // гарантия НЕМЕДЛЕННОЙ стойкости: снимок durable лишь к следующему автосейву
     // (≤2 мин), а session-end на остановке сервера для онлайн-игроков НЕ стреляет —
     // без write-through дев-правка теряется, если сервер остановят/убьют до автосейва.
-    // Оба писателя кладут в player.skin одно значение (devskin обновил и getSkin),
-    // расхождения нет; редкая гонка со снимком саморасхлопывается на след. автосейве.
+    // Оба писателя кладут в player.skin ЛИЧНЫЙ скин (snapshot — personalSkin.getSkin,
+    // мы — то же значение, что положили в personalSkin.setSkin), расхождения нет;
+    // редкая гонка со снимком саморасхлопывается на след. автосейве.
     // UPDATE без чтения обратно — к игроку в колбэке не обращаемся, serial не нужен.
     DatabaseManager::throwQuery(
         [accountId, skin](mysqlx::Schema schema)

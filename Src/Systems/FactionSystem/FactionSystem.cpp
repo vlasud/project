@@ -223,10 +223,11 @@ void FactionSystem::applyFactionSkin(IPlayer &player, int oldFactionId, int newF
     if (newFactionId != FactionService::NO_FACTION)
     {
         // Вход/появление в сети члена. Скин организации обязателен, пока состоит.
-        // ОТОБРАЖАЕТСЯ органный скин, но ЛИЧНЫЙ (гражданский) скин аккаунта в
+        // Орг-скин становится БАЗОЙ (setSkin) — она и уходит в спавн-инфо, так что
+        // член переспавнивается в орг-скине. ЛИЧНЫЙ (гражданский) скин аккаунта в
         // PlayerPersonalSkinService остаётся неизменным — его и вернём при
-        // увольнении. На входе его трогать не нужно: auth применил личный скин
-        // ДО старта членства, и здесь он уже лежит в источнике правды о личном.
+        // увольнении. На входе его трогать не нужно: auth применил личный скин как
+        // базу ДО старта членства, и он уже лежит в источнике правды о личном.
         const int orgSkin = m_factionService.resolveOrgSkin(newFactionId, m_factionService.getMemberSkin(playerId));
         if (orgSkin < 0)
             return; // у организации нет пула (напр. банк) — применять нечего
@@ -235,8 +236,8 @@ void FactionSystem::applyFactionSkin(IPlayer &player, int oldFactionId, int newF
         return;
     }
 
-    // Выход из фракции — возврат ЛИЧНОГО скина аккаунта (источник правды —
-    // PlayerPersonalSkinService; всегда валиден, фолбэк на дефолт внутри него).
+    // Выход из фракции — возврат ЛИЧНОГО скина аккаунта как БАЗЫ (источник правды
+    // — PlayerPersonalSkinService; всегда валиден, фолбэк на дефолт внутри него).
     m_skinService.setSkin(player, m_personalSkinService.getSkin(playerId));
 }
 

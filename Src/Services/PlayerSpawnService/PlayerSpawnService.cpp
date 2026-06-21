@@ -21,7 +21,12 @@ float clampCoord(float value)
 
 void PlayerSpawnService::setSpawn(IPlayer &player, const SpawnPoint &point)
 {
-    Slot &slot = m_slots[player.getID()];
+    const int id = player.getID();
+    if (id < 0 || id >= MAX_PLAYERS)
+    {
+        return;
+    }
+    Slot &slot = m_slots[id];
     slot.customized = true;
     slot.point = sanitize(point);
     applySpawnInfo(player);
@@ -29,6 +34,10 @@ void PlayerSpawnService::setSpawn(IPlayer &player, const SpawnPoint &point)
 
 const SpawnPoint &PlayerSpawnService::getSpawn(int playerId) const
 {
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+    {
+        return m_defaultSpawn;
+    }
     const Slot &slot = m_slots[playerId];
     return slot.customized ? slot.point : m_defaultSpawn;
 }
@@ -52,6 +61,16 @@ void PlayerSpawnService::initialize(PlayerLocationService *location, PlayerSkinS
 {
     m_location = location;
     m_skins = skins;
+    // Спавн-инфо (скин в class-данных) обязано совпадать с БАЗОЙ всегда: нативный
+    // респаун после смерти берёт скин ИМЕННО отсюда, и его никто не пересобирает
+    // между смертью и авто-респауном. Поэтому при ЛЮБОЙ смене базы (вступление во
+    // фракцию, /skin, /devskin вне фракции) пересобираем спавн-инфо — иначе первая
+    // же смерть откатила бы игрока на прежнюю базу. Порядок вызовов у источников
+    // смены базы при этом перестаёт быть хрупким.
+    if (m_skins)
+    {
+        m_skins->subscribeBaseChange([this](IPlayer &player) { applySpawnInfo(player); });
+    }
 }
 
 void PlayerSpawnService::handleConnect(IPlayer &player)
@@ -85,6 +104,10 @@ void PlayerSpawnService::handleSpawn(IPlayer &player)
 
 void PlayerSpawnService::resetPlayer(int playerId)
 {
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+    {
+        return;
+    }
     m_slots[playerId] = Slot{};
 }
 

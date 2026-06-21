@@ -131,9 +131,9 @@ INSERT в БД.** Командного пути выдать или снять 6
 | `/ban <id> <дней> <причина>` | `admin(3)` | бан аккаунта на дни + кик |
 | `/sethp <id> <hp>` | `admin(4)` | задать здоровье (0..100) |
 | `/setarmour <id> <броня>` | `admin(4)` | задать броню (0..100) |
-| `/askin <id> <скин>` | `admin(4)` | временный скин сессии (1..311, кроме 74) |
+| `/askin <id> <скин>` | `admin(4)` | временный скин до респауна (1..311, кроме 74) |
 | `/agun <id> <оружие> <патроны>` | `admin(5)` | выдать оружие (0..46) с патронами (1..9999) |
-| `/devskin <id> <скин>` | `admin(6)` | основной скин (память + БД) |
+| `/devskin <id> <скин>` | `admin(6)` | личный скин аккаунта (память + БД); визуал — только вне фракции |
 | `/ahelp` | `admin(1)` | диалог со списком доступных команд (по эфф. уровню) |
 
 Цвет всех админ-сообщений — `ADMIN_COLOUR = Colour::FromRGBA(0xFFB400FF)`.
@@ -238,8 +238,8 @@ IP цели пишется **в запас** (под будущий IP-бан) �
 |----|----|----|
 | `/sethp`, `/setarmour` | `PlayerHealthService::setHealth/setArmour` | сырой `player.setHealth` → HealthHack (несанкционированный рост HP) |
 | `/agun` | `PlayerWeaponService::giveWeapon` | регистрирует выдачу в серверный инвентарь + грейс → нет WeaponHack |
-| `/askin` | `PlayerSkinService::setSkin` | временный скин сессии (переживает респаун, в БД НЕ пишется) |
-| `/devskin` | `PlayerPersonalSkinService::setSkin` + `PlayerSkinService::setSkin` + БД | основной скин аккаунта (память + применить сразу + write-through) |
+| `/askin` | `PlayerSkinService::setTempSkin` | ВРЕМЕННЫЙ скин: сразу, до ближайшего респауна, в БД НЕ пишется |
+| `/devskin` | `PlayerPersonalSkinService::setSkin` (+ `PlayerSkinService::setSkin` ТОЛЬКО вне фракции) + БД | ЛИЧНЫЙ скин аккаунта (память + БД; визуал — только вне фракции и без temp) |
 | `/slap`, `/savepos`, `/tppos` | `PlayerLocationService::getPosition/teleport` | `teleport` ставит грейс позиции → нет TeleportHack |
 
 **Иерархия (по СОХРАНЁННОМУ уровню, как `/kick`).** ДА у `/sethp`, `/setarmour`,
@@ -266,14 +266,20 @@ IP цели пишется **в запас** (под будущий IP-бан) �
 физический подброс). Прозрачность — канал `[A]` + файл-лог (`logAdminAction`), кроме
 `/savepos`/`/tppos` (личный телепорт — в `[A]` НЕ объявляется).
 
-**`/devskin` и БД.** Активная сессия цели ОБЯЗАТЕЛЬНА (основной скин пишется по
+**`/devskin` и БД.** Активная сессия цели ОБЯЗАТЕЛЬНА (личный скин пишется по
 `accountId` из сессии; нет сессии → «Игрок не найден»). Write-through —
 `DatabaseManager::throwQuery` `UPDATE player SET skin=? WHERE id=<accountId>` (тот
 же паттерн, что персист в `PlayerPersonalSkinSystem`). UPDATE без чтения обратно;
 в колбэке к игроку не обращаемся (он мог выйти), поэтому serial-guard не нужен.
-Замечание: если цель во фракции, применённый `m_skinService.setSkin` перетрёт
-органный скин до следующей смены фракции — это поведение задано ГД дословно
-(«применить сразу»), основной личный скин при этом корректно осел в память + БД.
+**Модель скина (база + временный):** `/devskin` меняет ТОЛЬКО личный скин
+(источник правды `PlayerPersonalSkinService`). Визуально он применяется как БАЗА
+(`m_skinService.setSkin`) лишь если цель НЕ во фракции (`getMemberFaction ==
+NO_FACTION`): член организации остаётся в орг-скине, личный увидит только при
+увольнении — `/devskin` НЕ может «снять» с члена орг-скин. При активном `/askin`
+(временный оверрайд) `setSkin` базу на экран не выводит — новый личный покажется
+после респауна. `/askin` — `setTempSkin`: показывается сразу, живёт до
+ближайшего респауна (`PlayerSkinSystem::onPlayerSpawn` → `clearTempSkin`), на
+спавне игрок возвращается в БАЗУ (орг/личный), временный в спавн-инфо не входит.
 
 **`/savepos`/`/tppos`.** Состояние — `PlayerSavedLocationService` (Core, только
 память, без БД): пер-игрок `{position, interior, virtualWorld, valid}`, O(1)

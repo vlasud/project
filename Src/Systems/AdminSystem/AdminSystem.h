@@ -9,6 +9,7 @@
 #include "Services/Core/PlayerSavedLocationService/PlayerSavedLocationService.h"
 #include "Services/Core/PlayerSkinService/PlayerSkinService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
+#include "Services/FactionService/FactionService.h"
 #include "Services/PlayerPersonalSkinService/PlayerPersonalSkinService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Systems/BaseSystem.h"
@@ -80,9 +81,10 @@ class AdminSystem : public BaseSystem
     PlayerLocationService &m_locationService; // легитимный для анти-чита перенос (/goto, /gethere, /slap, /tppos)
     PlayerHealthService &m_healthService;     // /sethp, /setarmour — грейс анти-чита HealthHack
     PlayerWeaponService &m_weaponService;     // /agun — грейс анти-чита WeaponHack
-    PlayerSkinService &m_skinService;         // /askin, /devskin — применить скин
+    PlayerSkinService &m_skinService;         // /askin — временный скин; /devskin — база (личный) вне фракции
     PlayerPersonalSkinService &m_personalSkinService; // /devskin — основной скин аккаунта
     PlayerSavedLocationService &m_savedLocationService; // /savepos, /tppos — личная закладка
+    FactionService &m_factionService; // /devskin — член фракции носит орг-скин, личный применяем визуально только вне фракции
 
     // Пер-цель состояние регистрации админа (шаги диалога пароля). serial —
     // сессии ЦЕЛИ на момент старта: колбэк диалога/финал сверяет его (в слот мог
