@@ -36,6 +36,12 @@ void PlayerMoneyService::giveMoney(IPlayer &player, unsigned long long amount)
     player.setMoney(toClientMoney(m_state[id]));
 }
 
+void PlayerMoneyService::syncToClient(IPlayer &player) const
+{
+    // Только пуш текущего серверного баланса на HUD; m_state не трогаем.
+    player.setMoney(toClientMoney(getMoney(player.getID())));
+}
+
 void PlayerMoneyService::reset(int playerId)
 {
     m_state[playerId] = 0;

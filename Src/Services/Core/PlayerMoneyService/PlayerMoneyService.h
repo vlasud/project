@@ -19,6 +19,11 @@ class PlayerMoneyService final : public IService
     void setMoney(IPlayer &player, unsigned long long amount);  // абсолютная установка
     void giveMoney(IPlayer &player, unsigned long long amount); // прибавить к балансу
 
+    // Заново отправить серверный баланс на клиент, НЕ меняя его. Нужно на спавне:
+    // GTA-клиент при смерти сам списывает $100 (госпиталь single-player GTA:SA), и
+    // без ре-синхрона HUD остаётся ниже серверной правды до следующей операции.
+    void syncToClient(IPlayer &player) const;
+
     void reset(int playerId);
 
   private:

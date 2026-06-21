@@ -5,6 +5,14 @@ PlayerMoneySystem::PlayerMoneySystem(ICore &core, const ServiceRegister &service
       m_antiCheatService(serviceRegister.getService<AntiCheatService>())
 {
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+}
+
+void PlayerMoneySystem::onPlayerSpawn(IPlayer &player)
+{
+    // Ре-синхрон HUD денег. GTA-клиент при смерти сам списывает $100 (госпиталь
+    // single-player), сервер этого не делал — возвращаем HUD к серверному балансу.
+    m_moneyService.syncToClient(player);
 }
 
 void PlayerMoneySystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)
