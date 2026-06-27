@@ -2,6 +2,7 @@
 
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
+#include "Services/Core/TimerService/TimerService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
@@ -46,5 +47,5 @@ class VehicleSystem : public BaseSystem,
     VehicleService &m_vehicleService;
     PlayerStateService &m_stateService;
     AntiCheatService &m_antiCheatService;
-    IVehiclesComponent *m_vehicles = nullptr;
+    TimerService &m_timerService;
 };

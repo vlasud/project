@@ -3,6 +3,7 @@
 #include "Log/LogManager.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
+#include "Services/Core/VehicleService/VehicleService.h"
 #include "core.hpp"
 #include <cmath>
 
@@ -73,12 +74,12 @@ int SpectateService::spectateTargetPlayer(int playerId) const
 // ------------------------------------------------------------------ вызовы SpectateSystem
 
 void SpectateService::initialize(ICore *core, PlayerStateService *state, PlayerLocationService *location,
-                                 IVehiclesComponent *vehicles)
+                                 VehicleService *vehicleService)
 {
     m_core = core;
     m_state = state;
     m_location = location;
-    m_vehicles = vehicles;
+    m_vehicleService = vehicleService;
 }
 
 void SpectateService::sweep()
@@ -108,7 +109,7 @@ void SpectateService::sweep()
 
         if (slot.vehicleTarget)
         {
-            IVehicle *vehicle = m_vehicles ? m_vehicles->get(slot.targetId) : nullptr;
+            IVehicle *vehicle = m_vehicleService ? m_vehicleService->get(slot.targetId) : nullptr;
             if (!vehicle)
             {
                 stopInternal(*spectator, StopReason::TargetLost);
@@ -233,7 +234,7 @@ void SpectateService::applySpectate(IPlayer &spectator, Slot &slot)
 {
     if (slot.vehicleTarget)
     {
-        IVehicle *vehicle = m_vehicles ? m_vehicles->get(slot.targetId) : nullptr;
+        IVehicle *vehicle = m_vehicleService ? m_vehicleService->get(slot.targetId) : nullptr;
         if (!vehicle)
         {
             stopInternal(spectator, StopReason::TargetLost);

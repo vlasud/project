@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Services/Core/GridService/GridService.h"
+#include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
@@ -19,6 +20,8 @@
 //  /vengine, /vlock — двигатель/замки через сервис;
 //  /vhack          — СИМУЛЯЦИЯ repair hack: сырой setHealth(1000) мимо сервиса —
 //                    валидатор должен откатить и записать нарушение.
+//  /vdev           — меню-диалог: создать машину владельца Work через единый
+//                    VehicleService::create + заправить машину, в которой сидишь.
 class VehicleDebugSystem : public BaseSystem
 {
   public:
@@ -28,11 +31,11 @@ class VehicleDebugSystem : public BaseSystem
 
   private:
     IVehicle *currentVehicle(IPlayer &player); // машина игрока или сообщение об ошибке
+    void showDevMenu(IPlayer &player);          // /vdev: тест create+owner+fuel+refuel
 
     VehicleService &m_vehicleService;
     PlayerStateService &m_stateService;
     PlayerLocationService &m_locationService;
     GridService &m_gridService;
-
-    IVehiclesComponent *m_vehicles = nullptr;
+    PlayerDialogService &m_dialogService;
 };

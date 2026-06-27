@@ -16,11 +16,9 @@ GridSystem::GridSystem(ICore &core, const ServiceRegister &serviceRegister)
 
 void GridSystem::initialize(IComponentList *components)
 {
-    m_vehicles = components->queryComponent<IVehiclesComponent>();
-    if (m_vehicles)
-    {
-        m_vehicles->getPoolEventDispatcher().addEventHandler(this);
-    }
+    (void)components;
+    m_vehicleService.subscribeCreated([this](IVehicle &vehicle) { onVehicleAdded(vehicle); });
+    m_vehicleService.subscribeDestroyed([this](IVehicle &vehicle) { onVehicleRemoved(vehicle); });
 }
 
 bool GridSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
@@ -80,12 +78,12 @@ void GridSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason
     }
 }
 
-void GridSystem::onPoolEntryCreated(IVehicle &vehicle)
+void GridSystem::onVehicleAdded(IVehicle &vehicle)
 {
     m_vehicleHandles[vehicle.getID()] = m_gridService.add(GridEntityType::Vehicle, vehicle.getID(), vehicle.getPosition());
 }
 
-void GridSystem::onPoolEntryDestroyed(IVehicle &vehicle)
+void GridSystem::onVehicleRemoved(IVehicle &vehicle)
 {
     GridService::Handle &handle = m_vehicleHandles[vehicle.getID()];
     if (handle != GridService::INVALID_HANDLE)

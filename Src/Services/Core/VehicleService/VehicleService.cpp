@@ -42,10 +42,71 @@ bool rateLimited(TimePoint &lastFlag, TimePoint timeNow)
 }
 } // namespace
 
-void VehicleService::bind(IVehiclesComponent *vehicles, PlayerLocationService &location)
+void VehicleService::bind(IVehiclesComponent *vehicles, PlayerLocationService &location,
+                          VehicleEventHandler &vehicleEvents, PoolEventHandler<IVehicle> &poolEvents)
 {
     m_vehicles = vehicles;
     m_location = &location;
+    if (m_vehicles)
+    {
+        m_vehicles->getEventDispatcher().addEventHandler(&vehicleEvents);
+        m_vehicles->getPoolEventDispatcher().addEventHandler(&poolEvents);
+    }
+}
+
+IVehicle *VehicleService::get(int vehicleId) const
+{
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicles)
+        return nullptr;
+    return m_vehicles->get(vehicleId);
+}
+
+void VehicleService::destroy(int vehicleId)
+{
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicles)
+        return;
+    m_vehicles->release(vehicleId);
+}
+
+void VehicleService::subscribeCreated(VehicleObserver observer)
+{
+    m_createdObservers.push_back(std::move(observer));
+}
+
+void VehicleService::subscribeDestroyed(VehicleObserver observer)
+{
+    m_destroyedObservers.push_back(std::move(observer));
+}
+
+IVehicle *VehicleService::create(int model, Vector3 position, float angle, int colour1, int colour2, Owner owner,
+                                 int ownerId)
+{
+    if (!m_vehicles)
+        return nullptr;
+
+    // Валидный диапазон моделей машин SA (400..611): create — единая блессед-точка
+    // создания, мусорную/невалидную модель в SDK не пропускаем.
+    if (model < 400 || model > 611)
+        return nullptr;
+
+    VehicleSpawnData data;
+    data.respawnDelay = Seconds(-1); // без авто-респауна; политику решает бизнес
+    data.modelID = model;
+    data.position = position;
+    data.zRotation = angle;
+    data.colour1 = colour1;
+    data.colour2 = colour2;
+    data.siren = false;
+    data.interior = 0;
+
+    IVehicle *vehicle = m_vehicles->create(data);
+    if (!vehicle)
+        return nullptr; // пул машин полон
+
+    // Создание уже прогнало стейт через onVehicleCreated (exists/HP/полный бак,
+    // owner=None). Проставляем владельца поверх готового стейта.
+    setOwner(*vehicle, owner, ownerId);
+    return vehicle;
 }
 
 IVehicle *VehicleService::getVehicle(int playerId) const
@@ -114,8 +175,9 @@ void VehicleService::applyDamage(IVehicle &vehicle, float amount)
 
 void VehicleService::setEngine(IVehicle &vehicle, bool on)
 {
-    if (on && m_vehicleState[vehicle.getID()].stalled)
-        return; // заглохшую не завести — сначала repair()
+    const VehicleState &st = m_vehicleState[vehicle.getID()];
+    if (on && (st.stalled || st.outOfFuel))
+        return; // не завести: добитую — repair(), пустую — refuel()
     VehicleParams params = vehicle.getParams();
     params.engine = on ? 1 : 0;
     vehicle.setParams(params);
@@ -153,10 +215,12 @@ void VehicleService::clearStall(IVehicle &vehicle, VehicleState &st)
     if (!st.stalled)
         return;
     st.stalled = false;
-    // Возвращаем двигателю клиентский авто-режим (-1): заводится при посадке,
-    // как обычная машина. Явная единица оставила бы её заведённой без водителя.
+    // Возвращаем двигателю клиентский авто-режим (-1): заводится при посадке, как
+    // обычная машина. НО если ещё и пустой бак (outOfFuel) — оставляем выключенным
+    // (0): repair чинит HP, не топливо; заведётся только после refuel. Иначе
+    // отремонтированная пустая машина ездила бы с пустым баком.
     VehicleParams params = vehicle.getParams();
-    params.engine = -1;
+    params.engine = st.outOfFuel ? 0 : -1;
     vehicle.setParams(params);
 }
 
@@ -165,6 +229,108 @@ bool VehicleService::isStalled(int vehicleId) const
     if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE)
         return false;
     return m_vehicleState[vehicleId].stalled;
+}
+
+VehicleService::Owner VehicleService::getOwner(int vehicleId) const
+{
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicleState[vehicleId].exists)
+        return Owner::None;
+    return m_vehicleState[vehicleId].owner;
+}
+
+int VehicleService::getOwnerId(int vehicleId) const
+{
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicleState[vehicleId].exists)
+        return -1;
+    return m_vehicleState[vehicleId].ownerId;
+}
+
+void VehicleService::setOwner(IVehicle &vehicle, Owner owner, int ownerId)
+{
+    VehicleState &st = m_vehicleState[vehicle.getID()];
+    if (!st.exists)
+        return;
+    st.owner = owner;
+    st.ownerId = owner == Owner::None ? -1 : ownerId;
+}
+
+float VehicleService::getFuel(int vehicleId) const
+{
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicleState[vehicleId].exists)
+        return 0.0f;
+    return m_vehicleState[vehicleId].fuel;
+}
+
+bool VehicleService::isOutOfFuel(int vehicleId) const
+{
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE)
+        return false;
+    return m_vehicleState[vehicleId].outOfFuel;
+}
+
+void VehicleService::refuel(IVehicle &vehicle, float amount)
+{
+    if (!std::isfinite(amount) || amount <= 0.0f)
+        return; // NaN/Inf (NaN<=0 == false) не должен отравить fuel
+    VehicleState &st = m_vehicleState[vehicle.getID()];
+    if (!st.exists)
+        return;
+    st.fuel += amount;
+    if (st.fuel > FUEL_CAPACITY)
+        st.fuel = FUEL_CAPACITY;
+    // Снимаем «пустой бак»: двигатель снова можно завести — но НЕ заводим сами,
+    // игрок заведёт сам через Fire (setEngine теперь разрешён). «Заглохла» (HP) —
+    // это другая причина и refuel её не снимает.
+    if (st.fuel > 0.0f)
+        st.outOfFuel = false;
+}
+
+void VehicleService::setFuel(IVehicle &vehicle, float amount)
+{
+    if (!std::isfinite(amount))
+        return; // NaN/Inf не осядет в fuel (NaN сравнения ниже неопределены)
+    VehicleState &st = m_vehicleState[vehicle.getID()];
+    if (!st.exists)
+        return;
+    st.fuel = amount < 0.0f ? 0.0f : (amount > FUEL_CAPACITY ? FUEL_CAPACITY : amount);
+    if (st.fuel > 0.0f)
+        st.outOfFuel = false;
+}
+
+void VehicleService::drainFuel(float seconds)
+{
+    if (seconds <= 0.0f || !m_vehicles)
+        return;
+    const float drain = FUEL_DRAIN_PER_SEC * seconds;
+
+    // Проход по пулу: дешёвые bool-проверки отсекают пустые слоты и пустые баки;
+    // getParams читаем только у существующих машин с топливом. Зовётся по таймеру.
+    // Расход зависит ТОЛЬКО от факта работающего двигателя (наличие водителя ни при
+    // чём): запущенный двигатель жжёт топливо.
+    for (int vehicleId = 0; vehicleId < VEHICLE_POOL_SIZE; ++vehicleId)
+    {
+        VehicleState &st = m_vehicleState[vehicleId];
+        if (!st.exists || st.fuel <= 0.0f)
+            continue; // нет машины / пустой бак — пропуск
+
+        IVehicle *vehicle = m_vehicles->get(vehicleId);
+        if (!vehicle)
+            continue; // машины уже нет в пуле — стейт подчистит destroyed-событие
+
+        if (vehicle->getParams().engine == 0)
+            continue; // двигатель заглушён (engine == 0) — топливо не расходуется
+
+        st.fuel -= drain;
+        if (st.fuel > 0.0f)
+            continue;
+
+        // Бак опустел: глушим двигатель и метим outOfFuel (снимет только refuel).
+        st.fuel = 0.0f;
+        st.outOfFuel = true;
+        VehicleParams params = vehicle->getParams();
+        params.engine = 0;
+        vehicle->setParams(params);
+    }
 }
 
 void VehicleService::setLocked(IVehicle &vehicle, bool locked)
@@ -433,14 +599,20 @@ void VehicleService::setEditBypass(int vehicleId, bool enable)
 void VehicleService::onVehicleCreated(IVehicle &vehicle)
 {
     VehicleState &st = m_vehicleState[vehicle.getID()];
-    st = {};
+    st = {}; // сброс: owner=None, бак полон (FUEL_CAPACITY), outOfFuel=false
     st.exists = true;
     st.health = vehicle.getHealth();
     st.lastChange = now();
+    // Стейт готов — оповещаем наблюдателей (например, GridSystem добавляет в сетку).
+    for (auto &obs : m_createdObservers)
+        obs(vehicle);
 }
 
 void VehicleService::onVehicleDestroyed(IVehicle &vehicle)
 {
+    // Наблюдатели вызываются пока машина ещё валидна (до сброса стейта).
+    for (auto &obs : m_destroyedObservers)
+        obs(vehicle);
     m_vehicleState[vehicle.getID()] = {};
 }
 
@@ -449,8 +621,11 @@ void VehicleService::onVehicleRespawn(IVehicle &vehicle)
     VehicleState &st = m_vehicleState[vehicle.getID()];
     st.exists = true;
     st.health = 1000.0f;
+    st.fuel = FUEL_CAPACITY; // респаун — бак снова полный (как HP)
+    st.outOfFuel = false;
     st.lastChange = now();
     clearStall(vehicle, st); // респаун — машина снова целая и заводится
+    // owner сохраняется: ту же физическую машину переспавнили — владелец тот же.
 }
 
 void VehicleService::onVehicleDeath(IVehicle &vehicle)

@@ -206,7 +206,6 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
 
     IObjectsComponent *m_objects = nullptr;
     IActorsComponent *m_actors = nullptr;
-    IVehiclesComponent *m_vehicles = nullptr;
     IPickupsComponent *m_pickups = nullptr;
 
     std::array<EditorState, MAX_PLAYERS> m_state;

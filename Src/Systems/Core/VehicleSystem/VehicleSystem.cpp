@@ -15,7 +15,8 @@ TimePoint now()
 VehicleSystem::VehicleSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_vehicleService(serviceRegister.getService<VehicleService>()),
       m_stateService(serviceRegister.getService<PlayerStateService>()),
-      m_antiCheatService(serviceRegister.getService<AntiCheatService>())
+      m_antiCheatService(serviceRegister.getService<AntiCheatService>()),
+      m_timerService(serviceRegister.getService<TimerService>())
 {
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
@@ -24,18 +25,21 @@ VehicleSystem::VehicleSystem(ICore &core, const ServiceRegister &serviceRegister
 
 void VehicleSystem::initialize(IComponentList *components)
 {
-    m_vehicles = components->queryComponent<IVehiclesComponent>();
-    m_vehicleService.bind(m_vehicles, m_serviceRegister.getService<PlayerLocationService>());
-    if (m_vehicles)
-    {
-        m_vehicles->getEventDispatcher().addEventHandler(this);
-        m_vehicles->getPoolEventDispatcher().addEventHandler(this);
-    }
+    // Единственное место queryComponent<IVehiclesComponent> в геймоде (DI-handoff):
+    // результат немедленно уходит в bind и нигде не сохраняется.
+    m_vehicleService.bind(components->queryComponent<IVehiclesComponent>(),
+                          m_serviceRegister.getService<PlayerLocationService>(), *this, *this);
 
     // Подписка на выстрелы именно здесь (initialize выполняется после всех
     // конструкторов): мы оказываемся в диспатчере ПОСЛЕ PlayerWeaponSystem —
     // фейковый выстрел из невыданного оружия отброшен до нас и урона не нанесёт.
     m_core.getPlayers().getPlayerShotDispatcher().addEventHandler(this);
+
+    // Дренаж топлива — по таймеру (после bind: пул машин готов), не per-tick.
+    // Тик 1 с: проход по пулу с bool-фильтром, расход у машин с РАБОТАЮЩИМ
+    // двигателем (engine != 0), наличие водителя не важно (см. drainFuel). Колбэк
+    // на главном потоке.
+    m_timerService.setInterval(Seconds{1}, [this]() { m_vehicleService.drainFuel(1.0f); });
 }
 
 bool VehicleSystem::onPlayerShotVehicle(IPlayer &player, IVehicle &target, const PlayerBulletData &bulletData)

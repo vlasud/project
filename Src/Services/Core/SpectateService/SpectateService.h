@@ -11,6 +11,7 @@
 class SpectateSystem;
 class PlayerStateService;
 class PlayerLocationService;
+class VehicleService;
 struct ICore;
 
 // Сервис спектейта (почва для админки: /spec, наблюдение за репортами).
@@ -70,7 +71,7 @@ class SpectateService final : public IService
 
     // Вызываются SpectateSystem.
     void initialize(ICore *core, PlayerStateService *state, PlayerLocationService *location,
-                    IVehiclesComponent *vehicles);
+                    VehicleService *vehicleService);
     void sweep();                       // троттленный догон цели (интерьер/мир/тело)
     void handleSpawn(IPlayer &player);  // возврат наблюдателя + переприменение зрителям цели
     void resetPlayer(int playerId);     // дисконнект: и как наблюдатель, и как цель
@@ -82,7 +83,7 @@ class SpectateService final : public IService
     ICore *m_core = nullptr;
     PlayerStateService *m_state = nullptr;
     PlayerLocationService *m_location = nullptr;
-    IVehiclesComponent *m_vehicles = nullptr;
+    VehicleService *m_vehicleService = nullptr;
 
     std::array<Slot, MAX_PLAYERS> m_slots;
 };

@@ -7,7 +7,9 @@
 #include "types.hpp"
 #include <Server/Components/Vehicles/vehicles.hpp>
 #include <array>
+#include <functional>
 #include <string>
+#include <vector>
 
 // Сервис машин — источник правды о том, кто в какой машине сидит, и о серверном
 // HP каждой машины, плюс валидации.
@@ -39,7 +41,46 @@ class VehicleService final : public IService
     // Порог «заглохла»: с запасом выше клиентского порога пожара (250).
     static constexpr float STALL_HEALTH = 300.0f;
 
-    void bind(IVehiclesComponent *vehicles, PlayerLocationService &location);
+    // Бак (баланс — тюнится): полный объём и расход за секунду при заведённом
+    // двигателе. 100 / 0.1 ≈ 1000 с ≈ 16 минут езды до пустого.
+    static constexpr float FUEL_CAPACITY = 100.0f;
+    static constexpr float FUEL_DRAIN_PER_SEC = 0.1f;
+
+    // Владелец машины — НЕпрозрачный серверный тег. Ядро лишь хранит пару
+    // (тип, id); политику (кто что спавнит, доступ, персист) решают бизнес-
+    // системы поверх. Клиент тег не задаёт.
+    enum class Owner
+    {
+        None,
+        Player,
+        Faction,
+        Work
+    };
+
+    // Инициализация: привязывает пул машин и сервисы; регистрирует vehicleEvents и
+    // poolEvents в диспатчерах компонента (VehicleSystem передаёт себя как оба).
+    void bind(IVehiclesComponent *vehicles, PlayerLocationService &location,
+              VehicleEventHandler &vehicleEvents, PoolEventHandler<IVehicle> &poolEvents);
+
+    // Единая точка создания машин (источник правды): создаёт машину в пуле и
+    // проставляет владельца. Возвращает nullptr, если пул полон. Стейт машины
+    // (exists, HP, полный бак) уже проинициализирован пул-событием создания.
+    // Всё создание машин — через этот API; onVehicleCreated остаётся ловушкой
+    // для сторонних созданий (owner=None).
+    IVehicle *create(int model, Vector3 position, float angle, int colour1, int colour2, Owner owner, int ownerId);
+
+    // Получить машину пула по id (nullptr — нет компонента/несуществующая).
+    IVehicle *get(int vehicleId) const;
+    // Уничтожить машину пула. No-op без компонента/машины. Пул-событие
+    // уничтожения (через VehicleSystem) сбросит стейт и оповестит наблюдателей.
+    void destroy(int vehicleId);
+
+    // Наблюдатели жизненного цикла машин — для систем со своим индексом машин.
+    // created — после регистрации стейта новой машины;
+    // destroyed — пока машина ещё валидна, перед сбросом стейта.
+    using VehicleObserver = std::function<void(IVehicle &)>;
+    void subscribeCreated(VehicleObserver observer);
+    void subscribeDestroyed(VehicleObserver observer);
 
     // --- источник правды ---
     IVehicle *getVehicle(int playerId) const; // машина игрока (по принятому стейту)
@@ -47,6 +88,21 @@ class VehicleService final : public IService
     int getDriver(int vehicleId) const;       // id водителя или -1
     float getHealth(int vehicleId) const;     // серверное HP машины
     bool isStalled(int vehicleId) const;      // заглохла (HP добит до порога)
+
+    // --- владелец (серверный тег, читается бизнес-логикой) ---
+    Owner getOwner(int vehicleId) const;   // None для несуществующей/чужой
+    int getOwnerId(int vehicleId) const;   // -1 при отсутствии владельца
+    void setOwner(IVehicle &vehicle, Owner owner, int ownerId);
+
+    // --- топливо ---
+    float getFuel(int vehicleId) const;     // 0 для несуществующей машины
+    bool isOutOfFuel(int vehicleId) const;  // пустой бак — двигатель не заводится
+    void refuel(IVehicle &vehicle, float amount); // долить (amount>0), кламп на CAP
+    void setFuel(IVehicle &vehicle, float amount); // абсолют, кламп 0..CAP
+    // Дренаж бака за прошедшие seconds: проход по пулу, расход только у машин с
+    // заведённым двигателем (наличие водителя не важно); пустой бак глушит
+    // двигатель. Зовётся по таймеру (VehicleSystem), не per-tick.
+    void drainFuel(float seconds);
 
     // --- серверные операции ---
     void setHealth(IVehicle &vehicle, float health);
@@ -106,7 +162,11 @@ class VehicleService final : public IService
         float health = 1000.0f; // серверное HP
         int driverId = -1;      // обратный индекс «машина -> водитель»
         bool editBypass = false; // машину двигает сервер (редактор) — синк не валидируем
-        bool stalled = false;   // заглохла: HP на клампе, двигатель не заводится
+        bool stalled = false;   // заглохла: HP на клампе, двигатель не заводится (снимает repair)
+        Owner owner = Owner::None; // серверный тег владельца
+        int ownerId = -1;          // id владельца в рамках типа (None — -1)
+        float fuel = FUEL_CAPACITY; // топливо в баке
+        bool outOfFuel = false;     // пустой бак: двигатель не заводится (снимает refuel)
         TimePoint lastChange;   // грейс после серверного изменения
         TimePoint lastFlag;     // rate limit нарушений
     };
@@ -127,6 +187,9 @@ class VehicleService final : public IService
 
     IVehiclesComponent *m_vehicles = nullptr;
     PlayerLocationService *m_location = nullptr;
+
+    std::vector<VehicleObserver> m_createdObservers;
+    std::vector<VehicleObserver> m_destroyedObservers;
 
     std::array<VehicleState, VEHICLE_POOL_SIZE> m_vehicleState;
     std::array<Occupant, MAX_PLAYERS> m_occupants;

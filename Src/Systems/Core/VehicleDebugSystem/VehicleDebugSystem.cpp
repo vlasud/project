@@ -3,7 +3,6 @@
 #include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
-#include <chrono>
 #include <cmath>
 #include <fmt/format.h>
 
@@ -11,9 +10,24 @@ namespace
 {
 const Colour DEBUG_COLOUR{170, 255, 170};
 
+// Модель машины владельца Work для дев-спавна по умолчанию.
+constexpr int DEV_WORK_MODEL = 411; // Infernus
+
 std::string u(const std::string &text)
 {
     return Encoding::utf8Tocp1251(text);
+}
+
+Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
+                  const std::string &rightButton)
+{
+    Dialog dialog;
+    dialog.style = style;
+    dialog.title = u(title);
+    dialog.body = u(body);
+    dialog.leftButton = u(leftButton);
+    dialog.rightButton = u(rightButton);
+    return dialog;
 }
 } // namespace
 
@@ -21,39 +35,31 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
     : BaseSystem(core, serviceRegister), m_vehicleService(serviceRegister.getService<VehicleService>()),
       m_stateService(serviceRegister.getService<PlayerStateService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
-      m_gridService(serviceRegister.getService<GridService>())
+      m_gridService(serviceRegister.getService<GridService>()),
+      m_dialogService(serviceRegister.getService<PlayerDialogService>())
 {
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 
     commands.add("veh", {{PlayerCommandService::Param::Int, "модель"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
-                     if (!m_vehicles)
-                     {
-                         player.sendClientMessage(DEBUG_COLOUR, u("Компонент машин недоступен"));
-                         return;
-                     }
                      int model = args.getInt(0);
                      if (model < 400 || model > 611)
                          model = 411; // Infernus по умолчанию
 
-                     VehicleSpawnData data;
-                     data.respawnDelay = std::chrono::seconds(60);
-                     data.modelID = model;
-                     data.position = m_locationService.getPosition(player.getID()) + Vector3(3.0f, 3.0f, 0.5f);
-                     data.zRotation = 0.0f;
-                     data.colour1 = -1; // случайные цвета
-                     data.colour2 = -1;
-                     data.siren = false;
-                     data.interior = m_locationService.getInterior(player.getID());
-
-                     IVehicle *vehicle = m_vehicles->create(data);
+                     // Создание — через единый API VehicleService; тестовая машина без
+                     // владельца. Интерьер выставляем после (в сигнатуре create его нет).
+                     const Vector3 position =
+                         m_locationService.getPosition(player.getID()) + Vector3(3.0f, 3.0f, 0.5f);
+                     IVehicle *vehicle = m_vehicleService.create(model, position, 0.0f, -1, -1,
+                                                                 VehicleService::Owner::None, -1);
                      if (!vehicle)
                      {
                          player.sendClientMessage(DEBUG_COLOUR, u("Пул машин переполнен"));
                          return;
                      }
                      vehicle->setVirtualWorld(m_locationService.getVirtualWorld(player.getID()));
+                     vehicle->setInterior(static_cast<int>(m_locationService.getInterior(player.getID())));
 
                      // Серверная посадка — заодно проверка санкции стейта (без StateHack);
                      // в VehicleService машина уже попала через пул-событие создания.
@@ -71,13 +77,12 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                  {
                      GridService::Result nearest;
                      if (!m_gridService.closest(m_locationService.getPosition(player.getID()), 50.0f,
-                                                gridMask(GridEntityType::Vehicle), nearest) ||
-                         !m_vehicles)
+                                                gridMask(GridEntityType::Vehicle), nearest))
                      {
                          player.sendClientMessage(DEBUG_COLOUR, u("Рядом нет машин (50 м)"));
                          return;
                      }
-                     IVehicle *vehicle = m_vehicles->get(nearest.id);
+                     IVehicle *vehicle = m_vehicleService.get(nearest.id);
                      if (!vehicle)
                      {
                          player.sendClientMessage(DEBUG_COLOUR, u("Машина из сетки не найдена в пуле"));
@@ -95,11 +100,11 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
                  {
                      IVehicle *vehicle = currentVehicle(player);
-                     if (!vehicle || !m_vehicles)
+                     if (!vehicle)
                          return;
                      const int id = vehicle->getID();
                      m_stateService.removeFromVehicle(player);
-                     m_vehicles->release(id);
+                     m_vehicleService.destroy(id);
                      player.sendClientMessage(DEBUG_COLOUR, u(fmt::format("Машина {} удалена", id)));
                  },
                  PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "удалить машину, в которой сидишь",
@@ -222,11 +227,15 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                  },
                  PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "тест анти-чита: имитировать чит ремонта машины",
                  PlayerCommandService::HelpCategory::Hidden);
+
+    commands.add("vdev", {},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showDevMenu(player); },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL),
+                 "дев-меню машин: спавн (create+owner) и заправка", PlayerCommandService::HelpCategory::Hidden);
 }
 
-void VehicleDebugSystem::initialize(IComponentList *components)
+void VehicleDebugSystem::initialize(IComponentList * /*components*/)
 {
-    m_vehicles = components->queryComponent<IVehiclesComponent>();
 }
 
 IVehicle *VehicleDebugSystem::currentVehicle(IPlayer &player)
@@ -237,4 +246,78 @@ IVehicle *VehicleDebugSystem::currentVehicle(IPlayer &player)
         player.sendClientMessage(DEBUG_COLOUR, u("Вы не в машине"));
     }
     return vehicle;
+}
+
+void VehicleDebugSystem::showDevMenu(IPlayer &player)
+{
+    std::string body;
+    body += "Заспавнить тачку рядом (владелец Work)\n";
+    body += "Заправить мою тачку (до полного)\n";
+    body += "Показать топливо моей машины";
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_LIST, "Дев-меню машин", body, "Выбрать", "Закрыть"),
+        [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player || response != DialogResponse_Left)
+            {
+                return; // игрок ушёл или закрыл меню
+            }
+
+            switch (listItem)
+            {
+            case 0: // create() машины владельца Work рядом с девом
+            {
+                const Vector3 position =
+                    m_locationService.getPosition(playerId) + Vector3(3.0f, 3.0f, 0.5f);
+                IVehicle *vehicle = m_vehicleService.create(DEV_WORK_MODEL, position, 0.0f, -1, -1,
+                                                            VehicleService::Owner::Work, playerId);
+                if (!vehicle)
+                {
+                    player->sendClientMessage(DEBUG_COLOUR, u("Пул машин переполнен"));
+                    return;
+                }
+                vehicle->setVirtualWorld(m_locationService.getVirtualWorld(playerId));
+                vehicle->setInterior(static_cast<int>(m_locationService.getInterior(playerId)));
+                player->sendClientMessage(
+                    DEBUG_COLOUR, u(fmt::format("Машина {} (id {}) создана. Владелец Work #{}, бак полный.",
+                                                DEV_WORK_MODEL, vehicle->getID(), playerId)));
+                break;
+            }
+            case 1: // refuel машины, в которой сидит дев
+            {
+                IVehicle *vehicle = m_vehicleService.getVehicle(playerId);
+                if (!vehicle)
+                {
+                    player->sendClientMessage(DEBUG_COLOUR, u("Вы не в машине"));
+                    return;
+                }
+                m_vehicleService.refuel(*vehicle, VehicleService::FUEL_CAPACITY);
+                player->sendClientMessage(
+                    DEBUG_COLOUR, u(fmt::format("Бак заправлен: {:.0f}/{:.0f}. Заводите двигатель (Fire).",
+                                                m_vehicleService.getFuel(vehicle->getID()),
+                                                VehicleService::FUEL_CAPACITY)));
+                break;
+            }
+            case 2: // показать топливо машины, в которой сидит дев
+            {
+                IVehicle *vehicle = m_vehicleService.getVehicle(playerId);
+                if (!vehicle)
+                {
+                    player->sendClientMessage(DEBUG_COLOUR, u("Вы не в машине"));
+                    return;
+                }
+                const int vehicleId = vehicle->getID();
+                player->sendClientMessage(
+                    DEBUG_COLOUR,
+                    u(fmt::format("Топливо: {:.1f}/{:.0f}{}", m_vehicleService.getFuel(vehicleId),
+                                  VehicleService::FUEL_CAPACITY,
+                                  m_vehicleService.isOutOfFuel(vehicleId) ? " — БАК ПУСТ" : "")));
+                break;
+            }
+            default:
+                break;
+            }
+        });
 }

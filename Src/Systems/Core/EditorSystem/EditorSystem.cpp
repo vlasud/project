@@ -358,7 +358,6 @@ void EditorSystem::initialize(IComponentList *components)
 {
     m_objects = components->queryComponent<IObjectsComponent>();
     m_actors = components->queryComponent<IActorsComponent>();
-    m_vehicles = components->queryComponent<IVehiclesComponent>();
     m_pickups = components->queryComponent<IPickupsComponent>();
 }
 
@@ -973,21 +972,10 @@ void EditorSystem::setVehicleEditBypasses(EditorState &state, bool enable)
 
 IVehicle *EditorSystem::spawnVehicle(const EditorEntity &entity)
 {
-    if (!m_vehicles)
-    {
-        return nullptr;
-    }
-
-    VehicleSpawnData data;
-    data.respawnDelay = Seconds(-1); // расставленные редактором машины не респавнятся
-    data.modelID = entity.model;
-    data.position = entity.position;
-    data.zRotation = entity.rotation.z;
-    data.colour1 = entity.colour1;
-    data.colour2 = entity.colour2;
-    data.siren = false;
-    data.interior = 0;
-    return m_vehicles->create(data);
+    // Создание — через единый API VehicleService (источник правды о машинах):
+    // расставленная редактором машина без владельца и без авто-респауна (как было).
+    return m_vehicleService.create(entity.model, entity.position, entity.rotation.z, entity.colour1, entity.colour2,
+                                   VehicleService::Owner::None, -1);
 }
 
 void EditorSystem::createVehicleEntity(IPlayer &player, int model)
@@ -1201,7 +1189,7 @@ void EditorSystem::applyEntityTransform(EditorEntity &entity)
     }
     else if (entity.type == EntityType::Vehicle)
     {
-        if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(entity.entityId) : nullptr)
+        if (IVehicle *vehicle = m_vehicleService.get(entity.entityId))
         {
             vehicle->setPosition(entity.position);
             vehicle->setZAngle(entity.rotation.z);
@@ -1280,10 +1268,7 @@ void EditorSystem::deleteEntity(IPlayer &player, int index)
     }
     else if (entity.type == EntityType::Vehicle)
     {
-        if (m_vehicles)
-        {
-            m_vehicles->release(entity.entityId);
-        }
+        m_vehicleService.destroy(entity.entityId);
     }
     else if (entity.type == EntityType::Pickup)
     {
@@ -1327,10 +1312,7 @@ void EditorSystem::clearScene(IPlayer &player)
         }
         else if (entity.type == EntityType::Vehicle)
         {
-            if (m_vehicles)
-            {
-                m_vehicles->release(entity.entityId);
-            }
+            m_vehicleService.destroy(entity.entityId);
         }
         else if (entity.type == EntityType::Pickup)
         {
@@ -1389,7 +1371,7 @@ void EditorSystem::requestGroundSnap(IPlayer &player, int index)
     }
     else if (entity.type == EntityType::Vehicle)
     {
-        if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(entity.entityId) : nullptr)
+        if (IVehicle *vehicle = m_vehicleService.get(entity.entityId))
         {
             vehicle->setPosition(parkPosition);
         }
@@ -2589,7 +2571,7 @@ void EditorSystem::showVehicleColoursInput(IPlayer &player)
 
                 entity.colour1 = colour1;
                 entity.colour2 = colour2;
-                if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(entity.entityId) : nullptr)
+                if (IVehicle *vehicle = m_vehicleService.get(entity.entityId))
                 {
                     vehicle->setColour(colour1, colour2);
                 }
@@ -2676,10 +2658,7 @@ void EditorSystem::showChangeModelInput(IPlayer &player)
                     {
                         entity.entityId = vehicle->getID();
                         m_vehicleService.setEditBypass(entity.entityId, true);
-                        if (m_vehicles)
-                        {
-                            m_vehicles->release(oldId);
-                        }
+                        m_vehicleService.destroy(oldId);
                     }
                     else
                     {

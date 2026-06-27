@@ -4,6 +4,7 @@
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
+#include "Services/Core/VehicleService/VehicleService.h"
 #include "Utils/Encoding/Encoding.h"
 #include <chrono>
 #include <fmt/format.h>
@@ -74,7 +75,7 @@ void SpectateSystem::initialize(IComponentList *components)
 {
     m_spectateService.initialize(&m_core, &m_serviceRegister.getService<PlayerStateService>(),
                                  &m_serviceRegister.getService<PlayerLocationService>(),
-                                 components->queryComponent<IVehiclesComponent>());
+                                 &m_serviceRegister.getService<VehicleService>());
 
     // Догон цели (интерьер/мир/тело) — троттленный свип, вне горячего пути.
     m_timerService.setInterval(std::chrono::milliseconds(500), [this] { m_spectateService.sweep(); });
