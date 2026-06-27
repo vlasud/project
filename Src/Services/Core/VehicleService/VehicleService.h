@@ -38,6 +38,10 @@
 class VehicleService final : public IService
 {
   public:
+    // Полное HP машины SA (максимум; repair чинит сюда). Единый источник факта
+    // «полное HP = 1000» — на него опираются и стейт машины, и индикаторы HUD.
+    static constexpr float MAX_HEALTH = 1000.0f;
+
     // Порог «заглохла»: с запасом выше клиентского порога пожара (250).
     static constexpr float STALL_HEALTH = 300.0f;
 
@@ -159,7 +163,7 @@ class VehicleService final : public IService
     struct VehicleState
     {
         bool exists = false;
-        float health = 1000.0f; // серверное HP
+        float health = MAX_HEALTH; // серверное HP
         int driverId = -1;      // обратный индекс «машина -> водитель»
         bool editBypass = false; // машину двигает сервер (редактор) — синк не валидируем
         bool stalled = false;   // заглохла: HP на клампе, двигатель не заводится (снимает repair)

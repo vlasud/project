@@ -68,6 +68,7 @@
 #include "Systems/Core/WeaponSkillSystem/WeaponSkillSystem.h"
 #include "Systems/WeaponProficiencySystem/WeaponProficiencySystem.h"
 #include "Systems/ServerLogoSystem/ServerLogoSystem.h"
+#include "Systems/SpeedometerSystem/SpeedometerSystem.h"
 #include "Systems/Core/SpectateSystem/SpectateSystem.h"
 #include "Systems/Core/StreamerSystem/StreamerSystem.h"
 #include "Systems/Core/TextDrawEditorSystem/TextDrawEditorSystem.h"
@@ -143,6 +144,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // ServerLogoSystem после TextDrawSystem: к моменту его initialize() сервис уже
     // получил компонент textdraw, и логотип создаётся успешно.
     m_systems.push_back(std::make_unique<ServerLogoSystem>(core, serviceRegister));
+    // SpeedometerSystem после TextDrawSystem (зависит от компонента textdraw — к
+    // его initialize() сервис уже получил компонент; иначе HUD отключится).
+    // VehicleService/PlayerVelocityService/TimerService зарегистрированы раньше.
+    m_systems.push_back(std::make_unique<SpeedometerSystem>(core, serviceRegister));
     // GangZoneSystem раньше редактора: сервис должен получить компонент до того,
     // как тулза начнёт создавать зоны.
     m_systems.push_back(std::make_unique<GangZoneSystem>(core, serviceRegister));

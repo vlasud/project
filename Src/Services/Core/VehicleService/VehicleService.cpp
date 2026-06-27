@@ -152,7 +152,7 @@ void VehicleService::setHealth(IVehicle &vehicle, float health)
 void VehicleService::repair(IVehicle &vehicle)
 {
     VehicleState &st = m_vehicleState[vehicle.getID()];
-    st.health = 1000.0f;
+    st.health = MAX_HEALTH;
     st.lastChange = now();
     vehicle.repair(); // полный ремонт: HP + визуальные повреждения
     clearStall(vehicle, st);
@@ -362,7 +362,7 @@ void VehicleService::sanctionRepair(int vehicleId, TimePoint timeNow)
     // Клиент мог легально починить машину (мод-шоп, Pay'n'Spray) — принимаем
     // полное HP и даём грейс, чтобы repair-hack детектор не дал ложняк.
     VehicleState &st = m_vehicleState[vehicleId];
-    st.health = 1000.0f;
+    st.health = MAX_HEALTH;
     st.lastChange = timeNow;
     if (IVehicle *vehicle = m_vehicles ? m_vehicles->get(vehicleId) : nullptr)
         clearStall(*vehicle, st); // починенная снова заводится
@@ -620,7 +620,7 @@ void VehicleService::onVehicleRespawn(IVehicle &vehicle)
 {
     VehicleState &st = m_vehicleState[vehicle.getID()];
     st.exists = true;
-    st.health = 1000.0f;
+    st.health = MAX_HEALTH;
     st.fuel = FUEL_CAPACITY; // респаун — бак снова полный (как HP)
     st.outOfFuel = false;
     st.lastChange = now();

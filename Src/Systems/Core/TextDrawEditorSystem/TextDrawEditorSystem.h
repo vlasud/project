@@ -51,6 +51,9 @@ class TextDrawEditorSystem : public BaseSystem, public PlayerUpdateEventHandler,
     int createItem(IPlayer &player, Vector2 position, StringView text, const TextDrawParams &params);
     void deleteItem(IPlayer &player, int index);
     void deleteAllItems(IPlayer &player);
+    // Умножает текущий размер букв на factor (пропорция X:Y сохраняется),
+    // применяет и шлёт игроку новое значение. factor>0.
+    void applyScale(IPlayer &player, IPlayerTextDraw &textDraw, float factor);
     IPlayerTextDraw *itemTextDraw(IPlayer &player, int index);
     IPlayerTextDraw *selectedTextDraw(IPlayer &player); // выбранный или nullptr (сбрасывает мёртвый выбор)
     int indexOfTextDraw(const Session &session, int textDrawId) const;
@@ -67,6 +70,8 @@ class TextDrawEditorSystem : public BaseSystem, public PlayerUpdateEventHandler,
     void showStylePicker(IPlayer &player);
     void showLetterSizeInput(IPlayer &player);
     void showTextSizeInput(IPlayer &player);
+    void showScaleMenu(IPlayer &player);        // быстрые шаги масштаба размера букв
+    void showScaleFactorInput(IPlayer &player); // свой коэффициент масштаба
     void showAlignmentPicker(IPlayer &player);
     enum class ColourTarget : uint8_t
     {

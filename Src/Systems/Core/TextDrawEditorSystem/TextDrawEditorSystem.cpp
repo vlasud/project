@@ -685,6 +685,7 @@ void TextDrawEditorSystem::showEdit(IPlayer &player)
     body += u(fmt::format("Превью: модель {}\n", textDraw->getPreviewModel()));
     body += u(fmt::format("Превью: поворот {:.1f} {:.1f} {:.1f}\n", previewRot.x, previewRot.y, previewRot.z));
     body += u(fmt::format("Превью: зум {:.2f}\n", textDraw->getPreviewZoom()));
+    body += u("Масштаб букв (пропорц.)\n");
     body += u("Дублировать\n");
     body += u("Удалить");
 
@@ -775,7 +776,10 @@ void TextDrawEditorSystem::showEdit(IPlayer &player)
             case 18:
                 showPreviewZoomInput(*player);
                 break;
-            case 19: // дублировать
+            case 19:
+                showScaleMenu(*player);
+                break;
+            case 20: // дублировать
             {
                 TextDrawParams params = TextDrawService::readParams(*textDraw);
                 params.selectable = session.items[session.selected].selectable;
@@ -788,7 +792,7 @@ void TextDrawEditorSystem::showEdit(IPlayer &player)
                 showEdit(*player);
                 break;
             }
-            case 20:
+            case 21:
                 deleteItem(*player, session.selected);
                 player->sendClientMessage(Colour::White(), u("Textdraw удалён"));
                 showMain(*player);
@@ -990,6 +994,112 @@ void TextDrawEditorSystem::showTextSizeInput(IPlayer &player)
             }
 
             showEdit(*player);
+        });
+}
+
+void TextDrawEditorSystem::applyScale(IPlayer &player, IPlayerTextDraw &textDraw, float factor)
+{
+    TextDrawParams params = TextDrawService::readParams(textDraw);
+    // Множим обе компоненты на один коэффициент — пропорция X:Y сохраняется сама.
+    params.letterSize = Vector2(params.letterSize.x * factor, params.letterSize.y * factor);
+    m_textDrawService.applyParams(textDraw, params);
+    textDraw.restream();
+    // Берём фактический размер после клампа в applyParams — сообщение не врёт.
+    const Vector2 applied = textDraw.getLetterSize();
+    player.sendClientMessage(Colour::White(), u(fmt::format("Масштаб x{:.2f} - размер букв: {:.3f} {:.3f}", factor,
+                                                            applied.x, applied.y)));
+}
+
+void TextDrawEditorSystem::showScaleMenu(IPlayer &player)
+{
+    if (!selectedTextDraw(player))
+    {
+        showMain(player);
+        return;
+    }
+
+    std::string body;
+    body += u("Крупнее (+10%)\n");
+    body += u("Мельче (-10%)\n");
+    body += u("Крупнее (+25%)\n");
+    body += u("Мельче (-25%)\n");
+    body += u("Задать коэффициент...");
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_LIST, "Масштаб размера букв", std::move(body), "Выбрать", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            IPlayerTextDraw *textDraw = selectedTextDraw(*player);
+            if (response == DialogResponse_Right || !textDraw)
+            {
+                showEdit(*player);
+                return;
+            }
+
+            switch (listItem)
+            {
+            case 0:
+                applyScale(*player, *textDraw, 1.10f);
+                showScaleMenu(*player); // остаёмся в меню — можно жать ещё раз
+                break;
+            case 1:
+                applyScale(*player, *textDraw, 0.90f);
+                showScaleMenu(*player);
+                break;
+            case 2:
+                applyScale(*player, *textDraw, 1.25f);
+                showScaleMenu(*player);
+                break;
+            case 3:
+                applyScale(*player, *textDraw, 0.80f);
+                showScaleMenu(*player);
+                break;
+            case 4:
+                showScaleFactorInput(*player);
+                break;
+            default:
+                break;
+            }
+        });
+}
+
+void TextDrawEditorSystem::showScaleFactorInput(IPlayer &player)
+{
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_INPUT, "Коэффициент масштаба",
+                   u("Множитель к текущему размеру букв (1.5 - крупнее, 0.5 - мельче)"), "OK", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, int, StringView text)
+        {
+            IPlayer *player = editorPlayer(playerId);
+            if (!player)
+            {
+                return;
+            }
+
+            IPlayerTextDraw *textDraw = selectedTextDraw(*player);
+            if (response == DialogResponse_Left && textDraw)
+            {
+                float factor = 0.0f;
+                // Диапазон (0; 100] отсекает мусор, inf и nan: иначе letterSize*inf
+                // склампится в 0, и обратно масштабом уже не вернуть (0*любое=0).
+                if (parseFloat(text.to_string(), factor) && factor > 0.0f && factor <= 100.0f)
+                {
+                    applyScale(*player, *textDraw, factor);
+                }
+                else
+                {
+                    player->sendClientMessage(Colour::White(), u("Введите число от 0 до 100 (напр. 1.2)"));
+                }
+            }
+
+            showScaleMenu(*player);
         });
 }
 
