@@ -8,6 +8,7 @@
 #include "Services/ElectionService/ElectionService.h"
 #include "Services/FactionService/FactionService.h"
 #include "Services/FamilyService/FamilyService.h"
+#include "Services/HouseService/HouseService.h"
 #include "Services/InventoryService/InventoryService.h"
 #include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/CameraService/CameraService.h"
@@ -106,6 +107,10 @@ void ServiceRegister::registerServices()
     // зависимостей; загрузку/команды/чат делает FamilySystem, persist —
     // write-through внутри сервиса.
     registerService<FamilyService>();
+    // Дома — player houses (бизнес-фича, не Core). Источник правды о домах +
+    // JSON-персист в houses.json рядом с сервером. Без зависимостей; загрузку на
+    // старте, пикапы/иконки и дев-команду /house делает HouseSystem.
+    registerService<HouseService>();
     registerService<ElectionService>();
     // Базовая система вещей (источник правды о предметах игроков онлайн). Без
     // зависимостей; типы регистрируют системы-владельцы (MedkitSystem) в своих

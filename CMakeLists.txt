@@ -20,6 +20,10 @@ add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES})
 # (например "Services/Core/GridService/GridService.h"), без относительных "../../".
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/Src")
 
+# nlohmann/json — header-only single-header в ThirdParty/nlohmann; подключается как
+# #include <nlohmann/json.hpp> (корень include — ThirdParty, неймспейс nlohmann/).
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/ThirdParty")
+
 target_link_libraries(${PROJECT_NAME} PUBLIC OMP-SDK fmt::fmt)
 
 set(MYSQL_CONNECTOR_DIR "${CMAKE_SOURCE_DIR}/ThirdParty/mysql-connector-c++-8.0.33-win32")

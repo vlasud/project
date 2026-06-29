@@ -17,6 +17,7 @@
 #include "Systems/ElectionSystem/ElectionSystem.h"
 #include "Systems/FactionSystem/FactionSystem.h"
 #include "Systems/FamilySystem/FamilySystem.h"
+#include "Systems/HouseSystem/HouseSystem.h"
 #include "Systems/Factions/ArmyAirForceSystem/ArmyAirForceSystem.h"
 #include "Systems/Factions/ArmyGroundSystem/ArmyGroundSystem.h"
 #include "Systems/Factions/AztecasSystem/AztecasSystem.h"
@@ -225,6 +226,13 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // Сервисы команд/диалога/чата зарегистрированы раньше (Core). Источник правды
     // о семьях — в БД (write-through), грузится на initialize.
     m_systems.push_back(std::make_unique<FamilySystem>(core, serviceRegister));
+    // Дома (player houses, бизнес-фича вне Core): дев-команда /house в
+    // конструкторе, загрузка houses.json на initialize. Core-сервисы команд/
+    // диалога/пикапов/иконок/локации зарегистрированы раньше; их системы
+    // (PickupSystem/MapIconSystem/StreamerSystem/PlayerLocationSystem/
+    // PlayerDialogSystem) тоже инициализируются раньше — к моменту, когда придёт
+    // async-колбэк загрузки и начнёт заводить пикапы/иконки, всё уже подключено.
+    m_systems.push_back(std::make_unique<HouseSystem>(core, serviceRegister));
     // AutosaveSystem после всех save-подписчиков (Inventory/WeaponProficiency/
     // PersonalSkin) и PlayerSessionSystem: к его initialize() (где ставится таймер)
     // все персистеры уже подписались в своих конструкторах. Периодический автосейв
