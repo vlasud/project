@@ -16,6 +16,7 @@
 #include "Systems/DeathPenaltySystem/DeathPenaltySystem.h"
 #include "Systems/ElectionSystem/ElectionSystem.h"
 #include "Systems/FactionSystem/FactionSystem.h"
+#include "Systems/FamilySystem/FamilySystem.h"
 #include "Systems/Factions/ArmyAirForceSystem/ArmyAirForceSystem.h"
 #include "Systems/Factions/ArmyGroundSystem/ArmyGroundSystem.h"
 #include "Systems/Factions/AztecasSystem/AztecasSystem.h"
@@ -219,6 +220,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // в конструкторе и добавляет /healme. После InventorySystem логически
     // (порядок реестра типов от порядка систем не зависит — сервис уже сконструирован).
     m_systems.push_back(std::make_unique<MedkitSystem>(core, serviceRegister));
+    // Семьи (player-created соц-группы, бизнес-фича вне Core): после
+    // PlayerSessionSystem (подписки на старт/конец сессии резолвят онлайн-членство).
+    // Сервисы команд/диалога/чата зарегистрированы раньше (Core). Источник правды
+    // о семьях — в БД (write-through), грузится на initialize.
+    m_systems.push_back(std::make_unique<FamilySystem>(core, serviceRegister));
     // AutosaveSystem после всех save-подписчиков (Inventory/WeaponProficiency/
     // PersonalSkin) и PlayerSessionSystem: к его initialize() (где ставится таймер)
     // все персистеры уже подписались в своих конструкторах. Периодический автосейв

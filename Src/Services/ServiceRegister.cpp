@@ -7,6 +7,7 @@
 #include "Services/BankService/BankService.h"
 #include "Services/ElectionService/ElectionService.h"
 #include "Services/FactionService/FactionService.h"
+#include "Services/FamilyService/FamilyService.h"
 #include "Services/InventoryService/InventoryService.h"
 #include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/CameraService/CameraService.h"
@@ -101,6 +102,10 @@ void ServiceRegister::registerServices()
     registerService<PlayerSessionService>();
     registerService<BankService>();
     registerService<FactionService>();
+    // Семьи — player-created социальные группы (бизнес-фича, не Core). Без
+    // зависимостей; загрузку/команды/чат делает FamilySystem, persist —
+    // write-through внутри сервиса.
+    registerService<FamilyService>();
     registerService<ElectionService>();
     // Базовая система вещей (источник правды о предметах игроков онлайн). Без
     // зависимостей; типы регистрируют системы-владельцы (MedkitSystem) в своих

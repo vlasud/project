@@ -15,4 +15,11 @@ class Encoding final
     // длина ограничивается maxBytes БЕЗ разрыва utf-8 символа (включая ведущий
     // байт разрезанной последовательности — иначе в cp1251 вылезают '?').
     static std::string sanitizeUserText(std::string_view utf8, std::size_t maxBytes);
+
+    // Обезвреживает символы цветокодов клиента в utf-8 строке: '{'->'(', '}'->')',
+    // '~'->'-'. Клиент SA-MP/open.mp парсит {RRGGBB} и ~r~-коды в client message
+    // при рендере независимо от сервера — иначе игрок подделает цвет/перебьёт
+    // строку. Все три символа однобайтовые ASCII (< 0x80), continuation-байты
+    // utf-8 (>= 0x80) не задевают — порча мультибайтных символов невозможна.
+    static std::string neutralizeColorCodes(std::string_view utf8);
 };

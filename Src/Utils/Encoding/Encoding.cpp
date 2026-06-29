@@ -217,6 +217,21 @@ std::string Encoding::sanitizeUserText(std::string_view utf8, std::size_t maxByt
     return result;
 }
 
+std::string Encoding::neutralizeColorCodes(std::string_view utf8)
+{
+    std::string result(utf8);
+    for (char &c : result)
+    {
+        if (c == '{')
+            c = '(';
+        else if (c == '}')
+            c = ')';
+        else if (c == '~')
+            c = '-';
+    }
+    return result;
+}
+
 std::string Encoding::utf8Tocp1251(std::string_view input)
 {
     std::string output;
