@@ -1,5 +1,6 @@
 #include "Systems/HouseSystem/HouseSystem.h"
 
+#include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
@@ -7,12 +8,16 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
+#include <mysqlx/xdevapi.h>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -20,9 +25,13 @@ const std::string HOUSES_FILE = "houses.json"; // рабочая директо�
 const std::string HOUSES_BACKUP = "houses.json.bak";
 
 const Colour DEBUG_COLOUR{170, 255, 170}; // дев-зелёный (как в прочей дев-тулзе)
-// Домовые радар-иконки SA: 31 — зелёная (ничейный дом), 32 — красная (занят,
-// заложено под будущее). Это именные спрайты с фиксированным цветом — переданный
-// Colour они игнорируют, цвет задаёт сам тип иконки.
+// Игроковые сообщения занятия дома — игровые цвета (НЕ дев-зелёный): успех —
+// INFO_COLOUR, отказы — ERROR_COLOUR (как в FamilySystem).
+const Colour INFO_COLOUR{120, 220, 255};
+const Colour ERROR_COLOUR{255, 90, 90};
+// Домовые радар-иконки SA: 31 — зелёная (ничейный дом), 32 — красная (занятый).
+// Это именные спрайты с фиксированным цветом — переданный Colour они игнорируют,
+// цвет задаёт сам тип иконки.
 constexpr int HOUSE_ICON_FREE = 31;
 constexpr int HOUSE_ICON_OWNED = 32;
 
@@ -108,7 +117,8 @@ HouseSystem::HouseSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_pickupService(serviceRegister.getService<PickupService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
-      m_labelService(serviceRegister.getService<TextLabelService>())
+      m_labelService(serviceRegister.getService<TextLabelService>()),
+      m_sessionService(serviceRegister.getService<PlayerSessionService>())
 {
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 
@@ -212,6 +222,32 @@ void HouseSystem::despawnHouse(int houseId)
     m_runtime.erase(it);
 }
 
+void HouseSystem::refreshHouseIcon(int houseId)
+{
+    const auto it = m_runtime.find(houseId);
+    if (it == m_runtime.end())
+    {
+        return; // рантайма нет (дом не заведён) — нечего перекрашивать
+    }
+    const HouseService &service = m_serviceRegister.getService<HouseService>();
+    const HouseService::House *house = service.getHouse(houseId);
+    if (!house)
+    {
+        return;
+    }
+
+    // Глобальная иконка не имеет update — снимаем старую и заводим новую по
+    // актуальному owner. Хэндл в Runtime обновляем (нет утечки/двойного remove).
+    Runtime &runtime = it->second;
+    if (runtime.mapIcon >= 0)
+    {
+        m_mapIconService.removeGlobal(runtime.mapIcon);
+        runtime.mapIcon = -1;
+    }
+    const int iconType = house->owner.empty() ? HOUSE_ICON_FREE : HOUSE_ICON_OWNED;
+    runtime.mapIcon = m_mapIconService.addGlobal(iconType, house->entrance, Colour::White(), MapIconStyle_Global);
+}
+
 // ------------------------------------------------------------------ пикапы
 
 void HouseSystem::onEntrancePickup(int houseId, IPlayer &player)
@@ -227,11 +263,132 @@ void HouseSystem::onEntrancePickup(int houseId, IPlayer &player)
     {
         return; // дом исчез между событиями — игнор
     }
-    const HouseService::CatalogEntry &entry = service.catalog()[house->interiorIndex];
 
+    // Ничейный дом -> предложить занять (не входим). Занятый -> молчаливый вход
+    // (контроль доступа/замки — будущее: любой занятый дом пускает внутрь).
+    if (house->owner.empty())
+    {
+        showClaimConfirm(player, houseId);
+        return;
+    }
+
+    const HouseService::CatalogEntry &entry = service.catalog()[house->interiorIndex];
     // Вход в дом: телепорт в интерьер (мир дома), включаем грейс выхода.
     m_locationService.teleport(player, entry.insideSpawn, static_cast<unsigned>(entry.interiorId), house->virtualWorld);
     m_exitGraceFrom[player.getID()] = std::chrono::steady_clock::now();
+}
+
+void HouseSystem::showClaimConfirm(IPlayer &player, int houseId)
+{
+    const std::string body =
+        fmt::format("Дом #{} сейчас ничей. Занять его?\nДом станет вашим — он закрепится за вами и сохранится "
+                    "после перезахода. Один дом на игрока.",
+                    houseId);
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_MSGBOX, "Занять дом", body, "Занять", "Отмена"),
+        [this, playerId = player.getID(), houseId](DialogResponse response, int, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player || response != DialogResponse_Left)
+            {
+                return; // игрок вышел / отказался — ничего не делаем
+            }
+
+            // Владелец — серверный: accountId из сессии (не от клиента). Нет сессии —
+            // занимать некому (некуда привязать); молча выходим.
+            const PlayerSessionService::Session *session = m_sessionService.get(playerId);
+            if (!session || session->accountId == PlayerSessionService::NO_ACCOUNT)
+            {
+                return;
+            }
+            const PlayerSessionService::AccountId accountId = session->accountId;
+            const std::string ownerKey = std::to_string(accountId);
+
+            // Гейт старт-гонки «один дом на игрока»: пока владение из БД не легло в
+            // память, ownsHouse() врёт (вернёт false на ещё не подтянутые дома), и
+            // игрок мог бы занять второй дом до прихода зеркала. Откладываем занятие.
+            if (!m_ownershipLoaded)
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Дома ещё загружаются, попробуйте через момент"));
+                return;
+            }
+
+            HouseService &service = m_serviceRegister.getService<HouseService>();
+            // Перепроверка на момент СОГЛАСИЯ (диалогу не доверяем): дом ещё есть и
+            // ещё ничейный; игрок ещё не владеет домом (один дом на игрока).
+            const HouseService::House *house = service.getHouse(houseId);
+            if (!house || !house->owner.empty())
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Этот дом уже занят"));
+                return;
+            }
+            if (service.ownsHouse(ownerKey))
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("У вас уже есть свой дом"));
+                return;
+            }
+
+            if (!service.setOwner(houseId, ownerKey)) // оптимистичная память (зеркало БД)
+            {
+                return; // дом исчез между проверкой и записью — игнор
+            }
+            // Владение — в БД (write-through, как членство фракций). DELETE по дому
+            // И по аккаунту + INSERT в ОДНОЙ ТРАНЗАКЦИИ: либо вся пара применилась,
+            // либо ничего (rollback) — нет окна, где прежние привязки сняты, а новая
+            // не вписана. DELETE снимает старые ссылки (этого дома и этого аккаунта —
+            // UNIQUE-бэкстоп «один дом на аккаунт»). Список домов (houses.json) при
+            // занятии НЕ меняется — файл не пишем.
+            DatabaseManager::throwQuery(
+                [houseId, accountId, claimedAt = static_cast<std::int64_t>(std::time(nullptr))](mysqlx::Schema schema)
+                {
+                    mysqlx::Table table = schema.getTable("house_owner");
+                    mysqlx::Session &dbSession = schema.getSession();
+                    dbSession.startTransaction();
+                    try
+                    {
+                        table.remove()
+                            .where("house_id = :house OR account_id = :account")
+                            .bind("house", houseId)
+                            .bind("account", accountId)
+                            .execute();
+                        table.insert("house_id", "account_id", "claimed_at")
+                            .values(houseId, accountId, claimedAt)
+                            .execute();
+                        dbSession.commit();
+                    }
+                    catch (...)
+                    {
+                        dbSession.rollback(); // не оставляем частичную запись владения
+                        throw;                // errorCallback откатит память; сессия вернётся чистой
+                    }
+                },
+                // Главный поток: запись владения в БД не прошла — откатываем
+                // оптимистичную память, чтобы зеркало не расходилось с БД (иначе дом
+                // числился бы за игроком только в памяти и блокировал бы второе занятие).
+                [this, playerId, houseId, ownerKey](const std::string &error)
+                {
+                    LogManager::log(
+                        Error, fmt::format("HouseSystem: failed to persist claim of house {}: {}", houseId, error));
+
+                    HouseService &service = m_serviceRegister.getService<HouseService>();
+                    const HouseService::House *house = service.getHouse(houseId);
+                    if (house && house->owner == ownerKey) // дом мог быть удалён/перезанят за время запроса
+                    {
+                        service.setOwner(houseId, ""); // снять оптимистичное владение
+                        refreshHouseIcon(houseId);     // красная -> зелёная
+                    }
+                    if (IPlayer *player = m_core.getPlayers().get(playerId))
+                    {
+                        player->sendClientMessage(ERROR_COLOUR, u("Не удалось закрепить дом, попробуйте позже"));
+                    }
+                });
+
+            refreshHouseIcon(houseId); // зелёная -> красная
+
+            player->sendClientMessage(
+                INFO_COLOUR, u(fmt::format("Дом #{} теперь ваш. Возвращайтесь сюда в любое время", houseId)));
+        });
 }
 
 void HouseSystem::onExitPickup(int houseId, IPlayer &player)
@@ -556,7 +713,17 @@ void HouseSystem::deleteHouse(IPlayer &player, int houseId)
     // Снимаем рантайм-хэндлы ДО стирания из сервиса (нет утечки/двойного remove).
     despawnHouse(houseId);
     service.removeHouse(houseId);
-    saveToFileAsync();
+    saveToFileAsync(); // список домов (houses.json)
+    // Владение — отдельный источник правды (БД). Стираем строку владения, чтобы
+    // не осталось осиротевшего владения (дома уже нет, а house_owner ссылалась бы
+    // на него — и блокировала бы аккаунт по UNIQUE).
+    DatabaseManager::throwQuery(
+        [houseId](mysqlx::Schema schema)
+        { schema.getTable("house_owner").remove().where("house_id = :house").bind("house", houseId).execute(); },
+        [houseId](const std::string &error) {
+            LogManager::log(Error,
+                            fmt::format("HouseSystem: failed to delete ownership of house {}: {}", houseId, error));
+        });
 
     player.sendClientMessage(DEBUG_COLOUR, u(fmt::format("Дом #{} удалён", houseId)));
     showMain(player);
@@ -586,8 +753,13 @@ void HouseSystem::loadFromFileAsync()
     };
     task.callback = [this](std::string content)
     {
+        // Владение из БД грузим ВСЕГДА после разбора описаний — на любой ветке
+        // (пусто / битый файл / успех). getHouse-гард в колбэке loadOwnershipAsync
+        // отбросит осиротевшие записи, если домов в памяти нет. Иначе на пустом/
+        // битом файле владение не подтянулось бы вовсе и флаг загрузки не встал.
         if (content.empty())
         {
+            loadOwnershipAsync();
             return; // пустой/отсутствующий файл — домов нет
         }
 
@@ -601,6 +773,7 @@ void HouseSystem::loadFromFileAsync()
                             "HouseSystem: повреждён " + HOUSES_FILE + ", переименован в " + HOUSES_BACKUP);
             std::error_code ec;
             std::filesystem::rename(HOUSES_FILE, HOUSES_BACKUP, ec);
+            loadOwnershipAsync();
             return;
         }
 
@@ -611,15 +784,79 @@ void HouseSystem::loadFromFileAsync()
         }
         service.finalizeLoad();
 
-        // Пересоздаём рантайм-хэндлы для каждого загруженного дома.
+        // Пересоздаём рантайм-хэндлы для каждого загруженного дома (все ничейные —
+        // owner ещё пуст; иконки зелёные).
         for (const auto &[id, house] : service.houses())
         {
             spawnHouse(house);
         }
+
+        // Владение — отдельный источник правды (БД). Грузим house_owner ТОЛЬКО
+        // после спавна домов: их рантайм-иконки уже есть, и применение владения
+        // перекрасит зелёную в красную (refreshHouseIcon найдёт m_runtime).
+        loadOwnershipAsync();
     };
     task.errorCallback = [](const std::string &error)
     { LogManager::log(Error, "HouseSystem: ошибка чтения houses.json: " + error); };
     ThreadPool::addTask(std::move(task));
+}
+
+void HouseSystem::loadOwnershipAsync()
+{
+    // Все строки house_owner: (house_id, account_id). Один selectQuery на старте —
+    // воркер вычитывает в владеющий вектор, колбэк на главном потоке применяет.
+    using OwnerRow = std::pair<int, std::int64_t>;
+    DatabaseManager::selectQuery<std::vector<OwnerRow>>(
+        [](mysqlx::Schema schema)
+        {
+            mysqlx::RowResult rows = schema.getTable("house_owner").select("house_id", "account_id").execute();
+            std::vector<OwnerRow> result;
+            while (mysqlx::Row row = rows.fetchOne())
+            {
+                // Каждую строку читаем под try/catch: порченое поле (NULL/тип/
+                // конвертация) пропускает ТОЛЬКО эту строку, а не валит всю выборку
+                // — одна битая запись не теряет всё владение.
+                try
+                {
+                    result.emplace_back(row.get(0).get<int>(), row.get(1).get<std::int64_t>());
+                }
+                catch (...)
+                {
+                    continue;
+                }
+            }
+            return result;
+        },
+        [this](std::vector<OwnerRow> owners)
+        {
+            // Главный поток: дома уже заспавнены (цепочка после спавна). Для каждой
+            // живой записи владения — выставить owner в памяти (БЕЗ записи в БД, это
+            // загрузка) и перекрасить иконку (зелёная -> красная). getHouse-гард:
+            // строка владения могла осиротеть (дом удалён из houses.json).
+            HouseService &service = m_serviceRegister.getService<HouseService>();
+            for (const auto &[houseId, accountId] : owners)
+            {
+                if (accountId == PlayerSessionService::NO_ACCOUNT)
+                {
+                    continue; // 0 — не аккаунт (ничейный), не применяем
+                }
+                if (!service.getHouse(houseId))
+                {
+                    continue; // дома из houses.json больше нет — осиротевшее владение
+                }
+                service.setOwner(houseId, std::to_string(accountId)); // только память
+                refreshHouseIcon(houseId);
+            }
+            m_ownershipLoaded = true; // владение в памяти — занятие домов разблокировано
+        },
+        [this](const std::string &error)
+        {
+            LogManager::log(Error, "HouseSystem: failed to load house ownership: " + error);
+            // БД-загрузка упала — НЕ блокируем фичу навсегда: работаем с пустым
+            // in-memory владением. БД-бэкстопы (UNIQUE account_id, claim-DELETE по
+            // OR account_id) держат консистентность даже при пустом зеркале.
+            m_ownershipLoaded = true;
+        });
 }
 
 void HouseSystem::saveToFileAsync()
@@ -726,11 +963,10 @@ std::vector<HouseService::House> HouseSystem::parse(const std::string &content, 
         // ломает изоляцию или переполняет int.
         house.virtualWorld = HouseService::VW_BASE + house.id;
 
+        // owner НЕ читаем из файла: владение живёт в БД (house_owner) и применяется
+        // отдельно (loadOwnershipAsync) ПОСЛЕ спавна домов. Дом из файла всегда
+        // грузится ничейным; legacy-поле owner в старом houses.json игнорируется.
         house.owner.clear();
-        if (item.contains("owner") && item["owner"].is_string())
-        {
-            house.owner = item["owner"].get<std::string>();
-        }
 
         result.push_back(std::move(house));
     }

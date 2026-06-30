@@ -53,7 +53,8 @@ FamilySystem::FamilySystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_familyService(serviceRegister.getService<FamilyService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
-      m_chatService(serviceRegister.getService<PlayerChatService>())
+      m_chatService(serviceRegister.getService<PlayerChatService>()),
+      m_houseService(serviceRegister.getService<HouseService>())
 {
     m_sessionService.subscribeStart(
         [this](IPlayer &player, const PlayerSessionService::Session &session)
@@ -316,6 +317,15 @@ void FamilySystem::showCreateInput(IPlayer &player)
             if (!session)
             {
                 player->sendClientMessage(ERROR_COLOUR, u(resultError(FamilyService::Result::NoSession)));
+                return;
+            }
+            // Гейт: создать семью можно только при наличии дома в собственности.
+            // Ключ владельца — серверный accountId, как формирует HouseSystem
+            // (std::to_string(accountId)); клиенту не доверяем.
+            if (!m_houseService.ownsHouse(std::to_string(session->accountId)))
+            {
+                player->sendClientMessage(
+                    ERROR_COLOUR, u("Чтобы создать семью, нужен свой дом. Займите свободный дом на карте"));
                 return;
             }
             // Ввод клиента: cp1251 -> utf-8; чистку/валидацию делает сервис.

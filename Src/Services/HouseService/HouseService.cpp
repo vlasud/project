@@ -48,6 +48,22 @@ const HouseService::House *HouseService::getHouse(int id) const
     return it == m_houses.end() ? nullptr : &it->second;
 }
 
+bool HouseService::ownsHouse(const std::string &ownerKey) const
+{
+    if (ownerKey.empty())
+    {
+        return false; // пустой ключ — ничейность, не владение
+    }
+    for (const auto &[id, house] : m_houses)
+    {
+        if (house.owner == ownerKey)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ------------------------------------------------------------------- операции
 
 Vector3 HouseService::backOf(const Vector3 &position, float angleDegrees, float distance)
@@ -88,6 +104,18 @@ bool HouseService::removeHouse(int id)
     return m_houses.erase(id) > 0;
 }
 
+bool HouseService::setOwner(int houseId, const std::string &ownerKey)
+{
+    const auto it = m_houses.find(houseId);
+    if (it == m_houses.end())
+    {
+        return false; // дома нет
+    }
+    // Только память (зеркало БД); запись владения в house_owner делает HouseSystem.
+    it->second.owner = ownerKey; // "" снимает владельца (ничейный)
+    return true;
+}
+
 // ------------------------------------------------------------------- загрузка
 
 void HouseService::loadHouse(const House &house)
@@ -112,9 +140,10 @@ void HouseService::finalizeLoad()
 
 std::string HouseService::serialize() const
 {
-    // Массив объектов домов через nlohmann/json (экранирование/кодирование — на
-    // библиотеке). Рантайм-хэндлы (пикапы/иконка) НЕ сериализуются — их пересоздаёт
-    // HouseSystem из этих полей.
+    // Массив ОПИСАНИЙ домов через nlohmann/json (экранирование/кодирование — на
+    // библиотеке). Только статический контент: владение (owner) живёт в БД
+    // (house_owner), в файл НЕ пишется. Рантайм-хэндлы (пикапы/иконка) тоже не
+    // сериализуются — их пересоздаёт HouseSystem из этих полей.
     nlohmann::json array = nlohmann::json::array();
     for (const auto &[id, house] : m_houses)
     {
@@ -125,7 +154,6 @@ std::string HouseService::serialize() const
         item["exit"] = {house.exit.x, house.exit.y, house.exit.z};
         item["exitAngle"] = house.exitAngle;
         item["virtualWorld"] = house.virtualWorld;
-        item["owner"] = house.owner; // utf-8; "" — ничейный
         array.push_back(std::move(item));
     }
     return array.dump(2);

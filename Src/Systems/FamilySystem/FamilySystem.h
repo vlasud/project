@@ -3,6 +3,7 @@
 #include "Services/Core/PlayerChatService/PlayerChatService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/FamilyService/FamilyService.h"
+#include "Services/HouseService/HouseService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
@@ -19,6 +20,11 @@
 // Всё членство и владелец — серверная правда из FamilyService (клиенту/старому
 // диалогу не доверяем): пригласить может только владелец, согласие приглашённого
 // перепроверяет состояние на момент клика.
+//
+// ГЕЙТ создания: создать семью можно ТОЛЬКО при наличии дома в собственности
+// (HouseService::ownsHouse по серверному accountId). Проверка серверная, перед
+// FamilyService::createFamily; ключ владельца формируется как в HouseSystem —
+// std::to_string(accountId).
 class FamilySystem : public BaseSystem
 {
   public:
@@ -58,4 +64,5 @@ class FamilySystem : public BaseSystem
     PlayerSessionService &m_sessionService;
     PlayerDialogService &m_dialogService;
     PlayerChatService &m_chatService;
+    HouseService &m_houseService; // гейт создания семьи: нужен дом в собственности
 };
