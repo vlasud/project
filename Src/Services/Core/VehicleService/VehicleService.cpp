@@ -140,6 +140,17 @@ float VehicleService::getHealth(int vehicleId) const
     return m_vehicleState[vehicleId].health;
 }
 
+Vector3 VehicleService::getVelocity(int vehicleId) const
+{
+    // Клиентская велосити (SA-юниты) прямо из пула — кэшированного стейта для неё
+    // нет (косметика, в логике не участвует). getVelocity() в SDK не const, но
+    // m_vehicles->get отдаёт неконстантный IVehicle*, как и публичный get().
+    IVehicle *vehicle = get(vehicleId);
+    if (!vehicle)
+        return Vector3(0.0f, 0.0f, 0.0f);
+    return vehicle->getVelocity();
+}
+
 void VehicleService::setHealth(IVehicle &vehicle, float health)
 {
     VehicleState &st = m_vehicleState[vehicle.getID()];

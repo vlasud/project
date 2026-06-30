@@ -11,8 +11,9 @@ namespace
 // разряд на крупном кегле.
 constexpr std::chrono::milliseconds UPDATE_INTERVAL{500};
 
-// м/с -> км/ч.
-constexpr float MS_TO_KMH = 3.6f;
+// Велосити машины (SA-юниты) -> км/ч. Стандартный множитель SA-MP:
+// speed_kmh = |velocity| * 179.28 (не 3.6 — это уже не реальные м/с).
+constexpr float SA_VELOCITY_TO_KMH = 179.28f;
 
 // Экранные позиции элементов HUD: центр по X (320), низ экрана, стопкой.
 const Vector2 SPEED_POS(320.0f, 392.0f); // крупное число скорости
@@ -55,7 +56,6 @@ TextDrawParams lineParams()
 
 SpeedometerSystem::SpeedometerSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_textDrawService(serviceRegister.getService<TextDrawService>()),
-      m_velocityService(serviceRegister.getService<PlayerVelocityService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>()),
       m_timerService(serviceRegister.getService<TimerService>())
 {
@@ -227,21 +227,33 @@ void SpeedometerSystem::updateHud(IPlayer &player)
     }
     Hud &hud = m_huds[playerId];
 
-    // Скорость — серверная (м/с) -> км/ч, арифметическое округление до целого
-    // (усечение int-кастом систематически занижало бы на 1 км/ч). На остановке — «0».
-    if (hud.speedId >= 0)
-    {
-        const long speed = std::lround(m_velocityService.getSpeed(playerId) * MS_TO_KMH);
-        m_textDrawService.setTextForPlayer(player, hud.speedId, fmt::format("{}", speed));
-    }
-
-    // HP, топливо и приглушение скорости — по машине, в которой сидит водитель.
+    // Машина водителя — нужна и для скорости, и для HP/топлива/приглушения.
     IVehicle *vehicle = m_vehicleService.getVehicle(playerId);
     if (!vehicle)
     {
+        // Машины нет (рассинхрон стейта) — честно показываем «0», прибор не врёт.
+        if (hud.speedId >= 0)
+        {
+            m_textDrawService.setTextForPlayer(player, hud.speedId, "0");
+        }
         return;
     }
     const int vehicleId = vehicle->getID();
+
+    // Скорость — из КЛИЕНТСКОЙ велосити машины (SA-юниты) -> км/ч, арифметическое
+    // округление до целого (усечение int-кастом систематически занижало бы на
+    // 1 км/ч). |v| = sqrt(x²+y²+z²). На остановке — «0».
+    if (hud.speedId >= 0)
+    {
+        // Велосити приходит из клиентского sync без серверной валидации — читер
+        // может прислать NaN/Inf. lround от не-финитного значения реализационно-
+        // зависим, поэтому не-финитную скорость показываем как «0» (косметика, но
+        // без мусора на приборе).
+        const Vector3 v = m_vehicleService.getVelocity(vehicleId);
+        const float raw = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z) * SA_VELOCITY_TO_KMH;
+        const long speed = std::isfinite(raw) ? std::lround(raw) : 0;
+        m_textDrawService.setTextForPlayer(player, hud.speedId, fmt::format("{}", speed));
+    }
 
     // Двигатель заглушён (engine == 0; -1/1 — работает) -> число скорости тускнеет
     // до alpha 0x50. Цвет меняем только на смене состояния, не каждый тик.

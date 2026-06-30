@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Macro.h"
-#include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
 #include "Services/Core/TextDrawService/TextDrawService.h"
 #include "Services/Core/TimerService/TimerService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
@@ -13,10 +12,11 @@
 // Три per-player textdraw, видны пока игрок за рулём, обновление раз в 0.5 с.
 // Бизнес-фича (не Core).
 //
-// Скорость — из PlayerVelocityService::getSpeed (серверно-вычисленная из
-// принятых позиций, устойчива к читу), НЕ из сырого vehicle->getVelocity().
-// HP и топливо — из VehicleService (источник правды о машине). Водитель движется
-// вместе с машиной, поэтому скорость игрока = скорость машины.
+// Скорость — КЛИЕНТСКАЯ велосити машины (VehicleService::getVelocity, то, что
+// водитель заявил в driver sync), отзывчивее серверной. Это безопасно: HUD
+// КОСМЕТИЧЕСКИЙ — рисуется только самому водителю, никакая логика/анти-чит от
+// него не зависят (источник правды о скорости — PlayerVelocityService).
+// HP и топливо — из VehicleService (источник правды о машине).
 class SpeedometerSystem : public BaseSystem, public PlayerChangeEventHandler, public PlayerConnectEventHandler
 {
   public:
@@ -52,7 +52,6 @@ class SpeedometerSystem : public BaseSystem, public PlayerChangeEventHandler, pu
     };
 
     TextDrawService &m_textDrawService;
-    PlayerVelocityService &m_velocityService;
     VehicleService &m_vehicleService;
     TimerService &m_timerService;
 

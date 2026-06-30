@@ -92,6 +92,11 @@ class VehicleService final : public IService
     int getDriver(int vehicleId) const;       // id водителя или -1
     float getHealth(int vehicleId) const;     // серверное HP машины
     bool isStalled(int vehicleId) const;      // заглохла (HP добит до порога)
+    // Клиентская велосити машины (SA-юниты) — то, что водитель заявил в driver
+    // sync. КОСМЕТИКА (спидометр на экране самого водителя), НЕ для логики:
+    // значение подделываемо, серверная правда о движении — PlayerVelocityService.
+    // {0,0,0} для несуществующей машины.
+    Vector3 getVelocity(int vehicleId) const;
 
     // --- владелец (серверный тег, читается бизнес-логикой) ---
     Owner getOwner(int vehicleId) const;   // None для несуществующей/чужой
