@@ -41,6 +41,7 @@
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
 #include "Services/ReportService/ReportService.h"
+#include "Services/SpawnChoiceService/SpawnChoiceService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/WeaponSkillService/WeaponSkillService.h"
 #include "Services/WeaponProficiencyService/WeaponProficiencyService.h"
@@ -111,6 +112,10 @@ void ServiceRegister::registerServices()
     // JSON-персист в houses.json рядом с сервером. Без зависимостей; загрузку на
     // старте, пикапы/иконки и дев-команду /house делает HouseSystem.
     registerService<HouseService>();
+    // Выбор точки спавна игрока (/setspawn): источник правды о выборе (вокзал/
+    // дом) + write-through в БД (player_spawn). Без зависимостей; загрузку
+    // по сессии, команду/диалог и резолв точки делает SpawnChoiceSystem.
+    registerService<SpawnChoiceService>();
     registerService<ElectionService>();
     // Базовая система вещей (источник правды о предметах игроков онлайн). Без
     // зависимостей; типы регистрируют системы-владельцы (MedkitSystem) в своих

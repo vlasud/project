@@ -36,16 +36,15 @@ FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister
       m_bankService(serviceRegister.getService<BankService>()),
       m_pickupService(serviceRegister.getService<PickupService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
-      m_spawnService(serviceRegister.getService<PlayerSpawnService>()),
       m_skinService(serviceRegister.getService<PlayerSkinService>()),
       m_personalSkinService(serviceRegister.getService<PlayerPersonalSkinService>())
 {
-    // Спавн, цвет и скин члена — от его организации (вступление/выход/появление
-    // в сети применяют немедленно; спавн действует на все последующие спавны).
+    // Цвет и скин члена — от его организации (вступление/выход/появление в сети
+    // применяют немедленно). Точка спавна — через /setspawn (SpawnChoiceSystem
+    // — единственный писатель точки; здесь её не форсим).
     m_factionService.subscribeMemberChange(
         [this](IPlayer &player, int oldFactionId, int newFactionId)
         {
-            applyFactionSpawn(player, newFactionId);
             applyFactionColour(player, newFactionId);
             applyFactionSkin(player, oldFactionId, newFactionId);
         });
@@ -319,23 +318,6 @@ void FactionSystem::showSkinDialog(IPlayer &player)
             m_skinService.setSkin(*player, skin);
             player->sendClientMessage(INFO_COLOUR, u(fmt::format("Скин сменён на {}", skin)));
         });
-}
-
-void FactionSystem::applyFactionSpawn(IPlayer &player, int factionId)
-{
-    const FactionService::Faction *faction = m_factionService.getFaction(factionId);
-    if (faction && faction->spawn.defined)
-    {
-        SpawnPoint point;
-        point.position = faction->spawn.position;
-        point.angle = faction->spawn.angle;
-        point.interior = static_cast<unsigned>(faction->spawn.interior);
-        point.virtualWorld = faction->spawn.virtualWorld;
-        m_spawnService.setSpawn(player, point);
-        return;
-    }
-    // Вне фракции (или у неё нет точки) — гражданский дефолт.
-    m_spawnService.setSpawn(player, SpawnPoint{});
 }
 
 // ------------------------------------------------------------------ загрузка

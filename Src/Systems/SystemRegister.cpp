@@ -18,6 +18,7 @@
 #include "Systems/FactionSystem/FactionSystem.h"
 #include "Systems/FamilySystem/FamilySystem.h"
 #include "Systems/HouseSystem/HouseSystem.h"
+#include "Systems/SpawnChoiceSystem/SpawnChoiceSystem.h"
 #include "Systems/Factions/ArmyAirForceSystem/ArmyAirForceSystem.h"
 #include "Systems/Factions/ArmyGroundSystem/ArmyGroundSystem.h"
 #include "Systems/Factions/AztecasSystem/AztecasSystem.h"
@@ -233,6 +234,13 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // PlayerDialogSystem) тоже инициализируются раньше — к моменту, когда придёт
     // async-колбэк загрузки и начнёт заводить пикапы/иконки, всё уже подключено.
     m_systems.push_back(std::make_unique<HouseSystem>(core, serviceRegister));
+    // SpawnChoiceSystem (/setspawn, бизнес-фича вне Core) после: PlayerSessionSystem
+    // (подписки на старт/конец сессии), PlayerSpawnSystem (спавн-сервис),
+    // FactionSystem + конкретные фракции (спавны орг уже зарегистрированы) и
+    // HouseSystem (владение домами грузится на старте — резолв «Дом» видит дома).
+    // Core-сервисы команд/диалога зарегистрированы раньше. Загрузка выбора — по
+    // старту сессии (serial-guard), применение/резолв — по входу/выбору, не per-tick.
+    m_systems.push_back(std::make_unique<SpawnChoiceSystem>(core, serviceRegister));
     // AutosaveSystem после всех save-подписчиков (Inventory/WeaponProficiency/
     // PersonalSkin) и PlayerSessionSystem: к его initialize() (где ставится таймер)
     // все персистеры уже подписались в своих конструкторах. Периодический автосейв

@@ -82,6 +82,11 @@ class HouseService final : public IService
     // дом не «принадлежит» никому). Линейно по m_houses (число домов мало —
     // холодный путь занятия/гейта, не per-tick).
     bool ownsHouse(const std::string &ownerKey) const;
+    // Дом, которым владеет ownerKey, или nullptr (нет дома). Один дом на игрока,
+    // поэтому возвращается первый совпавший. ownerKey — ключ владельца
+    // (std::to_string(accountId)); пустой всегда nullptr. Линейно по m_houses
+    // (мало домов, холодный путь — точка спавна «Дом»), не per-tick.
+    const House *houseOf(const std::string &ownerKey) const;
 
     // --- операции (источник правды; персист делает HouseSystem) ---
     // Создать дом в позиции создателя. creatorAngle — yaw создателя (градусы);

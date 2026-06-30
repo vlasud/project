@@ -8,7 +8,6 @@
 #include "Services/PlayerPersonalSkinService/PlayerPersonalSkinService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/Core/PlayerSkinService/PlayerSkinService.h"
-#include "Services/PlayerSpawnService/PlayerSpawnService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 #include <cstdint>
@@ -43,9 +42,6 @@ class FactionSystem : public BaseSystem
     void enterBase(IPlayer &player, int factionId, const Vector3 &target, float angle);
     void exitBase(IPlayer &player, int factionId, const Vector3 &target, float angle);
 
-    // Спавн: член фракции с точкой спавна появляется на ней, остальные — на
-    // гражданском дефолте. Применяется на событии членства.
-    void applyFactionSpawn(IPlayer &player, int factionId);
     // Цвет организации на нике и маркере миникарты (вне фракции — гражданский).
     void applyFactionColour(IPlayer &player, int factionId);
     // Скин члена организации: при входе/появлении в сети — скин организации
@@ -143,7 +139,6 @@ class FactionSystem : public BaseSystem
     BankService &m_bankService;
     PickupService &m_pickupService;
     PlayerLocationService &m_locationService;
-    PlayerSpawnService &m_spawnService;
     PlayerSkinService &m_skinService;
     // Источник правды о ЛИЧНОМ (гражданском) скине аккаунта — в него член
     // возвращается при увольнении. Персист — PlayerPersonalSkinService/System.

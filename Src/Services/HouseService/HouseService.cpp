@@ -64,6 +64,22 @@ bool HouseService::ownsHouse(const std::string &ownerKey) const
     return false;
 }
 
+const HouseService::House *HouseService::houseOf(const std::string &ownerKey) const
+{
+    if (ownerKey.empty())
+    {
+        return nullptr; // пустой ключ — ничейность, дома нет
+    }
+    for (const auto &[id, house] : m_houses)
+    {
+        if (house.owner == ownerKey)
+        {
+            return &house; // один дом на игрока — первый совпавший и есть его дом
+        }
+    }
+    return nullptr;
+}
+
 // ------------------------------------------------------------------- операции
 
 Vector3 HouseService::backOf(const Vector3 &position, float angleDegrees, float distance)
