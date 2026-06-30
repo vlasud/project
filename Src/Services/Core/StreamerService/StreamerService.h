@@ -69,14 +69,20 @@ class StreamerService final : public IService
     // --- отладка/инспекция ---
     std::size_t shownObjectCount(int playerId) const
     {
+        if (playerId < 0 || playerId >= MAX_PLAYERS)
+            return 0;
         return m_players[playerId].objects.size();
     }
     std::size_t shownIconCount(int playerId) const
     {
+        if (playerId < 0 || playerId >= MAX_PLAYERS)
+            return 0;
         return m_players[playerId].icons.size();
     }
     std::size_t shownLabelCount(int playerId) const
     {
+        if (playerId < 0 || playerId >= MAX_PLAYERS)
+            return 0;
         return m_players[playerId].labels.size();
     }
     int activePickupCount() const

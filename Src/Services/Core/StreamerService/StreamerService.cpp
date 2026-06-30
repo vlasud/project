@@ -83,21 +83,18 @@ void StreamerService::removeObject(int defId)
     def.used = false;
     m_freeObjectDefs.push_back(defId);
 
-    // Немедленно убираем у всех, кому он сейчас показан (редкая операция).
-    for (int playerId = 0; playerId < MAX_PLAYERS; ++playerId)
+    // Немедленно убираем у всех, кому он сейчас показан (редкая операция). Идём по
+    // онлайну (entries): у офлайн-слотов учёт очищен resetPlayer, снимать нечего.
+    for (IPlayer *player : m_core->getPlayers().entries())
     {
-        std::vector<Shown> &shown = m_players[playerId].objects;
+        std::vector<Shown> &shown = m_players[player->getID()].objects;
         auto it = std::lower_bound(shown.begin(), shown.end(), defId,
                                    [](const Shown &s, int id) { return s.defId < id; });
         if (it == shown.end() || it->defId != defId)
             continue;
 
-        IPlayer *player = m_core->getPlayers().get(playerId);
-        if (player)
-        {
-            if (IPlayerObjectData *objects = queryExtension<IPlayerObjectData>(*player))
-                objects->release(it->clientId);
-        }
+        if (IPlayerObjectData *objects = queryExtension<IPlayerObjectData>(*player))
+            objects->release(it->clientId);
         shown.erase(it);
     }
 }
@@ -195,19 +192,16 @@ void StreamerService::removeTextLabel(int defId)
     def.used = false;
     m_freeLabelDefs.push_back(defId);
 
-    for (int playerId = 0; playerId < MAX_PLAYERS; ++playerId)
+    for (IPlayer *player : m_core->getPlayers().entries())
     {
-        std::vector<Shown> &shown = m_players[playerId].labels;
+        std::vector<Shown> &shown = m_players[player->getID()].labels;
         auto it = std::lower_bound(shown.begin(), shown.end(), defId,
                                    [](const Shown &s, int id) { return s.defId < id; });
         if (it == shown.end() || it->defId != defId)
             continue;
 
-        if (IPlayer *player = m_core->getPlayers().get(playerId))
-        {
-            if (IPlayerTextLabelData *labels = queryExtension<IPlayerTextLabelData>(*player))
-                labels->release(it->clientId);
-        }
+        if (IPlayerTextLabelData *labels = queryExtension<IPlayerTextLabelData>(*player))
+            labels->release(it->clientId);
         shown.erase(it);
     }
 }
@@ -221,22 +215,20 @@ bool StreamerService::updateTextLabel(int defId, StringView text, Colour colour)
     def.text = text.to_string();
     def.colour = colour;
 
-    // Живое обновление тем, кому показан: setColourAndText шлёт один пакет.
-    for (int playerId = 0; playerId < MAX_PLAYERS; ++playerId)
+    // Живое обновление тем, кому показан: setColourAndText шлёт один пакет. Идём по
+    // онлайну (entries): у офлайн-слотов учёт очищен resetPlayer.
+    for (IPlayer *player : m_core->getPlayers().entries())
     {
-        std::vector<Shown> &shown = m_players[playerId].labels;
+        std::vector<Shown> &shown = m_players[player->getID()].labels;
         auto it = std::lower_bound(shown.begin(), shown.end(), defId,
                                    [](const Shown &s, int id) { return s.defId < id; });
         if (it == shown.end() || it->defId != defId)
             continue;
 
-        if (IPlayer *player = m_core->getPlayers().get(playerId))
+        if (IPlayerTextLabelData *labels = queryExtension<IPlayerTextLabelData>(*player))
         {
-            if (IPlayerTextLabelData *labels = queryExtension<IPlayerTextLabelData>(*player))
-            {
-                if (IPlayerTextLabel *label = labels->get(it->clientId))
-                    label->setColourAndText(def.colour, def.text);
-            }
+            if (IPlayerTextLabel *label = labels->get(it->clientId))
+                label->setColourAndText(def.colour, def.text);
         }
     }
     return true;
@@ -271,16 +263,15 @@ void StreamerService::removeMapIcon(int defId)
     def.used = false;
     m_freeIconDefs.push_back(defId);
 
-    for (int playerId = 0; playerId < MAX_PLAYERS; ++playerId)
+    for (IPlayer *player : m_core->getPlayers().entries())
     {
-        PerPlayer &pp = m_players[playerId];
+        PerPlayer &pp = m_players[player->getID()];
         auto it = std::lower_bound(pp.icons.begin(), pp.icons.end(), defId,
                                    [](const Shown &s, int id) { return s.defId < id; });
         if (it == pp.icons.end() || it->defId != defId)
             continue;
 
-        if (IPlayer *player = m_core->getPlayers().get(playerId))
-            player->unsetMapIcon(it->clientId);
+        player->unsetMapIcon(it->clientId);
         pp.freeIconSlots.push_back(it->clientId);
         pp.icons.erase(it);
     }
