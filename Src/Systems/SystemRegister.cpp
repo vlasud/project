@@ -46,6 +46,8 @@
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 #include "Systems/Core/MapIconSystem/MapIconSystem.h"
 #include "Systems/MenuSystem/MenuSystem.h"
+#include "Systems/PersonalVehicleSystem/PersonalVehicleSystem.h"
+#include "Systems/ParkingSystem/ParkingSystem.h"
 #include "Systems/Core/MovingObjectSystem/MovingObjectSystem.h"
 #include "Systems/Core/NicknameSystem/NicknameSystem.h"
 #include "Systems/Core/ObjectEditSystem/ObjectEditSystem.h"
@@ -151,6 +153,22 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // его initialize() сервис уже получил компонент; иначе HUD отключится).
     // VehicleService/PlayerVelocityService/TimerService зарегистрированы раньше.
     m_systems.push_back(std::make_unique<SpeedometerSystem>(core, serviceRegister));
+    // PersonalVehicleSystem (личный транспорт, бизнес-фича вне Core) после
+    // VehicleSystem (VehicleService уже связан с пулом машин), PlayerCommandSystem
+    // (резолвер прав /pvbuy) и PlayerSessionSystem (жизненный цикл владения — по
+    // старту/концу сессии). В конструкторе связывает PersonalVehicleService с
+    // VehicleService (bind), подписывается на старт/конец сессии (загрузка владения
+    // из БД с serial-guard / reset) и уничтожение машин, регистрирует дебаг-команду
+    // /pvbuy. Загрузка владения — один async-select на старте сессии, не per-tick.
+    m_systems.push_back(std::make_unique<PersonalVehicleSystem>(core, serviceRegister));
+    // ParkingSystem (парковка личного транспорта, бизнес-фича вне Core) после
+    // PersonalVehicleSystem (PersonalVehicleService уже связан с VehicleService через
+    // bind), VehicleSystem (VehicleService::anyVehicleNear), и core-систем пикапов/
+    // чекпоинтов/диалога/3D-текста (PickupSystem/CheckpointSystem/PlayerDialogSystem/
+    // TextLabelSystem зарегистрированы раньше — к initialize() ParkingSystem их сервисы
+    // уже получили компоненты, и пикап/лейбл парковки создаются успешно). Спавн машины
+    // на свободной точке + чекпоинт — холодный путь (по пикапу/диалогу), не per-tick.
+    m_systems.push_back(std::make_unique<ParkingSystem>(core, serviceRegister));
     // GangZoneSystem раньше редактора: сервис должен получить компонент до того,
     // как тулза начнёт создавать зоны.
     m_systems.push_back(std::make_unique<GangZoneSystem>(core, serviceRegister));

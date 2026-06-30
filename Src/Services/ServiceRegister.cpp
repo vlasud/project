@@ -10,6 +10,7 @@
 #include "Services/FamilyService/FamilyService.h"
 #include "Services/HouseService/HouseService.h"
 #include "Services/InventoryService/InventoryService.h"
+#include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/CameraService/CameraService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
@@ -69,6 +70,11 @@ void ServiceRegister::registerServices()
     // (persist) берут её из регистра.
     registerService<WeaponProficiencyService>();
     registerService<VehicleService>();
+    // Личный транспорт игрока (бизнес-фича, не Core): источник правды о владении
+    // личными машинами онлайн. ПОСЛЕ VehicleService — зависит от него
+    // (PersonalVehicleSystem связывает их через bind в конструкторе). Право владения
+    // персистится в БД (personal_vehicle, write-through); машина-сущность сессионная.
+    registerService<PersonalVehicleService>();
     registerService<GridService>();
     registerService<StreamerService>();
     registerService<PlayerDialogService>();

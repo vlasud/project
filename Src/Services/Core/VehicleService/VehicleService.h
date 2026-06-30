@@ -75,16 +75,27 @@ class VehicleService final : public IService
 
     // Получить машину пула по id (nullptr — нет компонента/несуществующая).
     IVehicle *get(int vehicleId) const;
+    // Есть ли существующая машина в радиусе от точки (кроме excludeVehicleId).
+    // Близость ГОРИЗОНТАЛЬНАЯ — по XY, Z игнорируется (точки занятости на одной
+    // высоте, машина оседает на грунт со своей Z; иначе Z-разница ложно вышибала бы
+    // машину из радиуса). Сравнение по квадрату дистанции (без sqrt). Проход по пулу
+    // — холодный путь (зовётся на спавне по вводу, не per-tick). Нет компонента -> false.
+    bool anyVehicleNear(Vector3 position, float radius, int excludeVehicleId = -1) const;
     // Уничтожить машину пула. No-op без компонента/машины. Пул-событие
     // уничтожения (через VehicleSystem) сбросит стейт и оповестит наблюдателей.
     void destroy(int vehicleId);
 
     // Наблюдатели жизненного цикла машин — для систем со своим индексом машин.
     // created — после регистрации стейта новой машины;
-    // destroyed — пока машина ещё валидна, перед сбросом стейта.
+    // destroyed — пока машина ещё валидна, перед сбросом стейта;
+    // died — на смерть машины (HP -> 0), машина ещё валидна. Бизнес может
+    // реагировать (напр., убрать личную машину, чтобы она не висела вреком).
+    // Это ОБЩАЯ инфраструктура: Core лишь оповещает о событии смерти, без
+    // бизнес-политики.
     using VehicleObserver = std::function<void(IVehicle &)>;
     void subscribeCreated(VehicleObserver observer);
     void subscribeDestroyed(VehicleObserver observer);
+    void subscribeDied(VehicleObserver observer);
 
     // --- источник правды ---
     IVehicle *getVehicle(int playerId) const; // машина игрока (по принятому стейту)
@@ -199,6 +210,7 @@ class VehicleService final : public IService
 
     std::vector<VehicleObserver> m_createdObservers;
     std::vector<VehicleObserver> m_destroyedObservers;
+    std::vector<VehicleObserver> m_diedObservers;
 
     std::array<VehicleState, VEHICLE_POOL_SIZE> m_vehicleState;
     std::array<Occupant, MAX_PLAYERS> m_occupants;

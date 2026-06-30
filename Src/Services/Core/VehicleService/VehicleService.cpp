@@ -61,6 +61,31 @@ IVehicle *VehicleService::get(int vehicleId) const
     return m_vehicles->get(vehicleId);
 }
 
+bool VehicleService::anyVehicleNear(Vector3 position, float radius, int excludeVehicleId) const
+{
+    if (!m_vehicles || radius <= 0.0f || !std::isfinite(radius))
+        return false;
+
+    const float radiusSq = radius * radius;
+    // Проход по стейту: existsность отсекает пустые слоты дешёвой bool-проверкой;
+    // позицию читаем только у существующих машин. Холодный путь (спавн по вводу).
+    for (int vehicleId = 0; vehicleId < VEHICLE_POOL_SIZE; ++vehicleId)
+    {
+        if (!m_vehicleState[vehicleId].exists || vehicleId == excludeVehicleId)
+            continue;
+        IVehicle *vehicle = m_vehicles->get(vehicleId);
+        if (!vehicle)
+            continue; // стейт ещё помечен exists, но машины в пуле уже нет — пропуск
+        // Близость считаем ГОРИЗОНТАЛЬНО (XY), Z игнорируем: точки занятости задаются
+        // на одной высоте, а машина оседает на грунт (своя Z) — Z-разница раздувала
+        // бы 3D-дистанцию выше радиуса и пропускала рядом стоящую машину.
+        const Vector3 delta = vehicle->getPosition() - position;
+        if (delta.x * delta.x + delta.y * delta.y <= radiusSq)
+            return true;
+    }
+    return false;
+}
+
 void VehicleService::destroy(int vehicleId)
 {
     if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicles)
@@ -78,6 +103,11 @@ void VehicleService::subscribeDestroyed(VehicleObserver observer)
     m_destroyedObservers.push_back(std::move(observer));
 }
 
+void VehicleService::subscribeDied(VehicleObserver observer)
+{
+    m_diedObservers.push_back(std::move(observer));
+}
+
 IVehicle *VehicleService::create(int model, Vector3 position, float angle, int colour1, int colour2, Owner owner,
                                  int ownerId)
 {
@@ -90,7 +120,7 @@ IVehicle *VehicleService::create(int model, Vector3 position, float angle, int c
         return nullptr;
 
     VehicleSpawnData data;
-    data.respawnDelay = Seconds(-1); // без авто-респауна; политику решает бизнес
+    data.respawnDelay = Seconds(-1); // отключает респавн ПО ПРОСТОЮ; death-респавн идёт по глобальному конфигу, политику смерти решает бизнес
     data.modelID = model;
     data.position = position;
     data.zRotation = angle;
@@ -644,6 +674,12 @@ void VehicleService::onVehicleDeath(IVehicle &vehicle)
     VehicleState &st = m_vehicleState[vehicle.getID()];
     st.health = 0.0f;
     st.lastChange = now();
+    // Машина ещё валидна — оповещаем died-наблюдателей о смерти (HP -> 0). Бизнес
+    // решает политику (напр., убрать личную машину, чтобы она не висела вреком).
+    // Машина может быть залочена в пуле во время диспатча смерти: destroy()
+    // (release) из наблюдателя отложится до unlock — диспатч смерти не рвётся.
+    for (auto &obs : m_diedObservers)
+        obs(vehicle);
 }
 
 void VehicleService::resetPlayer(int playerId)
