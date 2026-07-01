@@ -117,9 +117,16 @@
 - `vehicleId` — id живого экземпляра (`Owner::Parked`) или `-1`.
 
 Индексы (все O(1)/холодные): `m_byDbId` (владеющий), `m_byVehicleId`
-(гейт доступа/снятие), `m_byAccount` (`parkedByAccount`/крайние случаи), `m_byFamily`
-(`parkedOfFamily`/крайние случаи). **`NO_FAMILY` в `m_byFamily` НЕ индексируется** —
-иначе `parkedOfFamily(NO_FAMILY)` вернул бы все личные машины сервера.
+(гейт доступа/снятие), `m_byAccount` (`parkedByAccount`/`countParkedByAccount`/крайние
+случаи), `m_byFamily` (`parkedOfFamily`/крайние случаи). **`NO_FAMILY` в `m_byFamily` НЕ
+индексируется** — иначе `parkedOfFamily(NO_FAMILY)` вернул бы все личные машины сервера.
+
+**`countParkedByAccount(accountId)`** — число ПРИПАРКОВАННЫХ машин аккаунта
+(`m_byAccount.count`, без аллокации вектора). Считает ВСЕ записи владельца — личные
+(`NO_FAMILY`) И расшаренные им семье (шеринг НЕ трогает `m_byAccount`, запись
+остаётся у владельца). Все они стоят у ЕГО дома (модель «один дом, радиус 30 м»),
+поэтому это и есть счёт для капа парковки у дома (см. `Docs/Houses.md`,
+`Docs/CarMenu.md`). O(записей владельца, ≤ кап, мало).
 
 **Зависимости** — `VehicleService`, `FamilyService` через `bind(...)` (зовёт
 `ParkedVehicleSystem` в конструкторе). `HouseService` в сервис НЕ передаётся —
@@ -159,7 +166,10 @@
 4. сидит **ЗА РУЛЁМ этой машины** — `getVehicle(playerId)` == её живой экземпляр И
    `getSeat(playerId) == 0` (гарантирует, что машина в мире и её позиция известна);
 5. свой дом — `HouseService::houseOf(to_string(accountId))` != nullptr;
-6. ≤ `PARK_HOUSE_RADIUS = 30 м` — `glm::distance(carPos, house.entrance)`.
+6. ≤ `PARK_HOUSE_RADIUS = 30 м` — `glm::distance(carPos, house.entrance)`;
+7. лимит парковки не достигнут — `countParkedByAccount(accountId) < house.parkingCap`
+   (кап — дев-контент дома из `houses.json`; счёт учитывает личные + расшаренные;
+   текущую машину ещё НЕ парковали — `isParked` дал false выше, в счёте её нет).
 
 Действие (**ре-тег НА МЕСТЕ**, тот же `liveVehicleId`, БЕЗ destroy/create):
 `spot = veh->getPosition()`, `angle = veh->getZAngle()`; a) `setOwner(*veh,
@@ -333,7 +343,8 @@ DEFAULT -1`: `-1 == NO_FAMILY` — ближе к in-memory модели, без 
 | Константа           | Значение | Смысл                                            |
 |---------------------|----------|--------------------------------------------------|
 | `PARK_HOUSE_RADIUS` | 30 м    | радиус у своего дома, в котором можно припарковать (двор дома; в текст игроку не выводится) |
-| лимит парковки      | по числу личных машин (`MAX_PERSONAL_VEHICLES = 1`) | парковка/шеринг не создают машину — переносят/открывают существующую |
+| `House.parkingCap`  | `[1, 10]`, дефолт 1 | кап ПРИПАРКОВАННЫХ у дома машин владельца (дев-контент дома, `houses.json`); enforce в `parkHere` через `countParkedByAccount` |
+| лимит владения      | число личных машин (`MAX_PERSONAL_VEHICLES = 1`) | парковка/шеринг не создают машину — переносят/открывают существующую |
 | death-респавн       | `game.vehicle_respawn_time` (≈ 10 с) | возврат машины на точку у дома делает ЯДРО (не форсим) |
 
 Парковка и шеринг **бесплатны и обратимы**, машину не создают — инфляции парка нет.
@@ -353,7 +364,10 @@ DEFAULT -1`: `-1 == NO_FAMILY` — ближе к in-memory модели, без 
   `canDrive` по записи `Parked` (`accountId` из сессии, `familyByAccount` из
   `FamilyService`, не по клиенту). `listItem` диалогов идентифицирует ДЕЙСТВИЕ, машину —
   захваченный `carIndex`/`dbId` с ре-валидацией. `family_id`/`accountId` серверные.
-  **Жизненный цикл экземпляра — целиком СЕРВЕРНЫЙ:** спавн/деспавн решает запись
+  **Лимит парковки у дома — серверный:** кап (`House.parkingCap`, дев-контент
+  `houses.json`, валидируется в `[1, 10]`) и счёт (`countParkedByAccount` по серверной
+  памяти) — клиент не влияет; обойти капом ЧУЖОГО дома нельзя (`houseOf` по СВОЕМУ
+  `accountId`, не по позиции). **Жизненный цикл экземпляра — целиком СЕРВЕРНЫЙ:** спавн/деспавн решает запись
   (`family_id`) + факт онлайна владельца (`playerByAccount` из сессии), клиент на него
   НЕ влияет. Деспавн НЕ трогает запись/БД (не открывает окна дюпа/потери владения).
 - **Краш/UB:** bounds `playerId`/`vehicleId`/`dbId` везде; null-гард
@@ -376,4 +390,6 @@ DEFAULT -1`: `-1 == NO_FAMILY` — ближе к in-memory модели, без 
   bounds-safe по `dbId`.
 - **Перф:** спавн — на старте (по числу парковок, мало); гейт доступа — O(1)
   (`m_byVehicleId` hash + `familyByAccount` hash); запросы `/car`/парковки/`/family`,
-  переходы, крайние случаи (N UPDATE) — холодные (по команде/диалогу). PER-TICK НЕТ.
+  переходы, крайние случаи (N UPDATE) — холодные (по команде/диалогу);
+  `countParkedByAccount` (enforce капа) — `multimap.count`, O(записей владельца ≤ кап),
+  на холодном пути парковки (клик в `/car`), без аллокации. PER-TICK НЕТ.

@@ -5,6 +5,7 @@
 #include "Services/FamilyService/FamilyService.h"
 #include "Services/IService.h"
 #include "types.hpp"
+#include <cstddef>
 #include <functional>
 #include <unordered_map>
 #include <vector>
@@ -115,6 +116,9 @@ class ParkedVehicleService final : public IService
     // расшаренной. Единый словарь статусов /car/парковки читает отсюда.
     int parkedMode(long long dbId) const;
     std::vector<long long> parkedByAccount(AccountId accountId) const;
+    // Число припаркованных машин аккаунта (личные + расшаренные — все в m_byAccount).
+    // Для капа парковки у дома (CarMenuSystem) — без аллокации вектора. O(1) в среднем.
+    std::size_t countParkedByAccount(AccountId accountId) const;
     // Расшаренные семье машины. Пусто для NO_FAMILY (личные в m_byFamily не лежат).
     std::vector<long long> parkedOfFamily(int familyId) const;
     const Parked *byDbId(long long dbId) const;

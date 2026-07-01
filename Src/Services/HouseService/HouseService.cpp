@@ -89,7 +89,8 @@ Vector3 HouseService::backOf(const Vector3 &position, float angleDegrees, float 
     return Geometry::backOf(position, angleDegrees, distance);
 }
 
-const HouseService::House *HouseService::createHouse(const Vector3 &creatorPos, float creatorAngle, int interiorIndex)
+const HouseService::House *HouseService::createHouse(const Vector3 &creatorPos, float creatorAngle, int interiorIndex,
+                                                     int parkingCap)
 {
     if (!catalogValid(interiorIndex))
     {
@@ -109,6 +110,8 @@ const HouseService::House *HouseService::createHouse(const Vector3 &creatorPos, 
     house.exit = backOf(house.entrance, house.exitAngle, EXIT_DISTANCE);
     house.virtualWorld = VW_BASE + house.id;
     house.owner.clear(); // ничейный
+    // Кламп капа в [MIN, MAX]: страховка даже если вызывающий уже проверил диапазон.
+    house.parkingCap = std::clamp(parkingCap, MIN_PARKING_CAP, MAX_PARKING_CAP);
 
     const auto [it, inserted] = m_houses.emplace(house.id, std::move(house));
     return &it->second;
@@ -192,6 +195,7 @@ std::string HouseService::serialize() const
         item["exit"] = {house.exit.x, house.exit.y, house.exit.z};
         item["exitAngle"] = house.exitAngle;
         item["virtualWorld"] = house.virtualWorld;
+        item["parkingCap"] = house.parkingCap;
         array.push_back(std::move(item));
     }
     return array.dump(2);

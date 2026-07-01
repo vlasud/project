@@ -269,6 +269,22 @@ void CarMenuSystem::parkHere(IPlayer &player, int carIndex)
         player.sendClientMessage(ERROR_COLOUR, u("Пригоните машину к своему дому, чтобы припарковать её"));
         return;
     }
+
+    // Кап парковки у дома: число уже припаркованных машин владельца (личные + расшаренные
+    // семье — все у ЕГО дома по модели «один дом, радиус 30») не должно достигать
+    // house->parkingCap. Текущую машину ещё не парковали (isParked дал false выше — её нет
+    // в счёте, двойного счёта нет). Кап (houses.json) и счёт (parkedByAccount) серверные;
+    // клиент не влияет. parkingCap уже клампнут (>=1) — приведение к size_t безопасно.
+    if (m_parkedService.countParkedByAccount(session->accountId) >= static_cast<std::size_t>(house->parkingCap))
+    {
+        player.sendClientMessage(
+            ERROR_COLOUR,
+            u(fmt::format("У вашего дома нет места для ещё одной машины (лимит {}). Уберите одну с парковки, "
+                          "чтобы поставить эту",
+                          house->parkingCap)));
+        return;
+    }
+
     const float angle = veh->getZAngle();
 
     // Парковка = ре-тег НА МЕСТЕ (тот же liveVehicleId): без destroy/create. Игрок

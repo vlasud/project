@@ -5,6 +5,7 @@
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -521,7 +522,45 @@ void HouseSystem::showCreatePicker(IPlayer &player)
                 showMain(*player);
                 return;
             }
-            createHouseFor(*player, listItem);
+            // listItem = interiorIndex; его валидность проверит createHouseFor/createHouse.
+            showCapInput(*player, listItem);
+        });
+}
+
+void HouseSystem::showCapInput(IPlayer &player, int interiorIndex)
+{
+    // Ввод лимита парковки после выбора интерьера. Сервис сам парсит целое (мусор/
+    // пусто/overflow -> повтор показа); ДИАПАЗОН проверяем здесь и при промахе
+    // перепоказываем этот же ввод (не создаём дом). Холодный дев-путь, не per-tick.
+    m_dialogService.showNumberInput(
+        player,
+        makeDialog(DialogStyle_INPUT, "Лимит парковки",
+                   fmt::format("Сколько машин можно парковать у этого дома? Учитываются и личные машины "
+                               "владельца, и расшаренные им семье.\nДопустимо от {} до {}.",
+                               HouseService::MIN_PARKING_CAP, HouseService::MAX_PARKING_CAP),
+                   "Создать", "Назад"),
+        [this, playerId = player.getID(), interiorIndex](DialogResponse response, std::int64_t value)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+            {
+                return; // дев вышел на вводе — цепочка обрывается
+            }
+            if (response != DialogResponse_Left)
+            {
+                showCreatePicker(*player); // «Назад» — обратно к выбору интерьера
+                return;
+            }
+            // Сюда доходит уже целое; проверяем диапазон и при промахе ре-показываем.
+            if (value < HouseService::MIN_PARKING_CAP || value > HouseService::MAX_PARKING_CAP)
+            {
+                player->sendClientMessage(
+                    DEBUG_COLOUR, u(fmt::format("Лимит должен быть от {} до {}. Попробуйте снова",
+                                                HouseService::MIN_PARKING_CAP, HouseService::MAX_PARKING_CAP)));
+                showCapInput(*player, interiorIndex);
+                return;
+            }
+            createHouseFor(*player, interiorIndex, static_cast<int>(value));
         });
 }
 
@@ -588,7 +627,9 @@ void HouseSystem::showHouseMenu(IPlayer &player, int houseId)
                            ? service.catalog()[house->interiorIndex].name
                            : "?";
 
+    // Кап показываем в теле, чтобы дев видел значение без чтения houses.json.
     std::string body;
+    body += fmt::format("Лимит парковки: {}\n", house->parkingCap);
     body += "Телепорт ко входу\n";
     body += "Удалить дом";
 
@@ -616,13 +657,14 @@ void HouseSystem::showHouseMenu(IPlayer &player, int houseId)
                 return;
             }
 
+            // Пункт 0 — «Лимит парковки» (информационная строка): без действия.
             switch (listItem)
             {
-            case 0: // телепорт ко входу (дев проходит через пикап и проверяет вход)
+            case 1: // телепорт ко входу (дев проходит через пикап и проверяет вход)
                 m_locationService.teleport(*player, house->entrance, 0, 0);
                 player->sendClientMessage(DEBUG_COLOUR, u(fmt::format("Телепорт ко входу дома #{}", houseId)));
                 break;
-            case 1:
+            case 2:
                 showDeleteConfirm(*player, houseId);
                 break;
             default:
@@ -667,7 +709,7 @@ void HouseSystem::showDeleteConfirm(IPlayer &player, int houseId)
 
 // ------------------------------------------------------------------ операции дев-меню
 
-void HouseSystem::createHouseFor(IPlayer &player, int interiorIndex)
+void HouseSystem::createHouseFor(IPlayer &player, int interiorIndex, int parkingCap)
 {
     if (!HouseService::catalogValid(interiorIndex))
     {
@@ -682,7 +724,8 @@ void HouseSystem::createHouseFor(IPlayer &player, int interiorIndex)
     const Vector3 pos = m_locationService.getPosition(playerId);
     const float angle = player.getRotation().ToEuler().z; // yaw, градусы
 
-    const HouseService::House *house = service.createHouse(pos, angle, interiorIndex);
+    // parkingCap клампит сам createHouse — берём фактический (клампнутый) из house->parkingCap.
+    const HouseService::House *house = service.createHouse(pos, angle, interiorIndex, parkingCap);
     if (!house)
     {
         // Индекс уже проверен выше — nullptr здесь означает достигнутый лимит id.
@@ -696,8 +739,9 @@ void HouseSystem::createHouseFor(IPlayer &player, int interiorIndex)
     saveToFileAsync();
 
     player.sendClientMessage(
-        DEBUG_COLOUR,
-        u(fmt::format("Дом #{} создан ({}). Вход — на вашей позиции, выход — за спиной", house->id, name)));
+        DEBUG_COLOUR, u(fmt::format("Дом #{} создан ({}). Лимит парковки — {}. Вход — на вашей позиции, "
+                                    "выход — за спиной",
+                                    house->id, name, house->parkingCap)));
 }
 
 void HouseSystem::deleteHouse(IPlayer &player, int houseId)
@@ -960,6 +1004,16 @@ std::vector<HouseService::House> HouseSystem::parse(const std::string &content, 
         {
             const float angle = item["exitAngle"].get<float>();
             house.exitAngle = std::isfinite(angle) ? angle : 0.0f;
+        }
+
+        // parkingCap — необязательное поле. Отсутствует (старые houses.json) или
+        // мусор (float/строка/не-int) -> DEFAULT_PARKING_CAP. Всегда кламп в
+        // [MIN, MAX] (правленый файл не пробьёт границы, кап=0 невозможен).
+        house.parkingCap = HouseService::DEFAULT_PARKING_CAP;
+        if (item.contains("parkingCap") && item["parkingCap"].is_number_integer())
+        {
+            house.parkingCap = std::clamp(item["parkingCap"].get<int>(), HouseService::MIN_PARKING_CAP,
+                                          HouseService::MAX_PARKING_CAP);
         }
 
         // vw ВСЕГДА вычисляем (VW_BASE + id), как createHouse. Полю virtualWorld из

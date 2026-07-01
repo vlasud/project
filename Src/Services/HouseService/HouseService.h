@@ -42,6 +42,12 @@ class HouseService final : public IService
     // Потолок id дома: VW_BASE + MAX_HOUSE_ID заведомо < INT_MAX, vw не переполнится.
     static constexpr int MAX_HOUSE_ID = 1000000;
 
+    // Лимит припаркованных у дома машин (дев-контент). DEFAULT — для домов без поля
+    // в старом houses.json и как фолбэк парса; [MIN, MAX] — границы клампа.
+    static constexpr int DEFAULT_PARKING_CAP = 1;
+    static constexpr int MIN_PARKING_CAP = 1;
+    static constexpr int MAX_PARKING_CAP = 10; // потолок иммерсии: двор в 30 м не стоянка-склад
+
     struct House
     {
         int id = 0;
@@ -52,6 +58,7 @@ class HouseService final : public IService
         int virtualWorld = 0;    // уникальный мир интерьера дома
         std::string owner;       // ключ аккаунта (std::to_string(accountId)); "" — ничейный.
                                  // Зеркало БД (house_owner), а НЕ json — наполняется на старте/занятии.
+        int parkingCap = DEFAULT_PARKING_CAP; // макс. припаркованных машин у дома (>=1)
     };
 
     // Готовый интерьер: имя в дев-меню + interior id SA + фикс. точка спавна
@@ -108,10 +115,11 @@ class HouseService final : public IService
     // --- операции (источник правды; персист делает HouseSystem) ---
     // Создать дом в позиции создателя. creatorAngle — yaw создателя (градусы);
     // точка выхода считается за спиной по этому углу. interiorIndex обязан быть
-    // валидным (вызывающий проверяет catalogValid). Возвращает указатель на
-    // созданный дом (живёт в m_houses) или nullptr при невалидном индексе либо
-    // достигнутом лимите id (MAX_HOUSE_ID).
-    const House *createHouse(const Vector3 &creatorPos, float creatorAngle, int interiorIndex);
+    // валидным (вызывающий проверяет catalogValid). parkingCap клампится в
+    // [MIN_PARKING_CAP, MAX_PARKING_CAP] (защита даже при уже провалидированном вводе).
+    // Возвращает указатель на созданный дом (живёт в m_houses) или nullptr при
+    // невалидном индексе либо достигнутом лимите id (MAX_HOUSE_ID).
+    const House *createHouse(const Vector3 &creatorPos, float creatorAngle, int interiorIndex, int parkingCap);
     // Удалить дом. false — дома нет (вызывающий снимает рантайм-хэндлы заранее).
     bool removeHouse(int id);
     // Выставить владельца дома в ПАМЯТИ (зеркало БД). ownerKey — ключ аккаунта

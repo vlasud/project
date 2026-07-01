@@ -253,6 +253,13 @@ std::vector<long long> ParkedVehicleService::parkedByAccount(AccountId accountId
     return result;
 }
 
+std::size_t ParkedVehicleService::countParkedByAccount(AccountId accountId) const
+{
+    // count даёт число записей с ключом — ровно припаркованные машины владельца
+    // (личные + расшаренные, все в m_byAccount). Без аллокации, O(записей ключа).
+    return m_byAccount.count(accountId);
+}
+
 std::vector<long long> ParkedVehicleService::parkedOfFamily(int familyId) const
 {
     std::vector<long long> result;

@@ -85,12 +85,15 @@ class HouseSystem : public BaseSystem
     // --- дев-меню (/house) ---
     void showMain(IPlayer &player);
     void showCreatePicker(IPlayer &player);       // LIST каталога интерьеров
+    void showCapInput(IPlayer &player, int interiorIndex); // INPUT лимита парковки после выбора интерьера
     void showHouseList(IPlayer &player);          // LIST существующих домов
     void showPickById(IPlayer &player);           // INPUT id -> подменю того дома
     void showHouseMenu(IPlayer &player, int houseId);     // подменю: телепорт/удалить
     void showDeleteConfirm(IPlayer &player, int houseId); // MSGBOX подтверждения
 
-    void createHouseFor(IPlayer &player, int interiorIndex); // создать дом + persist + сообщить
+    // Создать дом + persist + сообщить. parkingCap уже провалидирован вводом, но
+    // createHouse клампит его повторно (двойная страховка).
+    void createHouseFor(IPlayer &player, int interiorIndex, int parkingCap);
     void deleteHouse(IPlayer &player, int houseId);          // удалить дом + persist
 
     // --- файлы (диск — в тредпуле, колбэки на главном потоке) ---
