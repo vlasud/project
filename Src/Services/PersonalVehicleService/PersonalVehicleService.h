@@ -38,7 +38,7 @@ class PersonalVehicleService final : public IService
 
     // Дефолтный лимит личных машин на игрока. Расширяемо позже (премиум/перки) —
     // тогда лимит станет пер-игроковым, m_owned уже vector ради этого.
-    static constexpr int MAX_PERSONAL_VEHICLES = 1;
+    static constexpr int MAX_PERSONAL_VEHICLES = 2;
 
     // Одна запись владения: модель машины + id её текущего заспавненного экземпляра
     // в VehicleService (-1 — не заспавнена сейчас; владение всё равно живёт).
@@ -150,7 +150,7 @@ class PersonalVehicleService final : public IService
     VehicleService *m_vehicleService = nullptr; // источник правды о машинах (bind)
 
     // Владение per-player: модель + id текущего экземпляра. vector ради будущего
-    // расширения лимита; при MAX_PERSONAL_VEHICLES==1 держит 0..1 элемент.
+    // расширения лимита; при MAX_PERSONAL_VEHICLES==2 держит 0..2 элемента.
     std::array<std::vector<OwnedVehicle>, MAX_PLAYERS> m_owned;
 
     // Гейт старт-гонки «купил до загрузки»: пока зеркало владения из БД не легло в
