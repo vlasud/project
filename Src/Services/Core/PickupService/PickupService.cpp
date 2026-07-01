@@ -15,7 +15,7 @@ constexpr int MAX_PICKUP_TYPE = 23; // клиентские типы повед�
 } // namespace
 
 int PickupService::add(int model, PickupType type, const Vector3 &position, Handler onPickUp,
-                       std::uint32_t virtualWorld, Milliseconds rearmGap)
+                       std::uint32_t virtualWorld, Milliseconds rearmGap, float streamDistance)
 {
     if (!m_streamer)
     {
@@ -27,7 +27,7 @@ int PickupService::add(int model, PickupType type, const Vector3 &position, Hand
     type = static_cast<PickupType>(std::clamp<int>(type, 0, MAX_PICKUP_TYPE));
     rearmGap = std::max(rearmGap, Milliseconds(0));
 
-    const int pickupId = m_streamer->addPickup(model, type, position, virtualWorld);
+    const int pickupId = m_streamer->addPickup(model, type, position, virtualWorld, streamDistance);
     if (pickupId < 0)
     {
         LogManager::log(Warning, "PickupService: streamer rejected pickup");

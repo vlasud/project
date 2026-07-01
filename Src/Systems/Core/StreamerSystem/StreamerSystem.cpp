@@ -24,7 +24,10 @@ void StreamerSystem::initialize(IComponentList *components)
 
 bool StreamerSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
 {
-    m_streamerService.streamPlayer(player, m_locationService.getPosition(player.getID()), now);
+    // Позиция и vw — принятые сервером (PlayerLocationService), не клиентские.
+    const int playerId = player.getID();
+    m_streamerService.streamPlayer(player, m_locationService.getPosition(playerId),
+                                   m_locationService.getVirtualWorld(playerId), now);
     return true;
 }
 

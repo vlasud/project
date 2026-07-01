@@ -54,12 +54,18 @@ class PickupService final : public IService
     // сторону «не переоткрыть» безопаснее флуда.
     static constexpr Milliseconds DEFAULT_REARM_GAP{2000};
 
+    // Радиус стрима пикапа. Клиент рисует пикапы лишь на ~50-80 м, так что 100
+    // покрывает видимость с запасом; больший радиус только раздувает активный
+    // пул, который open.mp сканирует ЦЕЛИКОМ на стрим-тик каждого игрока.
+    static constexpr float DEFAULT_STREAM_DISTANCE = 100.0f;
+
     // Создать пикап с обработчиком подбора. model — модель объекта,
     // type — клиентский тип поведения пикапа (SA), rearmGap — разрыв в потоке
-    // событий, после которого вход на пикап снова сработает (см. выше).
+    // событий, после которого вход на пикап снова сработает (см. выше),
+    // streamDistance — радиус стрима (см. DEFAULT_STREAM_DISTANCE).
     // Возвращает id пикапа или -1.
     int add(int model, PickupType type, const Vector3 &position, Handler onPickUp, std::uint32_t virtualWorld = 0,
-            Milliseconds rearmGap = DEFAULT_REARM_GAP);
+            Milliseconds rearmGap = DEFAULT_REARM_GAP, float streamDistance = DEFAULT_STREAM_DISTANCE);
     void remove(int pickupId);
     bool exists(int pickupId) const;
 

@@ -15,11 +15,13 @@ constexpr std::chrono::milliseconds STREAM_INTERVAL{500};
 // радиуса (с запасом больше STREAM_INTERVAL, чтобы не мигал на границе).
 constexpr std::chrono::milliseconds PICKUP_KEEP{2000};
 
-// Бюджеты на игрока. Клиентский лимит объектов ~1000 (включая глобальные),
-// иконок — 100; берём с запасом под ручное использование.
-constexpr int OBJECT_BUDGET = 400;
-constexpr int ICON_BUDGET = 90; // слоты 0..89, слоты 90..99 свободны для ручных иконок
-constexpr int LABEL_BUDGET = 200; // per-player пул лейблов — 1024; запас под ручные/прикреплённые
+// Гистерезис выхода: уже показанный def остаётся желанным, пока distSq не
+// превысит streamDistSq * 1.44 (множитель 1.2 по дистанции, в квадрате) — иначе
+// движение вдоль границы радиуса дёргало бы release/create каждый проход. Вход
+// нового def'а — строго по streamDistSq. Обход сетки остаётся в радиусе
+// MAX_STREAM_DISTANCE, поэтому у def'ов с радиусом около максимума гистерезис
+// усечён им — это допустимо.
+constexpr float EXIT_HYSTERESIS_SQ = 1.44f;
 
 template <typename Def> int allocDef(std::vector<Def> &defs, std::vector<int> &freeList)
 {
@@ -46,10 +48,14 @@ void StreamerService::initialize(ICore &core, GridService &grid, IPickupsCompone
     m_core = &core;
     m_grid = &grid;
     m_pickups = pickups;
-    m_candidates.reserve(1024);
+    m_candObjects.reserve(1024);
+    m_candIcons.reserve(256);
+    m_candLabels.reserve(256);
     m_desiredObjects.reserve(OBJECT_BUDGET);
     m_desiredIcons.reserve(ICON_BUDGET);
+    m_desiredLabels.reserve(LABEL_BUDGET);
     m_scratchShown.reserve(OBJECT_BUDGET);
+    m_pickupPoolToDef.reserve(256);
 }
 
 // --- контент ---
@@ -128,6 +134,7 @@ void StreamerService::removePickup(int defId)
     if (def.poolId >= 0 && m_pickups)
     {
         m_pickups->release(def.poolId);
+        m_pickupPoolToDef.erase(def.poolId); // индекс зеркалит только живые пул-экземпляры
         --m_activePickups;
     }
     def.used = false;
@@ -137,18 +144,10 @@ void StreamerService::removePickup(int defId)
 
 int StreamerService::pickupDefByPoolId(int poolId) const
 {
-    if (poolId < 0)
-    {
-        return -1;
-    }
-    for (std::size_t i = 0; i < m_pickupDefs.size(); ++i)
-    {
-        if (m_pickupDefs[i].used && m_pickupDefs[i].poolId == poolId)
-        {
-            return static_cast<int>(i);
-        }
-    }
-    return -1;
+    // O(1) по обратному индексу — резолв стоит на каждом pickup-RPC, а клиент
+    // шлёт их повторно каждый кадр, пока игрок стоит на пикапе.
+    const auto it = m_pickupPoolToDef.find(poolId);
+    return it != m_pickupPoolToDef.end() ? it->second : -1;
 }
 
 bool StreamerService::getPickupInfo(int defId, Vector3 &position, std::uint32_t &virtualWorld) const
@@ -215,8 +214,9 @@ bool StreamerService::updateTextLabel(int defId, StringView text, Colour colour)
     def.text = text.to_string();
     def.colour = colour;
 
-    // Живое обновление тем, кому показан: setColourAndText шлёт один пакет. Идём по
-    // онлайну (entries): у офлайн-слотов учёт очищен resetPlayer.
+    // Живое обновление тем, кому показан: setColourAndText делает restream —
+    // hide+show, 2 RPC на игрока. Идём по онлайну (entries): у офлайн-слотов
+    // учёт очищен resetPlayer.
     for (IPlayer *player : m_core->getPlayers().entries())
     {
         std::vector<Shown> &shown = m_players[player->getID()].labels;
@@ -279,65 +279,94 @@ void StreamerService::removeMapIcon(int defId)
 
 // --- стриминг ---
 
-void StreamerService::streamPlayer(IPlayer &player, const Vector3 &position, TimePoint now)
+bool StreamerService::isShown(const std::vector<Shown> &shown, int defId)
+{
+    const auto it = std::lower_bound(shown.begin(), shown.end(), defId,
+                                     [](const Shown &s, int id) { return s.defId < id; });
+    return it != shown.end() && it->defId == defId;
+}
+
+void StreamerService::selectDesired(std::vector<Candidate> &candidates, int budget, std::vector<int> &desired)
+{
+    // Бюджет достаётся ближним. Полная сортировка не нужна: при переполнении
+    // отделяем budget ближайших за O(n) (nth_element), в пределах бюджета
+    // порядок не важен — diff* сортируют desired по defId. Отбор чисто по
+    // дистанции, поэтому дальний показанный (гистерезис) не вытеснит ближнего
+    // нового. Усечение in-place, без аллокаций.
+    if (static_cast<int>(candidates.size()) > budget)
+    {
+        std::nth_element(candidates.begin(), candidates.begin() + budget, candidates.end(),
+                         [](const Candidate &a, const Candidate &b) { return a.distSq < b.distSq; });
+        candidates.resize(budget);
+    }
+    desired.clear();
+    for (const Candidate &candidate : candidates)
+        desired.push_back(candidate.defId);
+}
+
+void StreamerService::streamPlayer(IPlayer &player, const Vector3 &position, int virtualWorld, TimePoint now)
 {
     PerPlayer &pp = m_players[player.getID()];
     if (now < pp.nextStreamAt)
         return;
     pp.nextStreamAt = now + STREAM_INTERVAL;
 
-    // Кандидаты из сетки одним запросом по всем стримящимся типам.
-    const Vector3 &pos = position;
-    m_grid->queryRadius(pos, MAX_STREAM_DISTANCE,
-                        gridMask(GridEntityType::Object) | gridMask(GridEntityType::Pickup) |
-                            gridMask(GridEntityType::MapIcon) | gridMask(GridEntityType::TextLabel),
-                        m_candidates);
+    m_candObjects.clear();
+    m_candIcons.clear();
+    m_candLabels.clear();
+    const std::uint32_t vw = static_cast<std::uint32_t>(virtualWorld);
 
-    // Ближние первыми — бюджеты достаются ближайшим.
-    std::sort(m_candidates.begin(), m_candidates.end(),
-              [](const GridService::Result &a, const GridService::Result &b) { return a.distSq < b.distSq; });
+    // Один обход сетки по всем стримящимся типам, фильтр по радиусу стрима
+    // def'а на месте — до всяких сортировок. Показанному def'у даём гистерезис
+    // выхода (isShown зовётся только в кольце между радиусом и его 1.2 — O(log S)
+    // на кандидата в кольце), вход нового — строго по радиусу. Пикапы в
+    // кандидаты не кладём: им не нужен порядок, проход только помечает «нужен»,
+    // и только в мире игрока — иначе один игрок в интерьере оживлял бы
+    // одноточечные пикапы всех миров, раздувая активный пул, который open.mp
+    // сканирует целиком на стрим-тик каждого игрока.
+    m_grid->forEachInRadius(
+        position, MAX_STREAM_DISTANCE,
+        gridMask(GridEntityType::Object) | gridMask(GridEntityType::Pickup) | gridMask(GridEntityType::MapIcon) |
+            gridMask(GridEntityType::TextLabel),
+        [&](GridEntityType type, std::int32_t id, float distSq) {
+            switch (type)
+            {
+            case GridEntityType::Object:
+            {
+                const float limit = m_objectDefs[id].streamDistSq;
+                if (distSq <= limit || (distSq <= limit * EXIT_HYSTERESIS_SQ && isShown(pp.objects, id)))
+                    m_candObjects.push_back({id, distSq});
+                break;
+            }
+            case GridEntityType::MapIcon:
+            {
+                const float limit = m_iconDefs[id].streamDistSq;
+                if (distSq <= limit || (distSq <= limit * EXIT_HYSTERESIS_SQ && isShown(pp.icons, id)))
+                    m_candIcons.push_back({id, distSq});
+                break;
+            }
+            case GridEntityType::TextLabel:
+            {
+                const float limit = m_labelDefs[id].streamDistSq;
+                if (distSq <= limit || (distSq <= limit * EXIT_HYSTERESIS_SQ && isShown(pp.labels, id)))
+                    m_candLabels.push_back({id, distSq});
+                break;
+            }
+            case GridEntityType::Pickup:
+            {
+                PickupDef &def = m_pickupDefs[id];
+                if (def.virtualWorld == vw && distSq <= def.streamDistSq)
+                    def.lastWanted = now;
+                break;
+            }
+            default:
+                break;
+            }
+        });
 
-    m_desiredObjects.clear();
-    m_desiredIcons.clear();
-    m_desiredLabels.clear();
-    int objectBudget = OBJECT_BUDGET;
-    int iconBudget = ICON_BUDGET;
-    int labelBudget = LABEL_BUDGET;
-
-    for (const GridService::Result &candidate : m_candidates)
-    {
-        switch (candidate.type)
-        {
-        case GridEntityType::Object:
-            if (objectBudget > 0 && candidate.distSq <= m_objectDefs[candidate.id].streamDistSq)
-            {
-                m_desiredObjects.push_back(candidate.id);
-                --objectBudget;
-            }
-            break;
-        case GridEntityType::MapIcon:
-            if (iconBudget > 0 && candidate.distSq <= m_iconDefs[candidate.id].streamDistSq)
-            {
-                m_desiredIcons.push_back(candidate.id);
-                --iconBudget;
-            }
-            break;
-        case GridEntityType::TextLabel:
-            if (labelBudget > 0 && candidate.distSq <= m_labelDefs[candidate.id].streamDistSq)
-            {
-                m_desiredLabels.push_back(candidate.id);
-                --labelBudget;
-            }
-            break;
-        case GridEntityType::Pickup:
-            // Пикапы глобальные: проход только помечает «нужен», создаёт развёртка.
-            if (candidate.distSq <= m_pickupDefs[candidate.id].streamDistSq)
-                m_pickupDefs[candidate.id].lastWanted = now;
-            break;
-        default:
-            break;
-        }
-    }
+    selectDesired(m_candObjects, OBJECT_BUDGET, m_desiredObjects);
+    selectDesired(m_candIcons, ICON_BUDGET, m_desiredIcons);
+    selectDesired(m_candLabels, LABEL_BUDGET, m_desiredLabels);
 
     diffObjects(player, pp);
     diffIcons(player, pp);
@@ -396,35 +425,51 @@ void StreamerService::diffIcons(IPlayer &player, PerPlayer &pp)
     std::sort(m_desiredIcons.begin(), m_desiredIcons.end());
     m_scratchShown.clear();
 
+    // Две фазы: merge-diff сначала выполняет ВСЕ release (слоты возвращаются в
+    // freeIconSlots), а create-кандидатов компактит в начало m_desiredIcons
+    // (запись отстаёт от чтения — in-place безопасно). Иначе при полном бюджете
+    // create упирался бы в пустой пул слотов раньше release — телепорт «моргал»
+    // бы иконками на целый проход.
     std::size_t si = 0;
     std::size_t di = 0;
+    std::size_t pending = 0; // create-кандидатов скопировано в начало m_desiredIcons
     while (si < pp.icons.size() || di < m_desiredIcons.size())
     {
         if (di == m_desiredIcons.size() || (si < pp.icons.size() && pp.icons[si].defId < m_desiredIcons[di]))
         {
-            player.unsetMapIcon(pp.icons[si].clientId);
+            player.unsetMapIcon(pp.icons[si].clientId); // вышел из зоны — убрать
             pp.freeIconSlots.push_back(pp.icons[si].clientId);
             ++si;
         }
         else if (si == pp.icons.size() || m_desiredIcons[di] < pp.icons[si].defId)
         {
-            if (!pp.freeIconSlots.empty())
-            {
-                const int slot = pp.freeIconSlots.back();
-                pp.freeIconSlots.pop_back();
-                const IconDef &def = m_iconDefs[m_desiredIcons[di]];
-                player.setMapIcon(slot, def.position, def.iconType, def.colour, def.style);
-                m_scratchShown.push_back({m_desiredIcons[di], slot});
-            }
+            m_desiredIcons[pending++] = m_desiredIcons[di]; // вошёл — создать во второй фазе
             ++di;
         }
         else
         {
-            m_scratchShown.push_back(pp.icons[si]);
+            m_scratchShown.push_back(pp.icons[si]); // уже показан
             ++si;
             ++di;
         }
     }
+
+    // Фаза create: kept + pending <= ICON_BUDGET, после release слотов хватает
+    // всегда (гард — страховка инварианта).
+    for (std::size_t i = 0; i < pending && !pp.freeIconSlots.empty(); ++i)
+    {
+        const int slot = pp.freeIconSlots.back();
+        pp.freeIconSlots.pop_back();
+        const IconDef &def = m_iconDefs[m_desiredIcons[i]];
+        player.setMapIcon(slot, def.position, def.iconType, def.colour, def.style);
+        m_scratchShown.push_back({m_desiredIcons[i], slot});
+    }
+
+    // Созданные дописаны после оставшихся — восстановить сортировку по defId
+    // (инвариант pp.icons для merge-diff и бинарных поисков). <=90 элементов,
+    // сортировка in-place.
+    std::sort(m_scratchShown.begin(), m_scratchShown.end(),
+              [](const Shown &a, const Shown &b) { return a.defId < b.defId; });
     pp.icons.swap(m_scratchShown);
 }
 
@@ -469,8 +514,11 @@ void StreamerService::sweepPickups(TimePoint now)
     if (!m_pickups)
         return;
 
-    for (PickupDef &def : m_pickupDefs)
+    // O(defs) раз в секунду; обратный индекс правится только на переходах пула
+    // (create/release), не на каждом проходе.
+    for (std::size_t defId = 0; defId < m_pickupDefs.size(); ++defId)
     {
+        PickupDef &def = m_pickupDefs[defId];
         if (!def.used)
             continue;
 
@@ -480,11 +528,18 @@ void StreamerService::sweepPickups(TimePoint now)
             IPickup *pickup = m_pickups->create(def.model, def.type, def.position, def.virtualWorld, false);
             def.poolId = pickup ? pickup->getID() : -1;
             if (def.poolId >= 0)
+            {
+                // Ядро переиспользует poolId после release — мы стираем запись
+                // при release, поэтому вставка всегда свежая ([] перезапишет и
+                // при рассинхроне, не оставив висячего defId).
+                m_pickupPoolToDef[def.poolId] = static_cast<int>(defId);
                 ++m_activePickups;
+            }
         }
         else if (!wanted && def.poolId >= 0)
         {
             m_pickups->release(def.poolId);
+            m_pickupPoolToDef.erase(def.poolId);
             def.poolId = -1;
             --m_activePickups;
         }

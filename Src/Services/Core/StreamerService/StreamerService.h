@@ -7,6 +7,7 @@
 #include <Server/Components/Pickups/pickups.hpp>
 #include <array>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 // Стример: позволяет создавать неограниченное число объектов, пикапов и иконок
@@ -21,16 +22,31 @@
 //    слоты 0..ICON_BUDGET-1, остальные свободны для ручного использования);
 //  * пикапы   — пул глобальный, поэтому стриминг глобальный: пикап существует в
 //    пуле, пока хотя бы один игрок рядом (проходы игроков помечают «нужен»,
-//    периодическая развёртка создаёт/удаляет).
+//    периодическая развёртка создаёт/удаляет). open.mp сканирует ВЕСЬ активный
+//    пул на стрим-тик каждого игрока, поэтому пул держим минимальным: «нужен»
+//    ставится только игроком в virtual world пикапа и в пределах его радиуса.
 //
-// Производительность: проход игрока — один запрос к сетке, одна сортировка
-// кандидатов по дистанции и линейный merge-diff двух сортированных массивов
+// Ограничение: у объектов, иконок и лейблов НЕТ virtual world — глобальный
+// визуал стримера виден из всех миров на тех же координатах (vw есть только у
+// пикапов). Класть контент в интерьеры через стример нельзя без расширения defs.
+//
+// Производительность: проход игрока — один обход сетки с фильтром по радиусу
+// стрима каждого def'а на месте, отбор ближайших в бюджет (nth_element — только
+// при переполнении) и линейный merge-diff двух сортированных массивов
 // (показанное vs желаемое); создания/удаления — только по фактической разнице.
-// Все буферы переиспользуются, на установившемся режиме проход не аллоцирует.
+// Выход из зоны — с гистерезисом (1.2 радиуса), чтобы движение вдоль границы не
+// дёргало release/create. Все буферы переиспользуются, на установившемся режиме
+// проход не аллоцирует.
 class StreamerService final : public IService
 {
   public:
     static constexpr float MAX_STREAM_DISTANCE = 300.0f; // и радиус запроса к сетке
+
+    // Бюджеты на игрока. Клиентский лимит объектов ~1000 (включая глобальные),
+    // иконок — 100; берём с запасом под ручное использование.
+    static constexpr int OBJECT_BUDGET = 400;
+    static constexpr int ICON_BUDGET = 90;   // слоты 0..89, слоты 90..99 свободны для ручных иконок
+    static constexpr int LABEL_BUDGET = 200; // per-player пул лейблов — 1024; запас под ручные/прикреплённые
 
     // Вызывается StreamerSystem::initialize до любых add*.
     void initialize(ICore &core, GridService &grid, IPickupsComponent *pickups);
@@ -55,13 +71,15 @@ class StreamerService final : public IService
     bool updateTextLabel(int defId, StringView text, Colour colour);
 
     // --- вызывается StreamerSystem ---
-    // position — принятая позиция из PlayerLocationService (не сырая клиентская).
-    void streamPlayer(IPlayer &player, const Vector3 &position, TimePoint now); // внутри троттлится сам
-    void sweepPickups(TimePoint now);                  // глобальная развёртка пикапов
+    // position/virtualWorld — принятые из PlayerLocationService (не сырые клиентские).
+    void streamPlayer(IPlayer &player, const Vector3 &position, int virtualWorld,
+                      TimePoint now);   // внутри троттлится сам
+    void sweepPickups(TimePoint now);   // глобальная развёртка пикапов
     void resetPlayer(int playerId);
 
     // Def id пикапа по id в пуле (для маршрутизации onPlayerPickUpPickup), -1 —
-    // пикап не из стримера. Линейный по числу def'ов — события подбора редкие.
+    // пикап не из стримера. O(1) по обратному индексу: клиент шлёт RPC подбора
+    // повторно каждый кадр, пока стоит на пикапе, — резолв на каждом событии.
     int pickupDefByPoolId(int poolId) const;
     // Позиция и мир def'а пикапа (для валидации подбора).
     bool getPickupInfo(int defId, Vector3 &position, std::uint32_t &virtualWorld) const;
@@ -154,9 +172,22 @@ class StreamerService final : public IService
         bool iconSlotsInit = false;
     };
 
+    // Кандидат прохода: def, прошедший фильтр радиуса, до отбора в бюджет.
+    struct Candidate
+    {
+        int defId;
+        float distSq;
+    };
+
     void diffObjects(IPlayer &player, PerPlayer &pp);
     void diffIcons(IPlayer &player, PerPlayer &pp);
     void diffLabels(IPlayer &player, PerPlayer &pp);
+
+    // defId сейчас показан? Бинарный поиск по shown (сортирован по defId), O(log S).
+    static bool isShown(const std::vector<Shown> &shown, int defId);
+    // Отбирает в desired не больше budget БЛИЖАЙШИХ кандидатов (candidates при
+    // переполнении усекается на месте; порядок внутри бюджета не важен).
+    static void selectDesired(std::vector<Candidate> &candidates, int budget, std::vector<int> &desired);
 
     ICore *m_core = nullptr;
     GridService *m_grid = nullptr;
@@ -167,6 +198,10 @@ class StreamerService final : public IService
     std::vector<int> m_freeObjectDefs;
     std::vector<PickupDef> m_pickupDefs;
     std::vector<int> m_freePickupDefs;
+    // Обратный индекс poolId -> defId. Зеркалит ровно ЖИВЫЕ пул-экземпляры
+    // (def.poolId != -1): вставка при create, стирание при release/removePickup.
+    // Пул open.mp динамический, poolId не ограничен константой — только map.
+    std::unordered_map<int, int> m_pickupPoolToDef;
     std::vector<IconDef> m_iconDefs;
     std::vector<int> m_freeIconDefs;
     std::vector<LabelDef> m_labelDefs;
@@ -175,7 +210,9 @@ class StreamerService final : public IService
     std::array<PerPlayer, MAX_PLAYERS> m_players;
 
     // Переиспользуемые буферы прохода (один поток, не реентерабельно).
-    std::vector<GridService::Result> m_candidates;
+    std::vector<Candidate> m_candObjects;
+    std::vector<Candidate> m_candIcons;
+    std::vector<Candidate> m_candLabels;
     std::vector<int> m_desiredObjects;
     std::vector<int> m_desiredIcons;
     std::vector<int> m_desiredLabels;

@@ -106,6 +106,8 @@ int MapIconService::personalCount(int playerId) const
 
 void MapIconService::initialize(StreamerService *streamer)
 {
+    // Ручные слоты начинаются ровно там, где заканчивается бюджет стримера.
+    static_assert(FIRST_MANUAL_SLOT == StreamerService::ICON_BUDGET);
     m_streamer = streamer;
 }
 

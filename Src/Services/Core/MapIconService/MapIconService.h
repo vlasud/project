@@ -1,13 +1,13 @@
 #pragma once
 
 #include "Macro.h"
+#include "Services/Core/StreamerService/StreamerService.h"
 #include "Services/IService.h"
 #include "player.hpp"
 #include "types.hpp"
 #include <array>
 
 class MapIconSystem;
-class StreamerService;
 
 // Сервис иконок карты. Два вида:
 //
@@ -36,9 +36,10 @@ class MapIconService final : public IService
     // --- глобальные (через стример) ---
     // Возвращает id иконки или -1.
     // streamDistance — радиус, в котором иконка стримится игроку (по умолчанию
-    // 300 = StreamerService::MAX_STREAM_DISTANCE). Меньше -> иконка видна только вблизи.
+    // максимум стримера). Меньше -> иконка видна только вблизи.
     int addGlobal(int iconType, const Vector3 &position, Colour colour = Colour::White(),
-                  MapIconStyle style = MapIconStyle_Local, float streamDistance = 300.0f);
+                  MapIconStyle style = MapIconStyle_Local,
+                  float streamDistance = StreamerService::MAX_STREAM_DISTANCE);
     void removeGlobal(int iconId);
 
     // --- персональные (слоты 90..99 конкретного игрока) ---
@@ -53,7 +54,8 @@ class MapIconService final : public IService
     int personalCount(int playerId) const;
 
   private:
-    // Слоты 0..89 занимает StreamerService, клиентский лимит — 100.
+    // Слоты 0..ICON_BUDGET-1 занимает StreamerService, клиентский лимит — 100.
+    // Связка с бюджетом стримера закреплена static_assert в initialize().
     static constexpr int FIRST_MANUAL_SLOT = 90;
     static constexpr int MANUAL_SLOTS = 10;
 
