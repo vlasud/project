@@ -1,7 +1,7 @@
 #include "Systems/ParkingSystem/ParkingSystem.h"
 
 #include "Utils/Encoding/Encoding.h"
-#include <cmath>
+#include "Utils/Geometry/Geometry.h"
 #include <fmt/format.h>
 #include <string>
 
@@ -25,8 +25,6 @@ constexpr float SPOT_OCCUPIED_RADIUS = 3.0f;
 // назад-пробы до origin соседа = √(4.45²+2.0²)=4.88 > радиуса 3.0 — соседнее место
 // ложно не занимается.
 constexpr float SPOT_PROBE_OFFSET = 2.0f;
-
-constexpr float PI = 3.14159265358979323846f;
 
 // Точка пикапа парковки (серверная, фикс.). Исходный facing 182.2892 — ориентир, не
 // нужен (пикапу угол не задаётся).
@@ -247,16 +245,12 @@ void ParkingSystem::spawnAtParking(IPlayer &player, int ownedIndex)
 
 bool ParkingSystem::isSpotFree(const SpawnSpot &spot, int excludeVehicleId) const
 {
-    // SA-MP конвенция (как HouseService::backOf): «вперёд» = (-sin(a), cos(a)),
-    // «назад» = (sin(a), -cos(a)), a в РАДИАНАХ. Пробы в 2D (XY), Z как у центра —
-    // занятость горизонтальная (anyVehicleNear игнорирует Z).
-    const float a = spot.angle * PI / 180.0f;
-    const float dx = -std::sin(a) * SPOT_PROBE_OFFSET; // сдвиг «вперёд» по X
-    const float dy = std::cos(a) * SPOT_PROBE_OFFSET;  // сдвиг «вперёд» по Y
-
+    // Пробы «вперёд»/«назад» вдоль ориентации места по общему хелперу Geometry (та
+    // же SA-MP конвенция). Пробы в 2D (XY), Z как у центра — занятость горизонтальная
+    // (anyVehicleNear игнорирует Z), хелпер и держит z пробы равной z центра.
     const Vector3 &c = spot.position;
-    const Vector3 forward{c.x + dx, c.y + dy, c.z};
-    const Vector3 back{c.x - dx, c.y - dy, c.z};
+    const Vector3 forward = Geometry::forwardOf(c, spot.angle, SPOT_PROBE_OFFSET);
+    const Vector3 back = Geometry::backOf(c, spot.angle, SPOT_PROBE_OFFSET);
 
     // Свободно, только если ни одна проба не нашла машину. Свою (excludeVehicleId)
     // исключаем во всех трёх — пере-спавн на свою же точку не считает её занятой.

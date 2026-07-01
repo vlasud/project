@@ -1,5 +1,6 @@
 #include "Services/HouseService/HouseService.h"
 
+#include "Utils/Geometry/Geometry.h"
 #include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>
@@ -7,7 +8,6 @@
 
 namespace
 {
-constexpr float PI = 3.14159265358979323846f;
 constexpr float EXIT_DISTANCE = 1.5f; // метров за спину создателя до точки выхода
 
 float finiteOrZero(float value)
@@ -85,10 +85,8 @@ const HouseService::House *HouseService::houseOf(const std::string &ownerKey) co
 
 Vector3 HouseService::backOf(const Vector3 &position, float angleDegrees, float distance)
 {
-    // SA-MP конвенция: «вперёд» = (-sin(a), cos(a)) при a в радианах, значит
-    // «назад» = (sin(a), -cos(a)). Направление выхода пользователь проверяет в игре.
-    const float a = angleDegrees * PI / 180.0f;
-    return {position.x + std::sin(a) * distance, position.y - std::cos(a) * distance, position.z};
+    // «Назад» по углу создателя (SA-MP конвенция) — общий хелпер Geometry.
+    return Geometry::backOf(position, angleDegrees, distance);
 }
 
 const HouseService::House *HouseService::createHouse(const Vector3 &creatorPos, float creatorAngle, int interiorIndex)
