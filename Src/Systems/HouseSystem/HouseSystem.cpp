@@ -45,10 +45,15 @@ constexpr PickupType PICKUP_TYPE = 1;        // подбор по касанию
 // 3D-текст у входа — игроцкий ориентир дома (виден всем у двери). Зелёный 90EE90
 // в пару к зелёной иконке (свободно); не белый (выгорает на песке) и не кислотный
 // 00FF00. Близкая дистанция отрисовки, чтобы лейблы не засоряли горизонт при
-// плотной застройке; testLOS=false — виден вплотную у двери без мигания за углом.
+// плотной застройке; 5 м + testLOS=true — текст виден только у самой двери и НЕ
+// проступает сквозь стены/объекты.
 const Colour HOUSE_LABEL_COLOUR{90, 238, 144}; // 90EE90
-constexpr float HOUSE_LABEL_DRAW_DISTANCE = 20.0f;
-constexpr bool HOUSE_LABEL_TEST_LOS = false;
+constexpr float HOUSE_LABEL_DRAW_DISTANCE = 5.0f;
+constexpr bool HOUSE_LABEL_TEST_LOS = true;
+
+// Иконка дома на карте стримится только вблизи входа (не засоряет радар издалека):
+// появляется в этом радиусе от двери и пропадает за ним.
+constexpr float HOUSE_ICON_STREAM_DISTANCE = 150.0f;
 
 // Грейс ре-триггера (общая длительность для входа и выхода): после телепорта в
 // интерьер игрок какое-то время не может сработать пикап выхода, а после выхода —
@@ -161,7 +166,8 @@ void HouseSystem::spawnHouse(const HouseService::House &house)
 
     // Иконка на карте у входа: ничейный — зелёная (31), занятый — красная (32).
     const int iconType = house.owner.empty() ? HOUSE_ICON_FREE : HOUSE_ICON_OWNED;
-    runtime.mapIcon = m_mapIconService.addGlobal(iconType, house.entrance, Colour::White(), MapIconStyle_Global);
+    runtime.mapIcon =
+        m_mapIconService.addGlobal(iconType, house.entrance, Colour::White(), MapIconStyle_Global, HOUSE_ICON_STREAM_DISTANCE);
 
     // Пикап выхода — в уникальном мире дома, со смещением от точки спавна внутри.
     Vector3 exitPickupPos = entry.insideSpawn;
@@ -246,7 +252,8 @@ void HouseSystem::refreshHouseIcon(int houseId)
         runtime.mapIcon = -1;
     }
     const int iconType = house->owner.empty() ? HOUSE_ICON_FREE : HOUSE_ICON_OWNED;
-    runtime.mapIcon = m_mapIconService.addGlobal(iconType, house->entrance, Colour::White(), MapIconStyle_Global);
+    runtime.mapIcon = m_mapIconService.addGlobal(iconType, house->entrance, Colour::White(), MapIconStyle_Global,
+                                                 HOUSE_ICON_STREAM_DISTANCE);
 }
 
 // ------------------------------------------------------------------ пикапы

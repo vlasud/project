@@ -15,14 +15,16 @@ float finiteOrZero(float value)
 
 // ------------------------------------------------------------------ глобальные
 
-int MapIconService::addGlobal(int iconType, const Vector3 &position, Colour colour, MapIconStyle style)
+int MapIconService::addGlobal(int iconType, const Vector3 &position, Colour colour, MapIconStyle style,
+                              float streamDistance)
 {
     if (!m_streamer)
     {
         LogManager::log(Error, "MapIconService: not initialized, icon dropped");
         return -1;
     }
-    return m_streamer->addMapIcon(clampIconType(iconType), sanitizePosition(position), colour, clampStyle(style));
+    return m_streamer->addMapIcon(clampIconType(iconType), sanitizePosition(position), colour, clampStyle(style),
+                                  streamDistance);
 }
 
 void MapIconService::removeGlobal(int iconId)

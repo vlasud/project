@@ -35,8 +35,10 @@ class MapIconService final : public IService
 
     // --- глобальные (через стример) ---
     // Возвращает id иконки или -1.
+    // streamDistance — радиус, в котором иконка стримится игроку (по умолчанию
+    // 300 = StreamerService::MAX_STREAM_DISTANCE). Меньше -> иконка видна только вблизи.
     int addGlobal(int iconType, const Vector3 &position, Colour colour = Colour::White(),
-                  MapIconStyle style = MapIconStyle_Local);
+                  MapIconStyle style = MapIconStyle_Local, float streamDistance = 300.0f);
     void removeGlobal(int iconId);
 
     // --- персональные (слоты 90..99 конкретного игрока) ---
