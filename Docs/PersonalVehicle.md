@@ -23,9 +23,13 @@ write-through — как членство фракций `faction_member`): ка
 источник правды о машинах); этот сервис ведёт, какими моделями владеет игрок и
 какой экземпляр (id) сейчас заспавнен.
 
-- **Запись владения** — `struct OwnedVehicle { int model; int vehicleId = -1; }`:
-  модель машины + id её текущего заспавненного экземпляра в `VehicleService`
-  (`-1` — не заспавнена сейчас; владение всё равно живёт).
+- **Запись владения** — `struct OwnedVehicle { int model; int vehicleId = -1;
+  long long dbId = -1; }`: модель машины + id её текущего заспавненного экземпляра в
+  `VehicleService` (`-1` — не заспавнена сейчас; владение всё равно живёт) + `dbId` —
+  стабильный ключ строки `personal_vehicle` (id), по которому **парковка у дома**
+  ссылается на КОНКРЕТНУЮ машину (см. `Docs/ParkedVehicles.md`). `dbId = -1` — ещё не
+  присвоен (окно между `buy` и приходом `LAST_INSERT_ID`); такую машину нельзя
+  парковать/расшаривать, пока id не лёг.
 - **Владение per-player** — `std::array<std::vector<OwnedVehicle>, MAX_PLAYERS>
   m_owned`. `vector` ради будущего расширения лимита; при
   `MAX_PERSONAL_VEHICLES == 1` держит 0..1 элемент.
@@ -39,10 +43,10 @@ write-through — как членство фракций `faction_member`): ка
   конструкторе. Машины создаются/уничтожаются ТОЛЬКО через `VehicleService::create`
   / `destroy` — сырой SDK сервис не трогает.
 
-## Покупка (`buy`) — только ВЛАДЕНИЕ, write-through
+## Покупка (`buy`) — только ВЛАДЕНИЕ в памяти; write-through делает система
 
-`BuyResult buy(playerId, accountId, model)` — регистрирует владение (память +
-запись в БД), машину НЕ создаёт:
+`BuyResult buy(playerId, accountId, model, outIndex = nullptr)` — регистрирует
+владение в ПАМЯТИ, машину НЕ создаёт и **в БД НЕ пишет сам**:
 
 1. bounds `playerId`, наличие связанного `VehicleService`, `accountId != NO_ACCOUNT`
    (иначе `Unavailable`). `accountId` — СЕРВЕРНЫЙ (из сессии), не от клиента;
@@ -55,10 +59,16 @@ write-through — как членство фракций `faction_member`): ка
    ОТКАЗЫВАЕТСЯ уничтожать (`release()` для `isTrainCarriage` делает early-return),
    поэтому такая машина не исчезла бы на `reset` — это утечка машин; её покупка
    запрещена;
-5. иначе в `m_owned[playerId]` добавляется `OwnedVehicle{model, -1}` (память
-   оптимистична), и **write-through INSERT** `personal_vehicle(account_id, model)`
-   через `DatabaseManager::throwQuery` (ошибка БД лишь логируется в `errorCallback`,
-   как `FactionService::setMember`) → `Ok`. Никакого `create`/спавна на покупке.
+5. иначе в `m_owned[playerId]` добавляется `OwnedVehicle{model, -1, -1}` (память
+   оптимистична), `*outIndex` = индекс добавленной записи → `Ok`.
+
+**Write-through с `dbId`** — раньше INSERT делал сам сервис (`throwQuery`, id не
+возвращал). Теперь INSERT переехал в систему (`PersonalVehicleSystem::persistPurchase`),
+т.к. нужен id строки для парковки у дома: `INSERT ...; SELECT LAST_INSERT_ID()` одной
+сессией того же воркер-таска через `selectQuery<long long>` (`LAST_INSERT_ID`
+connection-scoped, пул держит одну сессию на поток — id корректен), в success-колбэке
+**serial-guard + живой игрок** → `setDbId(playerId, ownedIndex, dbId)`. Сбой INSERT →
+`dbId` остаётся `-1` (парковка/шеринг недоступны до перезахода); ошибка БД логируется.
 
 `PoolFull` из `buy` **недостижим** (`buy` не спавнит) — ветка кода/сообщения
 оставлена для совместимости enum.
@@ -98,6 +108,33 @@ out = nullptr)` — зовёт `ParkingSystem` с СЕРВЕРНЫМИ коор�
 `vehicleId`** (НЕ удаляем запись). Владение сохраняется; машину спавнят заново через
 парковку. БЕЗ `destroy` (машина уже уничтожается). Линейно по игрокам (мало; редкое
 событие).
+
+## Парковка НА МЕСТЕ — detach/attach (машина временно уходит из трекинга)
+
+`bool detach(long long dbId)` / `bool attach(long long dbId, int vehicleId)` — публичные
+методы для `CarMenuSystem` (ре-тег парковки НА МЕСТЕ, см. `Docs/ParkedVehicles.md`).
+Поиск владения по `dbId` (уникален глобально → линейный проход по всем игрокам, как
+`onWorldVehicleDestroyed`; холодный путь). Bounds-safe (`dbId < 0` → `false`).
+
+- **`detach(dbId)`** — обнулить `vehicleId` владения (`→ -1`) БЕЗ `destroy`. При парковке
+  НА МЕСТЕ живой экземпляр остаётся (его держит `ParkedVehicleService`), но выходит из
+  сессионного трекинга Personal: **`reset` на дисконнекте владельца его больше НЕ
+  уничтожит** (иначе припаркованная машина гибла бы — «доступна оффлайн» сломалась бы).
+  Ре-тег `destroy` не зовёт → `onWorldVehicleDestroyed` не приходит → `vehicleId` сам не
+  обнуляется, поэтому `detach` делается ЯВНО. Идемпотентно.
+- **`attach(dbId, vehicleId)`** — вернуть живой экземпляр под сессионный трекинг (снятие
+  с парковки): машина снова обычная личная сессионная (уничтожается на
+  дисконнекте/смерти, как до парковки).
+
+Пока машина припаркована, во владении `vehicleId == -1` — Personal видит её «в гараже»,
+а `/car`/парковка берут live id из `ParkedVehicleService::byDbId(dbId)->vehicleId`.
+
+**Непересечение с деспавном припаркованных.** На конце сессии владельца `reset`
+уничтожает ТОЛЬКО сессионные Personal-экземпляры (`vehicleId != -1`), а
+`ParkedVehicleSystem::onOwnerOffline` — Parked-экземпляры личных припаркованных (их
+`vehicleId` лежит в записи `Parked`, во владении он `-1` после `detach`). Наборы
+`vehicleId` НЕ пересекаются; порядок между `PersonalVehicleSystem` и
+`ParkedVehicleSystem` на конце сессии некритичен, двойного `destroy` одного id нет.
 
 ## Смерть машины — личная ПРОПАДАЕТ (не висит вреком)
 
@@ -142,18 +179,21 @@ onWorldVehicleDestroyed`, который **обнуляет `vehicleId`** зап
 через raw disconnect):
 
 - **`subscribeStart`** → `loadOwnership(player, session)`:
-  `DatabaseManager::selectQuery` — `SELECT model FROM personal_vehicle WHERE
-  account_id = :acc` (запрос И вычитка в `std::vector<int>` на воркере). В колбэке
-  **serial-guard** (`session.serial` совпадает с текущим) + живой игрок
-  (`getPlayers().get`) → `PersonalVehicleService::load(playerId, models)`. Машину
-  НЕ спавним — игрок берёт её на парковке.
+  `DatabaseManager::selectQuery` — `SELECT id, model FROM personal_vehicle WHERE
+  account_id = :acc` (запрос И вычитка в `std::vector<std::pair<long long,int>>` на
+  воркере — `dbId` нужен парковке). В колбэке **serial-guard** (`session.serial`
+  совпадает с текущим) + живой игрок (`getPlayers().get`) →
+  `PersonalVehicleService::load(playerId, rows)`. Машину НЕ спавним — игрок берёт её
+  на парковке.
 - **`subscribeEnd`** → `reset(playerId)`: уничтожить заспавненные машины +
   очистить ПАМЯТЬ владения + снять `loaded`. **БД НЕ трогаем** — право владения
   остаётся в `personal_vehicle` и подтянется на следующем старте.
 
-`load(playerId, models)` кладёт модели как `OwnedVehicle{model, -1}` (БЕЗ записи в
-БД — это зеркало), отфильтровав по `validModel` и лимиту, и ставит `loaded = true`
-(покупка разблокирована). Bounds-safe.
+`load(playerId, rows)` кладёт пары `(dbId, model)` как `OwnedVehicle{model, -1, dbId}`
+(БЕЗ записи в БД — это зеркало), отфильтровав по `validModel` и лимиту, и ставит
+`loaded = true` (покупка разблокирована). Bounds-safe. `setDbId(playerId, ownedIndex,
+dbId)` — проставить id из success-колбэка покупки (только если запись есть и её
+`dbId == -1`, чтобы не перетереть уже присвоенный при reload).
 
 `reset(playerId)` уничтожает ВСЕ заспавненные машины игрока (`vehicleId != -1`)
 через `VehicleService::destroy`, **очищает** `m_owned[playerId]` и снимает
@@ -206,14 +246,16 @@ onWorldVehicleDestroyed`, который **обнуляет `vehicleId`** зап
 - `account_id` — владелец (НЕ уникален: задел под лимит > 1 в будущем, только
   индекс `idx_account`);
 - `model` — модель машины;
-- `id` — суррогатный `AUTO_INCREMENT`: задел под будущее per-vehicle (продажа/тюнинг
-  конкретной машины); в in-memory владении пока не используется.
+- `id` — суррогатный `AUTO_INCREMENT`: стабильный ключ строки, теперь используется как
+  `dbId` в in-memory владении (ссылка парковки у дома на конкретную машину, см.
+  `Docs/ParkedVehicles.md`).
 
 Жизненный цикл:
 
-- **load** — на старте сессии `SELECT model WHERE account_id` → в память
-  `OwnedVehicle{model, -1}` (зеркало, без записи в БД);
-- **write-through** — `buy` INSERT'ит строку сразу (память оптимистична);
+- **load** — на старте сессии `SELECT id, model WHERE account_id` → в память
+  `OwnedVehicle{model, -1, dbId}` (зеркало, без записи в БД);
+- **write-through** — покупка INSERT'ит строку + `LAST_INSERT_ID` → `dbId` в память
+  (делает `PersonalVehicleSystem::persistPurchase`, не сам сервис);
 - **reset** — на конце сессии чистит ТОЛЬКО память + машины; БД остаётся.
 
 Машина-**СУЩНОСТЬ** в мире НЕ персистится: позиция/состояние/тот факт, что машина

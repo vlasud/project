@@ -5,6 +5,7 @@
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/TextLabelService/TextLabelService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
+#include "Services/ParkedVehicleService/ParkedVehicleService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/VehicleWaypointService/VehicleWaypointService.h"
 #include "Systems/BaseSystem.h"
@@ -53,6 +54,7 @@ class ParkingSystem : public BaseSystem
 
     PersonalVehicleService &m_personalService;
     VehicleService &m_vehicleService;
+    ParkedVehicleService &m_parkedService; // припаркованную у дома машину центральная парковка не спавнит
     PickupService &m_pickupService;
     VehicleWaypointService &m_waypointService;
     PlayerDialogService &m_dialogService;

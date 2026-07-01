@@ -1,10 +1,5 @@
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 
-#include "Database/DatabaseManager.h"
-#include "Log/LogManager.h"
-#include <fmt/format.h>
-#include <mysqlx/xdevapi.h>
-
 namespace
 {
 bool validPlayer(int playerId)
@@ -40,7 +35,8 @@ void PersonalVehicleService::bind(VehicleService &vehicleService)
     m_vehicleService = &vehicleService;
 }
 
-PersonalVehicleService::BuyResult PersonalVehicleService::buy(int playerId, AccountId accountId, int model)
+PersonalVehicleService::BuyResult PersonalVehicleService::buy(int playerId, AccountId accountId, int model,
+                                                             int *outIndex)
 {
     if (!validPlayer(playerId) || !m_vehicleService || accountId == PlayerSessionService::NO_ACCOUNT)
     {
@@ -66,23 +62,13 @@ PersonalVehicleService::BuyResult PersonalVehicleService::buy(int playerId, Acco
     }
 
     // Память оптимистична (как FactionService::setMember): сразу регистрируем
-    // ВЛАДЕНИЕ, машина не создаётся (спавн — через парковку).
-    owned.push_back(OwnedVehicle{model, -1});
-
-    // Write-through: право владения уходит в БД сразу (переживёт перезаход). id строки
-    // (AUTO_INCREMENT) в in-memory владении пока не нужен — лимит/спавн на нём не
-    // завязаны. Ошибка БД лишь логируется (память уже обновлена).
-    DatabaseManager::throwQuery(
-        [accountId, model](mysqlx::Schema schema)
-        {
-            schema.getTable("personal_vehicle").insert("account_id", "model").values(accountId, model).execute();
-        },
-        [accountId, model](const std::string &error)
-        {
-            LogManager::log(Error, fmt::format("PersonalVehicleService: failed to persist vehicle (account {}, "
-                                               "model {}): {}",
-                                               accountId, model, error));
-        });
+    // ВЛАДЕНИЕ (dbId=-1, проставит система из LAST_INSERT_ID), машина не создаётся
+    // (спавн — через парковку). Write-through INSERT делает система (ей нужен dbId).
+    if (outIndex)
+    {
+        *outIndex = static_cast<int>(owned.size());
+    }
+    owned.push_back(OwnedVehicle{model, -1, -1});
     return BuyResult::Ok;
 }
 
@@ -167,7 +153,51 @@ bool PersonalVehicleService::atLimit(int playerId) const
     return count(playerId) >= MAX_PERSONAL_VEHICLES;
 }
 
-void PersonalVehicleService::load(int playerId, const std::vector<int> &models)
+bool PersonalVehicleService::detach(long long dbId)
+{
+    if (dbId < 0)
+    {
+        return false; // мусорный/непроставленный dbId — искать нечего
+    }
+    // dbId уникален глобально -> линейный проход по всем игрокам (как
+    // onWorldVehicleDestroyed, холодный путь). Обнуляем vehicleId БЕЗ destroy: reset на
+    // дисконнекте владельца теперь не тронет припаркованную (её id уже -1).
+    for (auto &owned : m_owned)
+    {
+        for (OwnedVehicle &entry : owned)
+        {
+            if (entry.dbId == dbId)
+            {
+                entry.vehicleId = -1;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool PersonalVehicleService::attach(long long dbId, int vehicleId)
+{
+    if (dbId < 0)
+    {
+        return false;
+    }
+    // Снятие с парковки: вернуть живой экземпляр под сессионный жизненный цикл владения.
+    for (auto &owned : m_owned)
+    {
+        for (OwnedVehicle &entry : owned)
+        {
+            if (entry.dbId == dbId)
+            {
+                entry.vehicleId = vehicleId;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void PersonalVehicleService::load(int playerId, const std::vector<std::pair<long long, int>> &rows)
 {
     if (!validPlayer(playerId))
     {
@@ -176,9 +206,10 @@ void PersonalVehicleService::load(int playerId, const std::vector<int> &models)
     // Зеркало из БД: память перед этим уже пуста (reset на коннекте/конце прошлой
     // сессии). Кладём владения БЕЗ записи в БД (это загрузка, не покупка). Модель из
     // БД фильтруем тем же validModel — мусорная/устаревшая запись не даст спавнить.
+    // dbId (id строки) сохраняем — по нему шеринг ссылается на конкретную машину.
     std::vector<OwnedVehicle> &owned = m_owned[playerId];
     owned.clear();
-    for (const int model : models)
+    for (const auto &[dbId, model] : rows)
     {
         if (static_cast<int>(owned.size()) >= MAX_PERSONAL_VEHICLES)
         {
@@ -186,10 +217,29 @@ void PersonalVehicleService::load(int playerId, const std::vector<int> &models)
         }
         if (validModel(model))
         {
-            owned.push_back(OwnedVehicle{model, -1});
+            owned.push_back(OwnedVehicle{model, -1, dbId});
         }
     }
     m_loaded[playerId] = true; // зеркало легло — покупка разблокирована
+}
+
+void PersonalVehicleService::setDbId(int playerId, int ownedIndex, long long dbId)
+{
+    if (!validPlayer(playerId))
+    {
+        return;
+    }
+    std::vector<OwnedVehicle> &owned = m_owned[playerId];
+    if (ownedIndex < 0 || ownedIndex >= static_cast<int>(owned.size()))
+    {
+        return; // индекс сдвинулся (reset/reload между запуском и колбэком) — no-op
+    }
+    // Не перетираем уже присвоенный id (загрузка могла лечь поверх, если игрок
+    // перезашёл): проставляем только «пустой» dbId.
+    if (owned[ownedIndex].dbId == -1)
+    {
+        owned[ownedIndex].dbId = dbId;
+    }
 }
 
 void PersonalVehicleService::reset(int playerId)

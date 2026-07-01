@@ -9,6 +9,7 @@
 #include "Services/FactionService/FactionService.h"
 #include "Services/FamilyService/FamilyService.h"
 #include "Services/HouseService/HouseService.h"
+#include "Services/ParkedVehicleService/ParkedVehicleService.h"
 #include "Services/InventoryService/InventoryService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/Core/AudioService/AudioService.h"
@@ -124,6 +125,14 @@ void ServiceRegister::registerServices()
     // JSON-персист в houses.json рядом с сервером. Без зависимостей; загрузку на
     // старте, пикапы/иконки и дев-команду /house делает HouseSystem.
     registerService<HouseService>();
+    // Припаркованные у дома машины (бизнес-фича, не Core): источник правды о том, какие
+    // личные машины припаркованы у дома владельца (личная owner-only ИЛИ расшаренная
+    // семье — режим доступа поверх той же парковки; собственность остаётся у владельца).
+    // Зависит от VehicleService и FamilyService (bind в конструкторе ParkedVehicleSystem).
+    // Персист в parked_vehicle (write-through); машины грузятся на старте строго после
+    // семей. Логически после Family/Personal (порядок регистрации на доступность не
+    // влияет — все сервисы до фазы initialize).
+    registerService<ParkedVehicleService>();
     // Выбор точки спавна игрока (/setspawn): источник правды о выборе (вокзал/
     // дом) + write-through в БД (player_spawn). Без зависимостей; загрузку
     // по сессии, команду/диалог и резолв точки делает SpawnChoiceSystem.

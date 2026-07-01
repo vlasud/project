@@ -19,6 +19,7 @@
 #include "Systems/FactionSystem/FactionSystem.h"
 #include "Systems/FamilySystem/FamilySystem.h"
 #include "Systems/HouseSystem/HouseSystem.h"
+#include "Systems/ParkedVehicleSystem/ParkedVehicleSystem.h"
 #include "Systems/SpawnChoiceSystem/SpawnChoiceSystem.h"
 #include "Systems/Factions/ArmyAirForceSystem/ArmyAirForceSystem.h"
 #include "Systems/Factions/ArmyGroundSystem/ArmyGroundSystem.h"
@@ -267,6 +268,17 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // PlayerDialogSystem) тоже инициализируются раньше — к моменту, когда придёт
     // async-колбэк загрузки и начнёт заводить пикапы/иконки, всё уже подключено.
     m_systems.push_back(std::make_unique<HouseSystem>(core, serviceRegister));
+    // ParkedVehicleSystem (припаркованные у дома машины, бизнес-фича вне Core) после
+    // FamilySystem (загрузка parked_vehicle идёт через FamilyService::subscribeLoaded —
+    // строго после семей: они нужны для гейта РАСШАРЕННЫХ; обе загрузки async, порядком
+    // регистрации гарантию не дать), ParkingSystem и CarMenuSystem (они лишь берут
+    // ParkedVehicleService из реестра — сам сервис сконструирован в ServiceRegister). В
+    // конструкторе связывает ParkedVehicleService с VehicleService/FamilyService (bind),
+    // подписывается на driver-gate (чужой не за руль) и уничтожение машин. VehicleSystem
+    // (VehicleService связан с пулом) зарегистрирован намного раньше — к async-колбэку
+    // загрузки create спавнит машины у домов успешно. Спавн на старте + гейт O(1),
+    // не per-tick.
+    m_systems.push_back(std::make_unique<ParkedVehicleSystem>(core, serviceRegister));
     // SpawnChoiceSystem (/setspawn, бизнес-фича вне Core) после: PlayerSessionSystem
     // (подписки на старт/конец сессии), PlayerSpawnSystem (спавн-сервис),
     // FactionSystem + конкретные фракции (спавны орг уже зарегистрированы) и

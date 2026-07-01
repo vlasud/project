@@ -54,7 +54,8 @@ FamilySystem::FamilySystem(ICore &core, const ServiceRegister &serviceRegister)
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_chatService(serviceRegister.getService<PlayerChatService>()),
-      m_houseService(serviceRegister.getService<HouseService>())
+      m_houseService(serviceRegister.getService<HouseService>()),
+      m_parkedService(serviceRegister.getService<ParkedVehicleService>())
 {
     m_sessionService.subscribeStart(
         [this](IPlayer &player, const PlayerSessionService::Session &session)
@@ -67,7 +68,7 @@ FamilySystem::FamilySystem(ICore &core, const ServiceRegister &serviceRegister)
 
     commands.add("family", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showMenu(player); },
-                 {}, "меню семьи: создать, состав, пригласить, выйти", PlayerCommandService::HelpCategory::Misc);
+                 {}, "меню семьи: состав, приглашение, машины, выход", PlayerCommandService::HelpCategory::Misc);
 
     commands.add("f", {{PlayerCommandService::Param::String, "текст"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -205,6 +206,9 @@ std::vector<FamilySystem::Action> FamilySystem::buildActions(int playerId) const
         return actions;
     }
     actions.push_back(Action::Roster);
+    // «Машины семьи» видит любой член (просмотр списка). Забрать машину может только
+    // владелец — гейт в обработчике, не в показе пункта. Приглашение — только владельцу.
+    actions.push_back(Action::Vehicles);
     if (m_familyService.isOwner(playerId))
         actions.push_back(Action::Invite);
     actions.push_back(Action::Leave);
@@ -232,6 +236,9 @@ void FamilySystem::showMenu(IPlayer &player)
             break;
         case Action::Invite:
             body += "Пригласить игрока\n";
+            break;
+        case Action::Vehicles:
+            body += "Машины семьи\n";
             break;
         case Action::Leave:
             body += "Выйти из семьи\n";
@@ -280,6 +287,9 @@ void FamilySystem::showMenu(IPlayer &player)
                 break;
             case Action::Invite:
                 showInviteInput(*player);
+                break;
+            case Action::Vehicles:
+                showFamilyVehicles(*player);
                 break;
             case Action::Leave:
                 showLeaveConfirm(*player);
@@ -585,7 +595,17 @@ void FamilySystem::showLeaveConfirm(IPlayer &player)
                 return;
             }
             const std::string familyName = family->name; // копия до возможного роспуска
+            // Захват до leaveFamily — после него слоты/владелец обнулятся.
+            const FamilyService::AccountId accountId = session->accountId;
             const bool disbanded = m_familyService.leaveFamily(*player, session->accountId);
+            // Крайние случаи припаркованных машин: последний член ушёл (семья распущена)
+            // — снять шеринг у ВСЕХ её машин; иначе вышел владелец машин — снять шеринг у
+            // ЕГО расшаренных (для обычного члена без машин — no-op). В обоих случаях
+            // машины ОСТАЮТСЯ припаркованы ЛИЧНО у дома (экземпляры не уничтожаются).
+            if (disbanded)
+                m_parkedService.onFamilyDissolved(familyId);
+            else
+                m_parkedService.onOwnerLeftFamily(accountId);
             player->sendClientMessage(INFO_COLOUR, u(fmt::format("Вы вышли из семьи «{}»", familyName)));
             if (!disbanded)
             {
@@ -651,10 +671,158 @@ void FamilySystem::showDisbandConfirm(IPlayer &player)
             if (!m_familyService.disbandFamily(playerId))
                 return;
 
+            // Роспуск: снять шеринг у всех машин семьи (UPDATE family_id -> NO_FAMILY).
+            // Машины ОСТАЮТСЯ припаркованы ЛИЧНО у дома владельцев (не уничтожаются).
+            m_parkedService.onFamilyDissolved(familyId);
+
             const std::string note = u(fmt::format("Семья «{}» распущена", familyName));
             for (const int memberId : onlineMembers)
             {
                 if (IPlayer *member = m_core.getPlayers().get(memberId))
+                    member->sendClientMessage(INFO_COLOUR, note);
+            }
+        });
+}
+
+// ------------------------------------------------------------------ семейные машины
+
+void FamilySystem::showFamilyVehicles(IPlayer &player)
+{
+    const int playerId = player.getID();
+    // Список открыт любому члену (только просмотр). Забрать машину — гейт владельца
+    // на клике, ниже. Без семьи «Машины семьи» в меню не показывается вовсе.
+    const int familyId = m_familyService.getFamilyId(playerId);
+    if (familyId == FamilyService::NO_FAMILY)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Вы не состоите в семье"));
+        return;
+    }
+
+    // Список расшаренных семье машин. dbId идентифицирует машину — захватываем вектор
+    // dbId'ов (listItem -> dbId), а не доверяем listItem как id (ре-валидация на клике).
+    std::vector<long long> dbIds = m_parkedService.parkedOfFamily(familyId);
+    if (dbIds.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("В семье пока нет расшаренных машин"));
+        return;
+    }
+
+    std::string body;
+    for (std::size_t i = 0; i < dbIds.size(); ++i)
+    {
+        const ParkedVehicleService::Parked *parked = m_parkedService.byDbId(dbIds[i]);
+        const int model = parked ? parked->model : 0;
+        body += fmt::format("{}. Модель {}\n", i + 1, model);
+    }
+    if (!body.empty())
+        body.pop_back();
+
+    Dialog dialog;
+    dialog.style = DialogStyle_LIST;
+    dialog.title = u("Машины семьи");
+    dialog.body = u(body);
+    dialog.leftButton = u("Выбрать");
+    dialog.rightButton = u("Назад");
+
+    m_dialogService.show(
+        player, dialog,
+        [this, playerId, dbIds](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showMenu(*player); // «Назад» — в меню семьи
+                return;
+            }
+            // Рядовой член только смотрит: закрыть доступ может лишь владелец. Отказ — с
+            // путём: машиной он и так пользуется, тупика нет.
+            if (!m_familyService.isOwner(playerId))
+            {
+                player->sendClientMessage(
+                    ERROR_COLOUR,
+                    u("Закрыть доступ семьи может только владелец семьи. Эти машины доступны всей семье - просто "
+                      "садитесь за руль"));
+                return;
+            }
+            if (listItem < 0 || static_cast<std::size_t>(listItem) >= dbIds.size())
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Эта машина больше не расшарена семье"));
+                return;
+            }
+            const long long dbId = dbIds[listItem];
+            // Доступ мог быть снят (роспуск/выход) между показом и кликом. familyId —
+            // из СЕРВЕРНОГО состояния на момент клика (мог смениться, если владелец
+            // покинул/сменил семью, пока диалог открыт).
+            if (m_parkedService.parkedMode(dbId) != m_familyService.getFamilyId(playerId))
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Эта машина больше не расшарена семье"));
+                return;
+            }
+            showTakeVehicleConfirm(*player, dbId);
+        });
+}
+
+void FamilySystem::showTakeVehicleConfirm(IPlayer &player, long long dbId)
+{
+    const ParkedVehicleService::Parked *parked = m_parkedService.byDbId(dbId);
+    if (!parked)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Эта машина больше не расшарена семье"));
+        return;
+    }
+    const int model = parked->model;
+
+    Dialog dialog;
+    dialog.style = DialogStyle_MSGBOX;
+    dialog.title = u("Забрать машину");
+    dialog.body = u(fmt::format("Закрыть доступ семьи к машине (модель {})? Она останется припаркованной у вашего "
+                                "дома, но водить сможете только вы.",
+                                model));
+    dialog.leftButton = u("Забрать");
+    dialog.rightButton = u("Назад");
+
+    m_dialogService.show(
+        player, dialog,
+        [this, playerId = player.getID(), dbId](DialogResponse response, int, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showFamilyVehicles(*player); // «Назад» — в список машин
+                return;
+            }
+            // Перепроверка на момент клика: владелец И машина ещё расшарена ЭТОЙ семье.
+            // familyId из СЕРВЕРНОГО состояния, dbId захвачен (не listItem).
+            if (!m_familyService.isOwner(playerId))
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Закрыть доступ семьи может только владелец семьи"));
+                return;
+            }
+            const int familyId = m_familyService.getFamilyId(playerId);
+            if (m_parkedService.parkedMode(dbId) != familyId)
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Эта машина больше не расшарена семье"));
+                return;
+            }
+            // unshareFromFamily — ТОЛЬКО UPDATE family_id -> NO_FAMILY: машина остаётся
+            // припаркованной ЛИЧНО у дома владельца (тот же экземпляр Owner::Parked, лишь
+            // гейт доступа сужается до владельца). НЕ уничтожает машину.
+            const std::string familyName = m_familyService.getFamily(familyId)
+                                               ? m_familyService.getFamily(familyId)->name
+                                               : std::string("?");
+            m_parkedService.unshareFromFamily(dbId);
+            player->sendClientMessage(INFO_COLOUR,
+                                      u("Доступ семьи закрыт. Машина осталась припаркованной у вашего дома"));
+
+            // Уведомить онлайн-членов семьи (исчезновение общей машины иначе — как баг).
+            const std::string note = u(fmt::format("[{}] Владелец закрыл доступ к семейной машине", familyName));
+            for (IPlayer *member : m_core.getPlayers().entries())
+            {
+                if (member->getID() != playerId && m_familyService.getFamilyId(member->getID()) == familyId)
                     member->sendClientMessage(INFO_COLOUR, note);
             }
         });

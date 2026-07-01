@@ -6,6 +6,7 @@
 #include "player.hpp"
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -84,6 +85,19 @@ class FamilyService final : public IService
     // id семьи по аккаунту (в т.ч. оффлайн): NO_FAMILY — аккаунт не в семье.
     int familyByAccount(AccountId accountId) const;
 
+    // Завершена ли стартовая загрузка семей+членов (m_loaded после finalizeLoad).
+    bool isLoaded() const
+    {
+        return m_loaded;
+    }
+    // Подписка на ЗАВЕРШЕНИЕ стартовой загрузки семей (одноразовое событие). Если
+    // семьи уже загружены к моменту подписки — колбэк вызывается СРАЗУ (поздний
+    // подписчик не пропустит one-shot). ParkedVehicleSystem подписывается, чтобы
+    // грузить parked_vehicle СТРОГО после семей: обе загрузки async, порядком
+    // регистрации систем гарантию дать нельзя (детерминированный порядок — только так).
+    using LoadedObserver = std::function<void()>;
+    void subscribeLoaded(LoadedObserver observer);
+
     // --- операции (write-through в БД); требуют активной сессии у игрока ---
     // Создать семью с владельцем-членом player. name — utf-8 (НЕ санитизированное:
     // чистку и валидацию делает сервис).
@@ -141,6 +155,9 @@ class FamilyService final : public IService
     // конфликтовал бы с незагруженными строками (рассинхрон память<->БД). Ставится
     // true ТОЛЬКО в finalizeLoad (success-колбэк); error-путь оставляет false.
     bool m_loaded = false;
+
+    // One-shot подписчики на завершение стартовой загрузки семей.
+    std::vector<LoadedObserver> m_loadedObservers;
 
     // Онлайн-слот: familyId игрока в сети (NO_FAMILY — не в семье / слот свободен).
     std::array<int, MAX_PLAYERS> m_playerFamily;

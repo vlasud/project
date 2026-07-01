@@ -129,6 +129,11 @@ void VehicleService::subscribeMoved(VehicleMoveObserver observer)
     m_movedObservers.push_back(std::move(observer));
 }
 
+void VehicleService::subscribeDriverGate(DriverGateObserver observer)
+{
+    m_driverGateObservers.push_back(std::move(observer));
+}
+
 void VehicleService::notifyMoved(IVehicle &vehicle, Vector3 acceptedPosition)
 {
     for (auto &obs : m_movedObservers)
@@ -427,6 +432,24 @@ void VehicleService::setLocked(IVehicle &vehicle, bool locked)
     vehicle.setParams(params);
 }
 
+void VehicleService::setSpawnPosition(IVehicle &vehicle, Vector3 position, float angle)
+{
+    const int vehicleId = vehicle.getID();
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicleState[vehicleId].exists)
+        return;
+    // NaN/Inf в spawnData не пускаем (симметрично validateUnoccupied): битая точка
+    // осела бы в spawnData и death-респавн ядра выкинул бы машину в никуда.
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z) ||
+        !std::isfinite(angle))
+        return;
+    // getSpawnData() отдаёт const&, присваивание в локальную — КОПИЯ; оригинал не
+    // мутируется до setSpawnData. Меняем только точку/угол — прочие поля сохранены.
+    VehicleSpawnData data = vehicle.getSpawnData();
+    data.position = position;
+    data.zRotation = angle;
+    vehicle.setSpawnData(data);
+}
+
 void VehicleService::addComponent(IVehicle &vehicle, int component)
 {
     vehicle.addComponent(component);
@@ -485,6 +508,31 @@ void VehicleService::bindOccupant(IPlayer &player, PlayerState newState)
         if (occupant.seat == 0 && occupant.vehicleId >= 0)
         {
             m_vehicleState[occupant.vehicleId].driverId = playerId;
+
+            // Игрок стал водителем — прогоняем вето доступа (членство/оплата и т.п.).
+            // Если хоть один наблюдатель отказал, откатываем привязку водителя И
+            // occupant ДО высадки: removeFromVehicle(force) через clearTasks может
+            // синхронно/на след. тике дать вложенный state-change (Driver->OnFoot),
+            // и он обязан увидеть уже чистый OnFoot-слот (иначе повторно снимет чужую
+            // привязку). Гейт зовём ТОЛЬКО в driver-ветке — пассажиры не гейтятся.
+            if (vehicle && !m_driverGateObservers.empty())
+            {
+                bool allowed = true;
+                for (auto &gate : m_driverGateObservers)
+                {
+                    if (!gate(player, *vehicle))
+                    {
+                        allowed = false;
+                        break;
+                    }
+                }
+                if (!allowed)
+                {
+                    m_vehicleState[occupant.vehicleId].driverId = -1;
+                    occupant = {};
+                    player.removeFromVehicle(true); // отменяет и место, и вход
+                }
+            }
         }
         return;
     }

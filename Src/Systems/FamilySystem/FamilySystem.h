@@ -4,6 +4,7 @@
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/FamilyService/FamilyService.h"
 #include "Services/HouseService/HouseService.h"
+#include "Services/ParkedVehicleService/ParkedVehicleService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
@@ -46,6 +47,9 @@ class FamilySystem : public BaseSystem
     void showInviteConfirm(IPlayer &invited, int inviterId, int familyId, std::uint32_t inviterSerial);
     void showLeaveConfirm(IPlayer &player);
     void showDisbandConfirm(IPlayer &player);      // только владелец
+    void showFamilyVehicles(IPlayer &player);      // только владелец: список расшаренных машин
+    // Под-диалог подтверждения «Забрать» машину dbId из общего пользования семьи.
+    void showTakeVehicleConfirm(IPlayer &player, long long dbId);
 
     // Действия меню (порядок зависит от состояния — диспетчер ведём по вектору,
     // не по магическим индексам).
@@ -54,6 +58,7 @@ class FamilySystem : public BaseSystem
         Create,
         Roster,
         Invite,
+        Vehicles,
         Leave,
         Disband,
     };
@@ -65,4 +70,5 @@ class FamilySystem : public BaseSystem
     PlayerDialogService &m_dialogService;
     PlayerChatService &m_chatService;
     HouseService &m_houseService; // гейт создания семьи: нужен дом в собственности
+    ParkedVehicleService &m_parkedService; // семейный парк (список расшаренных / забрать = снять шеринг)
 };

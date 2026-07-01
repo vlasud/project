@@ -48,6 +48,19 @@ int FamilyService::familyByAccount(AccountId accountId) const
     return it != m_accountFamily.end() ? it->second : NO_FAMILY;
 }
 
+void FamilyService::subscribeLoaded(LoadedObserver observer)
+{
+    if (!observer)
+        return;
+    // Поздняя подписка после загрузки — колбэк сразу (one-shot не теряется).
+    if (m_loaded)
+    {
+        observer();
+        return;
+    }
+    m_loadedObservers.push_back(std::move(observer));
+}
+
 FamilyService::Family *FamilyService::findFamily(int familyId)
 {
     const auto it = m_families.find(familyId);
@@ -444,4 +457,9 @@ void FamilyService::finalizeLoad()
     // Только теперь m_nextId безопасен (по max(id) из БД) — открываем create/join.
     m_loaded = true;
     LogManager::log(Message, fmt::format("FamilyService: {} families loaded, nextId {}", m_families.size(), m_nextId));
+    // Оповещаем one-shot подписчиков (ParkedVehicleSystem грузит parked_vehicle строго
+    // после семей). Ровно один раз — finalizeLoad вызывается однократно.
+    for (const LoadedObserver &observer : m_loadedObservers)
+        observer();
+    m_loadedObservers.clear();
 }

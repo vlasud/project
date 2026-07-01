@@ -63,6 +63,7 @@ ParkingSystem::ParkingSystem(ICore &core, const ServiceRegister &serviceRegister
     : BaseSystem(core, serviceRegister),
       m_personalService(serviceRegister.getService<PersonalVehicleService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>()),
+      m_parkedService(serviceRegister.getService<ParkedVehicleService>()),
       m_pickupService(serviceRegister.getService<PickupService>()),
       m_waypointService(serviceRegister.getService<VehicleWaypointService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
@@ -102,14 +103,19 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
         return;
     }
 
-    // Диалог LIST: пункт — «{n}. Модель {model}  —  {статус}» (статус: «в гараже»
-    // при vehicleId==-1, «вызвана» иначе — единый словарь с /car). Имя машины SA не
-    // показываем (таблицы имён в гейммоде нет) — «Модель {id}».
+    // Диалог LIST: пункт — «{n}. Модель {model}  —  {статус}» (статус: «у дома»
+    // (припаркована лично), «в семье» (расшарена), «в гараже» (не в мире), «вызвана»
+    // (в мире) — единый словарь с /car по parkedMode). Имя машины SA не показываем
+    // (таблицы имён в гейммоде нет) — «Модель {id}».
     std::string body;
     for (std::size_t i = 0; i < owned.size(); ++i)
     {
         const PersonalVehicleService::OwnedVehicle &entry = owned[i];
-        const char *status = entry.vehicleId == -1 ? "в гараже" : "вызвана";
+        const int mode = m_parkedService.parkedMode(entry.dbId);
+        const char *status = mode == FamilyService::NO_FAMILY ? "у дома"
+                             : mode != -1                     ? "в семье"
+                             : entry.vehicleId == -1          ? "в гараже"
+                                                              : "вызвана";
         body += fmt::format("{}. Модель {}  —  {}\n", i + 1, entry.model, status);
     }
 
@@ -128,6 +134,14 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
             if (listItem < 0 || listItem >= static_cast<int>(owned.size()))
             {
                 player->sendClientMessage(ERROR_COLOUR, u("Эта машина больше недоступна"));
+                return;
+            }
+            // Припаркованную у дома машину (личную ИЛИ расшаренную) центральная
+            // парковка НЕ спавнит: она статична у дома (экземпляр Owner::Parked).
+            // Личный спавн вернул бы дубль.
+            if (m_parkedService.isParked(owned[listItem].dbId))
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Эта машина припаркована у дома"));
                 return;
             }
             spawnAtParking(*player, listItem);

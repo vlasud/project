@@ -37,8 +37,13 @@ class PersonalVehicleSystem : public BaseSystem
     void loadOwnership(IPlayer &player, const PlayerSessionService::Session &session);
 
     // ДЕБАГ-покупка: модель из аргумента, accountId из сессии. Регистрирует владение
-    // (без спавна) с write-through в БД.
+    // (без спавна) в памяти, затем персист (persistPurchase).
     void buyDebug(IPlayer &player, int model);
+
+    // Write-through покупки: INSERT строки владения + LAST_INSERT_ID -> setDbId в
+    // память (serial-guard + живой игрок). ownedIndex — индекс записи, добавленной
+    // buy() (захвачен в момент запуска). Ошибка БД лишь логируется (память уже есть).
+    void persistPurchase(int playerId, PlayerSessionService::AccountId accountId, int model, int ownedIndex);
 
     // Машина умерла (HP -> 0). Если ЛИЧНАЯ (Owner::Player) — уничтожаем её, чтобы
     // она пропала (не висела вреком). Чужие owner-теги (Faction/Work) не трогаем.

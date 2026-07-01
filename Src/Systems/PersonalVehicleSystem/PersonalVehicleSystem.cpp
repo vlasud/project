@@ -5,8 +5,10 @@
 #include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
+#include <cstdint>
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
+#include <utility>
 #include <vector>
 
 namespace
@@ -66,24 +68,26 @@ PersonalVehicleSystem::PersonalVehicleSystem(ICore &core, const ServiceRegister 
 
 void PersonalVehicleSystem::loadOwnership(IPlayer &player, const PlayerSessionService::Session &session)
 {
-    // SELECT моделей владения аккаунта; запрос И вычитка — на воркере (возвращаем
-    // владеющий vector<int>, mysqlx-объект границу потока не пересекает).
-    DatabaseManager::selectQuery<std::vector<int>>(
+    // SELECT (id, model) владения аккаунта; запрос И вычитка — на воркере (возвращаем
+    // владеющий vector<pair>, mysqlx-объект границу потока не пересекает). dbId (id
+    // строки) нужен шерингу — по нему он ссылается на конкретную машину.
+    using OwnershipRow = std::pair<long long, int>;
+    DatabaseManager::selectQuery<std::vector<OwnershipRow>>(
         [accountId = session.accountId](mysqlx::Schema schema)
         {
             mysqlx::RowResult result = schema.getTable("personal_vehicle")
-                                           .select("model")
+                                           .select("id", "model")
                                            .where("account_id = :account")
                                            .bind("account", accountId)
                                            .execute();
-            std::vector<int> models;
+            std::vector<OwnershipRow> rows;
             for (mysqlx::Row row = result.fetchOne(); row; row = result.fetchOne())
             {
-                models.push_back(row.get(0).get<int>());
+                rows.emplace_back(row.get(0).get<std::int64_t>(), row.get(1).get<int>());
             }
-            return models;
+            return rows;
         },
-        [this, playerId = player.getID(), serial = session.serial](std::vector<int> models)
+        [this, playerId = player.getID(), serial = session.serial](std::vector<OwnershipRow> rows)
         {
             // Serial-guard: в слоте мог оказаться другой игрок/другая сессия.
             const PlayerSessionService::Session *current = m_sessionService.get(playerId);
@@ -94,7 +98,7 @@ void PersonalVehicleSystem::loadOwnership(IPlayer &player, const PlayerSessionSe
                 return;
             // Машину НЕ спавним — игрок берёт её на парковке. load снимает гейт
             // покупки (loaded=true).
-            m_personalService.load(playerId, models);
+            m_personalService.load(playerId, rows);
         },
         [](const std::string &error)
         {
@@ -134,13 +138,17 @@ void PersonalVehicleSystem::buyDebug(IPlayer &player, int model)
     }
 
     // Лимит, модель и гейт загрузки валидирует сервис (клиенту не доверяем). Машина
-    // НЕ спавнится — только регистрируется владение (write-through в БД); спавн —
-    // через парковку.
-    const PersonalVehicleService::BuyResult result = m_personalService.buy(playerId, accountId, model);
+    // НЕ спавнится — только регистрируется владение в памяти; спавн — через парковку.
+    int ownedIndex = -1;
+    const PersonalVehicleService::BuyResult result = m_personalService.buy(playerId, accountId, model, &ownedIndex);
 
     switch (result)
     {
     case PersonalVehicleService::BuyResult::Ok:
+        // Write-through: INSERT строки владения + возврат её id (LAST_INSERT_ID той же
+        // сессией того же воркер-таска — connection-scoped, корректен). dbId нужен
+        // шерингу; проставляем его в память в success-колбэке с serial-guard.
+        persistPurchase(playerId, accountId, model, ownedIndex);
         player.sendClientMessage(
             INFO_COLOUR, u(fmt::format("Личная машина куплена (модель {}). Возьмите её на парковке", model)));
         break;
@@ -162,4 +170,48 @@ void PersonalVehicleSystem::buyDebug(IPlayer &player, int model)
         player.sendClientMessage(ERROR_COLOUR, u("Покупка сейчас недоступна"));
         break;
     }
+}
+
+void PersonalVehicleSystem::persistPurchase(int playerId, PlayerSessionService::AccountId accountId, int model,
+                                            int ownedIndex)
+{
+    if (ownedIndex < 0)
+    {
+        return; // сервис не отдал индекс (не Ok) — писать нечего
+    }
+    const PlayerSessionService::Session *session = m_sessionService.get(playerId);
+    const std::uint32_t serial = session ? session->serial : 0;
+
+    // INSERT владения + возврат dbId одной сессией того же воркер-таска: LAST_INSERT_ID
+    // connection-scoped, а пул держит одну сессию на поток (см. DatabaseManager) —
+    // корректный id. Возвращаем dbId (или -1 при сбое) на главный поток.
+    DatabaseManager::selectQuery<long long>(
+        [accountId, model](mysqlx::Schema schema) -> long long
+        {
+            mysqlx::Session &s = schema.getSession();
+            s.sql("INSERT INTO personal_vehicle (account_id, model) VALUES (?, ?)").bind(accountId).bind(model).execute();
+            mysqlx::SqlResult r = s.sql("SELECT LAST_INSERT_ID()").execute();
+            mysqlx::Row row = r.fetchOne();
+            return row ? row.get(0).get<std::int64_t>() : static_cast<long long>(-1);
+        },
+        [this, playerId, serial, ownedIndex](long long dbId)
+        {
+            if (dbId < 0)
+            {
+                return; // id не получен — запись останется dbId=-1 (шеринг недоступен до перезахода)
+            }
+            // Serial-guard: слот мог занять другой игрок/сессия, пока шёл async-INSERT.
+            const PlayerSessionService::Session *current = m_sessionService.get(playerId);
+            if (!current || current->serial != serial)
+                return;
+            if (!m_core.getPlayers().get(playerId))
+                return; // игрок вышел
+            m_personalService.setDbId(playerId, ownedIndex, dbId);
+        },
+        [accountId, model](const std::string &error)
+        {
+            LogManager::log(Error, fmt::format("PersonalVehicleSystem: failed to persist vehicle (account {}, "
+                                               "model {}): {}",
+                                               accountId, model, error));
+        });
 }

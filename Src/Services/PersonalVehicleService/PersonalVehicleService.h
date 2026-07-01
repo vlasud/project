@@ -6,6 +6,7 @@
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "types.hpp"
 #include <array>
+#include <utility>
 #include <vector>
 
 class PersonalVehicleSystem;
@@ -41,10 +42,14 @@ class PersonalVehicleService final : public IService
 
     // Одна запись владения: модель машины + id её текущего заспавненного экземпляра
     // в VehicleService (-1 — не заспавнена сейчас; владение всё равно живёт).
+    // dbId — стабильный ключ строки personal_vehicle (id), по которому шеринг семье
+    // ссылается на КОНКРЕТНУЮ машину. -1 — ещё не присвоен (окно между buy и приходом
+    // LAST_INSERT_ID из async-INSERT); такую машину нельзя расшарить, пока id не лёг.
     struct OwnedVehicle
     {
         int model = 0;
         int vehicleId = -1;
+        long long dbId = -1;
     };
 
     // Привязать VehicleService (источник правды о машинах). Зовётся
@@ -63,12 +68,16 @@ class PersonalVehicleService final : public IService
         Unavailable   // нет игрока/сервис не связан (внутреннее предусловие; из штатной команды недостижимо)
     };
 
-    // Купить личную машину игроку — регистрирует ТОЛЬКО ВЛАДЕНИЕ (модель): память +
-    // write-through INSERT в БД (personal_vehicle по accountId). Машину НЕ создаёт
-    // (спавн — через парковку). Гейт loaded (NotLoaded, пока зеркало из БД не легло),
-    // лимит и модель валидируются ЗДЕСЬ (клиенту не доверяем). accountId — серверный
-    // (из сессии), не от клиента. При Ok добавляет OwnedVehicle{model, -1}.
-    BuyResult buy(int playerId, AccountId accountId, int model);
+    // Купить личную машину игроку — регистрирует ТОЛЬКО ВЛАДЕНИЕ (модель) в ПАМЯТИ
+    // (оптимистично, как FactionService::setMember). Машину НЕ создаёт (спавн — через
+    // парковку) и В БД НЕ ПИШЕТ: write-through INSERT делает вызывающая система
+    // (PersonalVehicleSystem) через selectQuery<LAST_INSERT_ID>, чтобы вернуть dbId и
+    // проставить его в запись (setDbId). Гейт loaded (NotLoaded, пока зеркало из БД не
+    // легло), лимит и модель валидируются ЗДЕСЬ (клиенту не доверяем). accountId —
+    // серверный (из сессии), не от клиента. При Ok добавляет OwnedVehicle{model,-1,-1}
+    // и, если outIndex != nullptr, пишет туда индекс добавленной записи (для колбэка
+    // проставления dbId).
+    BuyResult buy(int playerId, AccountId accountId, int model, int *outIndex = nullptr);
 
     // Список владений игрока (для диалога парковки; bounds-safe — пустой статический
     // для невалидного id).
@@ -100,13 +109,32 @@ class PersonalVehicleService final : public IService
     // Достигнут ли лимит игроком (bounds-safe; false для невалидного id).
     bool atLimit(int playerId) const;
 
+    // --- ре-тег парковки НА МЕСТЕ (зовёт CarMenuSystem, поиск по dbId) ---
+    // Отвязать владение (по dbId) от сессионного трекинга: vehicleId -> -1 БЕЗ destroy.
+    // Для парковки НА МЕСТЕ: живой экземпляр остаётся (его держит ParkedVehicleService),
+    // но reset() на дисконнекте владельца его больше НЕ уничтожит (иначе припаркованная
+    // машина гибла бы). Ре-тег destroy НЕ зовёт -> onWorldVehicleDestroyed не приходит
+    // -> vehicleId сам не обнуляется, detach делается ЯВНО. Идемпотентно; bounds-safe.
+    // Возвращает true, если владение с таким dbId найдено.
+    bool detach(long long dbId);
+
+    // Вернуть владение (по dbId) в сессионный трекинг: vehicleId -> vehicleId. Для снятия
+    // с парковки: машина снова обычная личная сессионная (уничтожается на дисконнекте/
+    // смерти, как до парковки). bounds-safe. Возвращает true, если владение найдено.
+    bool attach(long long dbId, int vehicleId);
+
   private:
     // --- вызывается PersonalVehicleSystem ---
-    // Загрузка владения по старту сессии: кладёт модели из БД в память как
-    // OwnedVehicle{model, -1} (БЕЗ записи в БД — это зеркало, не покупка) и поднимает
-    // per-player флаг loaded (покупка разблокирована). Память перед этим уже пуста
-    // (reset на коннекте/конце прошлой сессии). Bounds-safe.
-    void load(int playerId, const std::vector<int> &models);
+    // Загрузка владения по старту сессии: кладёт пары (dbId, модель) из БД в память
+    // как OwnedVehicle{model, -1, dbId} (БЕЗ записи в БД — это зеркало, не покупка) и
+    // поднимает per-player флаг loaded (покупка разблокирована). Память перед этим уже
+    // пуста (reset на коннекте/конце прошлой сессии). Bounds-safe.
+    void load(int playerId, const std::vector<std::pair<long long, int>> &rows);
+
+    // Проставить dbId владению ownedIndex игрока (success-колбэк async-INSERT покупки).
+    // Пишет только если запись существует и её dbId ещё -1 (не перетереть уже
+    // присвоенный — на случай reload/reset между запуском и колбэком). Bounds-safe.
+    void setDbId(int playerId, int ownedIndex, long long dbId);
 
     // Конец/начало сессии: уничтожить ВСЕ заспавненные машины игрока, очистить
     // ПАМЯТЬ владения и снять флаг loaded. БД НЕ ТРОГАЕМ — право владения остаётся в

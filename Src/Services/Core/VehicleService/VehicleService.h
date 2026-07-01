@@ -55,12 +55,19 @@ class VehicleService final : public IService
     // Владелец машины — НЕпрозрачный серверный тег. Ядро лишь хранит пару
     // (тип, id); политику (кто что спавнит, доступ, персист) решают бизнес-
     // системы поверх. Клиент тег не задаёт.
+    //
+    // Parked — припаркованная у дома машина (личная owner-only ИЛИ расшаренная
+    // семье). Тег лишь маркирует, что PersonalVehicleSystem её при смерти НЕ
+    // удаляет (ранний return не по Owner::Player) — ядро переспавнит её на
+    // spawn-позиции = точке у дома. Доступ (кто за руль) решает driver-gate по
+    // записи ParkedVehicleService (по vehicleId), НЕ по ownerId тега.
     enum class Owner
     {
         None,
         Player,
         Faction,
-        Work
+        Work,
+        Parked
     };
 
     // Инициализация: привязывает пул машин и сервисы; регистрирует vehicleEvents и
@@ -102,6 +109,16 @@ class VehicleService final : public IService
     void subscribeCreated(VehicleObserver observer);
     void subscribeDestroyed(VehicleObserver observer);
     void subscribeDied(VehicleObserver observer);
+
+    // Вето на посадку ЗА РУЛЬ — общая инфраструктура доступа к машине (Core лишь
+    // предоставляет крючок; политику — членство/оплата/бан — решает бизнес). Зовётся
+    // из bindOccupant в момент, когда игрок стал водителем (seat==0). Наблюдатель
+    // возвращает false, чтобы ОТКАЗАТЬ — сервис высадит игрока (removeFromVehicle,
+    // force: отменяет и уже занятое место, и незавершённый вход). Пассажиров НЕ
+    // гейтит — зовётся только на driver-ветке. Наблюдатель не должен трогать occupancy
+    // машины (высадку делает сервис после вето). Главный поток, событийно.
+    using DriverGateObserver = std::function<bool(IPlayer &, IVehicle &)>;
+    void subscribeDriverGate(DriverGateObserver observer);
 
     // Наблюдатель смены позиции БЕЗ водителя — для систем с пространственным
     // индексом машин (GridService): под водителем грид ведёт driver-апдейт, а на
@@ -156,6 +173,12 @@ class VehicleService final : public IService
     void setEngine(IVehicle &vehicle, bool on); // заглохшую завести нельзя (сначала repair)
     void setLights(IVehicle &vehicle, bool on); // фары можно переключать всегда
     void setLocked(IVehicle &vehicle, bool locked);
+    // Сменить ТОЛЬКО spawn-позицию/угол существующей машины (для death-респавна на
+    // её ТЕКУЩУЮ точку), сохранив прочие поля spawnData (модель/цвета/respawnDelay/
+    // siren/interior). Через get/setSpawnData — БЕЗ пересоздания машины: ре-тег
+    // парковки НА МЕСТЕ должен вернуть машину сюда, если ядро её переспавнит по смерти.
+    // Мусорную (NaN/Inf) позицию/угол в spawnData не пускаем. No-op для несуществующей.
+    void setSpawnPosition(IVehicle &vehicle, Vector3 position, float angle);
 
     // Байпас валидации unoccupied-синка для машины, которую легально двигает
     // сервер (редактор мира): телепорты машины — серверная правда, а
@@ -239,6 +262,7 @@ class VehicleService final : public IService
     std::vector<VehicleObserver> m_destroyedObservers;
     std::vector<VehicleObserver> m_diedObservers;
     std::vector<VehicleMoveObserver> m_movedObservers;
+    std::vector<DriverGateObserver> m_driverGateObservers;
 
     std::array<VehicleState, VEHICLE_POOL_SIZE> m_vehicleState;
     std::array<Occupant, MAX_PLAYERS> m_occupants;
