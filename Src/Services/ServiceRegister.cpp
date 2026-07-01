@@ -43,6 +43,7 @@
 #include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
 #include "Services/ReportService/ReportService.h"
 #include "Services/SpawnChoiceService/SpawnChoiceService.h"
+#include "Services/VehicleWaypointService/VehicleWaypointService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/WeaponSkillService/WeaponSkillService.h"
 #include "Services/WeaponProficiencyService/WeaponProficiencyService.h"
@@ -75,6 +76,11 @@ void ServiceRegister::registerServices()
     // (PersonalVehicleSystem связывает их через bind в конструкторе). Право владения
     // персистится в БД (personal_vehicle, write-through); машина-сущность сессионная.
     registerService<PersonalVehicleService>();
+    // Указатель-на-машину (бизнес-фича, не Core): единый владелец персонального
+    // красного чекпоинта к машине игрока. Переиспользуется парковкой и /car.
+    // Привязывается к CheckpointService через bind в VehicleWaypointSystem
+    // (реестр конструирует сервисы дефолтным ctor — доступность к фазе initialize).
+    registerService<VehicleWaypointService>();
     registerService<GridService>();
     registerService<StreamerService>();
     registerService<PlayerDialogService>();

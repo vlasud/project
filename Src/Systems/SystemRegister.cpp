@@ -12,6 +12,7 @@
 #include "Systems/Core/DebugCameraSystem/DebugCameraSystem.h"
 #include "Systems/Core/EditorSystem/EditorSystem.h"
 #include "Systems/BankSystem/BankSystem.h"
+#include "Systems/CarMenuSystem/CarMenuSystem.h"
 #include "Systems/PaymentSystem/PaymentSystem.h"
 #include "Systems/DeathPenaltySystem/DeathPenaltySystem.h"
 #include "Systems/ElectionSystem/ElectionSystem.h"
@@ -82,6 +83,7 @@
 #include "Systems/Core/TimerSystem/TimerSystem.h"
 #include "Systems/Core/VehicleControlSystem/VehicleControlSystem.h"
 #include "Systems/Core/VehicleDebugSystem/VehicleDebugSystem.h"
+#include "Systems/VehicleWaypointSystem/VehicleWaypointSystem.h"
 #include "Systems/Core/WeaponDebugSystem/WeaponDebugSystem.h"
 #include "Systems/Core/VehicleSystem/VehicleSystem.h"
 #include "Systems/Core/WorldSystem/WorldSystem.h"
@@ -153,6 +155,13 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // его initialize() сервис уже получил компонент; иначе HUD отключится).
     // VehicleService/PlayerVelocityService/TimerService зарегистрированы раньше.
     m_systems.push_back(std::make_unique<SpeedometerSystem>(core, serviceRegister));
+    // VehicleWaypointSystem (привод указателя-на-машину, бизнес-фича вне Core) до
+    // ParkingSystem и CarMenuSystem (они ставят указатель через VehicleWaypointService).
+    // В конструкторе связывает сервис с CheckpointService (bind) и подписывается на
+    // уничтожение машин (снять указатель на пропавшую цель). VehicleService/
+    // CheckpointService/VehicleWaypointService зарегистрированы раньше. Указатель —
+    // холодный путь (по подаче/команде/уничтожению), не per-tick.
+    m_systems.push_back(std::make_unique<VehicleWaypointSystem>(core, serviceRegister));
     // PersonalVehicleSystem (личный транспорт, бизнес-фича вне Core) после
     // VehicleSystem (VehicleService уже связан с пулом машин), PlayerCommandSystem
     // (резолвер прав /pvbuy) и PlayerSessionSystem (жизненный цикл владения — по
@@ -169,6 +178,12 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // уже получили компоненты, и пикап/лейбл парковки создаются успешно). Спавн машины
     // на свободной точке + чекпоинт — холодный путь (по пикапу/диалогу), не per-tick.
     m_systems.push_back(std::make_unique<ParkingSystem>(core, serviceRegister));
+    // CarMenuSystem (/car — меню личного транспорта, бизнес-фича вне Core) после
+    // VehicleWaypointSystem (VehicleWaypointService связан с CheckpointService),
+    // PersonalVehicleSystem (владение резолвится) и Core-систем команд/диалога
+    // (PlayerCommandSystem/PlayerDialogSystem зарегистрированы раньше). Команда /car
+    // регистрируется в конструкторе; меню/под-диалог/указатель — холодный путь.
+    m_systems.push_back(std::make_unique<CarMenuSystem>(core, serviceRegister));
     // GangZoneSystem раньше редактора: сервис должен получить компонент до того,
     // как тулза начнёт создавать зоны.
     m_systems.push_back(std::make_unique<GangZoneSystem>(core, serviceRegister));

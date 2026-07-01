@@ -41,10 +41,6 @@ const Colour PARKING_LABEL_COLOUR{120, 220, 255};
 constexpr float PARKING_LABEL_DRAW_DISTANCE = 25.0f;
 constexpr bool PARKING_LABEL_TEST_LOS = false;
 
-// Красный чекпоинт у поданной машины: стандартный наземный радиус (в ряд со
-// входами/работами на парковке).
-constexpr float PARKING_CHECKPOINT_RADIUS = 3.0f;
-
 std::string u(const std::string &text)
 {
     return Encoding::utf8Tocp1251(text);
@@ -68,28 +64,13 @@ ParkingSystem::ParkingSystem(ICore &core, const ServiceRegister &serviceRegister
       m_personalService(serviceRegister.getService<PersonalVehicleService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>()),
       m_pickupService(serviceRegister.getService<PickupService>()),
-      m_checkpointService(serviceRegister.getService<CheckpointService>()),
+      m_waypointService(serviceRegister.getService<VehicleWaypointService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_labelService(serviceRegister.getService<TextLabelService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-
-    // Машину могли уничтожить (взрыв/destroy) — если она была целью чекпоинта
-    // игрока, чекпоинт снимаем (не оставляем висеть указателем на пропавшую машину).
-    // PersonalVehicleService отдельно обнуляет id экземпляра во владении.
-    m_vehicleService.subscribeDestroyed(
-        [this](IVehicle &vehicle)
-        {
-            const int vehicleId = vehicle.getID();
-            for (int playerId = 0; playerId < MAX_PLAYERS; ++playerId)
-            {
-                CheckpointState &cp = m_checkpoints[playerId];
-                if (cp.active && cp.vehicleId == vehicleId)
-                {
-                    clearCheckpoint(playerId);
-                }
-            }
-        });
+    // Красный чекпоинт-указатель у поданной машины ведёт общий VehicleWaypointService
+    // (его привод VehicleWaypointSystem снимает указатель на уничтожении машины-цели
+    // и на дисконнекте). Парковка лишь ставит указатель в момент подачи.
 }
 
 void ParkingSystem::initialize(IComponentList * /*components*/)
@@ -103,31 +84,6 @@ void ParkingSystem::initialize(IComponentList * /*components*/)
     // u() в cp1251. Цветовой код {B4DCFF} интерпретирует клиент (не наш текст).
     m_parkingLabel = m_labelService.add(u("Парковка\n{B4DCFF}Возьмите свой транспорт"), PARKING_PICKUP_POS,
                                         PARKING_LABEL_COLOUR, PARKING_LABEL_DRAW_DISTANCE, PARKING_LABEL_TEST_LOS);
-}
-
-void ParkingSystem::onPlayerConnect(IPlayer &player)
-{
-    // Чистый старт слота чекпоинта (на случай незасланного дисконнекта прежнего
-    // владельца слота). Сам клиентский чекпоинт пересоздаст setForPlayer при подаче.
-    const int playerId = player.getID();
-    if (playerId < 0 || playerId >= MAX_PLAYERS)
-    {
-        return;
-    }
-    m_checkpoints[playerId] = {};
-}
-
-void ParkingSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason /*reason*/)
-{
-    const int playerId = player.getID();
-    if (playerId < 0 || playerId >= MAX_PLAYERS)
-    {
-        return;
-    }
-    // Снимать клиентский чекпоинт у вышедшего не нужно (CheckpointService сбросит
-    // слот сам) — гасим только наш флаг, чтобы не остался активным для будущего
-    // игрока в этом слоте.
-    m_checkpoints[playerId] = {};
 }
 
 void ParkingSystem::onParkingPickup(IPlayer &player)
@@ -147,13 +103,13 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
     }
 
     // Диалог LIST: пункт — «{n}. Модель {model}  —  {статус}» (статус: «в гараже»
-    // при vehicleId==-1, «на парковке» иначе). Имя машины SA не показываем (таблицы
-    // имён в гейммоде нет) — «Модель {id}».
+    // при vehicleId==-1, «вызвана» иначе — единый словарь с /car). Имя машины SA не
+    // показываем (таблицы имён в гейммоде нет) — «Модель {id}».
     std::string body;
     for (std::size_t i = 0; i < owned.size(); ++i)
     {
         const PersonalVehicleService::OwnedVehicle &entry = owned[i];
-        const char *status = entry.vehicleId == -1 ? "в гараже" : "на парковке";
+        const char *status = entry.vehicleId == -1 ? "в гараже" : "вызвана";
         body += fmt::format("{}. Модель {}  —  {}\n", i + 1, entry.model, status);
     }
 
@@ -224,13 +180,14 @@ void ParkingSystem::spawnAtParking(IPlayer &player, int ownedIndex)
     {
     case PersonalVehicleService::SpawnResult::Ok:
     {
-        // Красный чекпоинт у машины: пере-спавн заменяет старый (setForPlayer
-        // перерисует). Запоминаем id цели — снимем чекпоинт на её уничтожении.
-        m_checkpoints[playerId].active = true;
-        m_checkpoints[playerId].vehicleId = veh ? veh->getID() : -1;
-        m_checkpointService.setForPlayer(player, spot.position, PARKING_CHECKPOINT_RADIUS,
-                                         [this, playerId](IPlayer & /*p*/) { clearCheckpoint(playerId); });
-        player.sendClientMessage(INFO_COLOUR, u("Ваша машина на парковке — она отмечена красным чекпоинтом"));
+        // Красный чекпоинт-указатель у машины через общий VehicleWaypointService:
+        // пере-вызов заменяет прежний указатель, снятие (вход/уничтожение/дисконнект)
+        // ведёт его привод (VehicleWaypointSystem). veh валиден на ветке Ok.
+        if (veh)
+        {
+            m_waypointService.showFor(player, *veh);
+        }
+        player.sendClientMessage(INFO_COLOUR, u("Ваша машина отмечена на карте красным чекпоинтом"));
         break;
     }
     case PersonalVehicleService::SpawnResult::BadIndex:
@@ -257,22 +214,4 @@ bool ParkingSystem::isSpotFree(const SpawnSpot &spot, int excludeVehicleId) cons
     return !m_vehicleService.anyVehicleNear(c, SPOT_OCCUPIED_RADIUS, excludeVehicleId) &&
            !m_vehicleService.anyVehicleNear(forward, SPOT_OCCUPIED_RADIUS, excludeVehicleId) &&
            !m_vehicleService.anyVehicleNear(back, SPOT_OCCUPIED_RADIUS, excludeVehicleId);
-}
-
-void ParkingSystem::clearCheckpoint(int playerId)
-{
-    if (playerId < 0 || playerId >= MAX_PLAYERS)
-    {
-        return;
-    }
-    CheckpointState &cp = m_checkpoints[playerId];
-    if (!cp.active)
-    {
-        return; // нечего снимать
-    }
-    cp = {};
-    if (IPlayer *player = m_core.getPlayers().get(playerId))
-    {
-        m_checkpointService.clearForPlayer(*player);
-    }
 }
