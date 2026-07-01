@@ -1,6 +1,7 @@
 #include "Systems/ParkingSystem/ParkingSystem.h"
 
 #include "Utils/Encoding/Encoding.h"
+#include <cmath>
 #include <fmt/format.h>
 #include <string>
 
@@ -15,6 +16,17 @@ const Colour ERROR_COLOUR{255, 90, 90};
 // машину у точки по её длине (~4.5 м); соседние точки в ~4.45 м, origin соседа за
 // радиусом — ложного занятия соседней точки нет.
 constexpr float SPOT_OCCUPIED_RADIUS = 3.0f;
+
+// Сдвиг проб «вперёд»/«назад» ВДОЛЬ ориентации места (по spot.angle) от центра.
+// Место — прямоугольник (машина ~4.5 м длиной), одна круговая проба от центра
+// упустила бы машину у переднего/заднего края; три пробы (центр ±offset) покрывают
+// длину: центр ловит Y±3.0, вперёд/назад дотягивают до ±5.0. 2.0 < 4.45 (шаг ряда
+// по X): для angle 0 «вперёд» — по Y (перпендикулярно ряду), дистанция от вперёд/
+// назад-пробы до origin соседа = √(4.45²+2.0²)=4.88 > радиуса 3.0 — соседнее место
+// ложно не занимается.
+constexpr float SPOT_PROBE_OFFSET = 2.0f;
+
+constexpr float PI = 3.14159265358979323846f;
 
 // Точка пикапа парковки (серверная, фикс.). Исходный facing 182.2892 — ориентир, не
 // нужен (пикапу угол не задаётся).
@@ -173,6 +185,10 @@ void ParkingSystem::spawnAtParking(IPlayer &player, int ownedIndex)
     const int playerId = player.getID();
 
     // 5 серверных точек спавна (угол 0). Координаты — от геймдизайна.
+    // ИНВАРИАНТ: все точки angle 0 -> пробы isSpotFree идут ⊥ ряду (по Y), соседи
+    // отстоят по X (~4.45 м) -> ложного занятия соседа нет (разбор в SPOT_PROBE_OFFSET).
+    // Если точку ПОВЕРНУТЬ (angle != 0), пробы уйдут под углом и этот геометрический
+    // разбор перестанет держаться — тогда перепроверить занятость соседних точек.
     static const ParkingSystem::SpawnSpot SPAWN_SPOTS[] = {
         {{1648.4778f, -1135.5242f, 24.5531f}, 0.0f}, {{1652.9323f, -1135.9354f, 24.5531f}, 0.0f},
         {{1657.3933f, -1135.8505f, 24.5531f}, 0.0f}, {{1661.7965f, -1135.9092f, 24.5531f}, 0.0f},
@@ -187,7 +203,7 @@ void ParkingSystem::spawnAtParking(IPlayer &player, int ownedIndex)
     int chosenSpot = -1;
     for (int i = 0; i < SPOT_COUNT; ++i)
     {
-        if (!m_vehicleService.anyVehicleNear(SPAWN_SPOTS[i].position, SPOT_OCCUPIED_RADIUS, ownVehicleId))
+        if (isSpotFree(SPAWN_SPOTS[i], ownVehicleId))
         {
             chosenSpot = i;
             break;
@@ -227,6 +243,26 @@ void ParkingSystem::spawnAtParking(IPlayer &player, int ownedIndex)
         player.sendClientMessage(ERROR_COLOUR, u("Сейчас нельзя подать машину, попробуйте позже"));
         break;
     }
+}
+
+bool ParkingSystem::isSpotFree(const SpawnSpot &spot, int excludeVehicleId) const
+{
+    // SA-MP конвенция (как HouseService::backOf): «вперёд» = (-sin(a), cos(a)),
+    // «назад» = (sin(a), -cos(a)), a в РАДИАНАХ. Пробы в 2D (XY), Z как у центра —
+    // занятость горизонтальная (anyVehicleNear игнорирует Z).
+    const float a = spot.angle * PI / 180.0f;
+    const float dx = -std::sin(a) * SPOT_PROBE_OFFSET; // сдвиг «вперёд» по X
+    const float dy = std::cos(a) * SPOT_PROBE_OFFSET;  // сдвиг «вперёд» по Y
+
+    const Vector3 &c = spot.position;
+    const Vector3 forward{c.x + dx, c.y + dy, c.z};
+    const Vector3 back{c.x - dx, c.y - dy, c.z};
+
+    // Свободно, только если ни одна проба не нашла машину. Свою (excludeVehicleId)
+    // исключаем во всех трёх — пере-спавн на свою же точку не считает её занятой.
+    return !m_vehicleService.anyVehicleNear(c, SPOT_OCCUPIED_RADIUS, excludeVehicleId) &&
+           !m_vehicleService.anyVehicleNear(forward, SPOT_OCCUPIED_RADIUS, excludeVehicleId) &&
+           !m_vehicleService.anyVehicleNear(back, SPOT_OCCUPIED_RADIUS, excludeVehicleId);
 }
 
 void ParkingSystem::clearCheckpoint(int playerId)
