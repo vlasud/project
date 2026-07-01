@@ -3,6 +3,7 @@
 #include "Services/IService.h"
 #include "types.hpp"
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -138,8 +139,13 @@ class GridService final : public IService
     static constexpr int CELL_COUNT = COLS * COLS;
 
     // Координата → индекс ячейки по оси; всё вне мира прижимается к крайним.
+    // Не-конечную координату (NaN/Inf — клиент может прислать её в позиции игрока
+    // ИЛИ машины из синка) трактуем как 0-ю ячейку: static_cast<int> от NaN/Inf —
+    // UB, а кламп ниже NaN не ловит (сравнения с NaN ложны). Гард у общего стока.
     static int cellCoord(float v)
     {
+        if (!std::isfinite(v))
+            return 0;
         const int c = static_cast<int>((v - WORLD_MIN) * INV_CELL_SIZE);
         return c < 0 ? 0 : (c >= COLS ? COLS - 1 : c);
     }

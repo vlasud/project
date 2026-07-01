@@ -1,5 +1,6 @@
 #include "Services/Core/VehicleService/VehicleService.h"
 
+#include "Services/Core/GridService/GridService.h" // forEachInRadius/gridMask для anyVehicleNear
 #include "glm/geometric.hpp"
 #include <chrono>
 #include <cmath>
@@ -28,6 +29,12 @@ constexpr float UNOCCUPIED_SPEED_MAX = 60.0f;
 // Прицеп должен быть рядом с тягачом репортера.
 constexpr float TRAILER_MAX_DIST = 50.0f;
 
+// Запас 3D-радиуса ЗАПРОСА к гриду в anyVehicleNear: грид фильтрует по 3D-дистанции,
+// а нам нужна XY-близость. Машина оседает на грунт (своя Z), точки занятости заданы
+// на фикс. высоте — без запаса 3D-предфильтр мог бы отбросить кандидата, чья XY в
+// радиусе, но Z отличается. Финальную проверку всё равно делаем по XY.
+constexpr float GRID_VERTICAL_SLACK = 30.0f;
+
 TimePoint now()
 {
     return std::chrono::steady_clock::now();
@@ -42,11 +49,12 @@ bool rateLimited(TimePoint &lastFlag, TimePoint timeNow)
 }
 } // namespace
 
-void VehicleService::bind(IVehiclesComponent *vehicles, PlayerLocationService &location,
+void VehicleService::bind(IVehiclesComponent *vehicles, PlayerLocationService &location, GridService &grid,
                           VehicleEventHandler &vehicleEvents, PoolEventHandler<IVehicle> &poolEvents)
 {
     m_vehicles = vehicles;
     m_location = &location;
+    m_grid = &grid;
     if (m_vehicles)
     {
         m_vehicles->getEventDispatcher().addEventHandler(&vehicleEvents);
@@ -63,27 +71,35 @@ IVehicle *VehicleService::get(int vehicleId) const
 
 bool VehicleService::anyVehicleNear(Vector3 position, float radius, int excludeVehicleId) const
 {
-    if (!m_vehicles || radius <= 0.0f || !std::isfinite(radius))
+    if (!m_grid || !m_vehicles || radius <= 0.0f || !std::isfinite(radius))
         return false;
 
     const float radiusSq = radius * radius;
-    // Проход по стейту: existsность отсекает пустые слоты дешёвой bool-проверкой;
-    // позицию читаем только у существующих машин. Холодный путь (спавн по вводу).
-    for (int vehicleId = 0; vehicleId < VEHICLE_POOL_SIZE; ++vehicleId)
-    {
-        if (!m_vehicleState[vehicleId].exists || vehicleId == excludeVehicleId)
-            continue;
-        IVehicle *vehicle = m_vehicles->get(vehicleId);
-        if (!vehicle)
-            continue; // стейт ещё помечен exists, но машины в пуле уже нет — пропуск
-        // Близость считаем ГОРИЗОНТАЛЬНО (XY), Z игнорируем: точки занятости задаются
-        // на одной высоте, а машина оседает на грунт (своя Z) — Z-разница раздувала
-        // бы 3D-дистанцию выше радиуса и пропускала рядом стоящую машину.
-        const Vector3 delta = vehicle->getPosition() - position;
-        if (delta.x * delta.x + delta.y * delta.y <= radiusSq)
-            return true;
-    }
-    return false;
+    bool found = false;
+    // Спрашиваем соседей-машин у пространственного индекса (O(машин в соседних
+    // ячейках), без аллокаций), а не проходом по всему пулу. Запрос к гриду — 3D с
+    // запасом по Z (GRID_VERTICAL_SLACK): машина оседает на грунт со своей Z, а точки
+    // занятости заданы на фикс. высоте — без запаса 3D-предфильтр отбросил бы кандидата,
+    // чья XY в радиусе, но Z отличается. ФИНАЛЬНАЯ проверка — ГОРИЗОНТАЛЬНАЯ (XY).
+    m_grid->forEachInRadius(
+        position, radius + GRID_VERTICAL_SLACK, gridMask(GridEntityType::Vehicle),
+        [&](GridEntityType, std::int32_t id, float)
+        {
+            if (found || id == excludeVehicleId)
+                return; // уже нашли / своя машина
+            if (id < 0 || id >= VEHICLE_POOL_SIZE || !m_vehicleState[id].exists)
+                return; // мусорный id / в пуле машины уже нет (стейт подчистит destroyed)
+            IVehicle *vehicle = m_vehicles->get(id);
+            if (!vehicle)
+                return;
+            // Близость считаем ГОРИЗОНТАЛЬНО (XY), Z игнорируем: точки занятости на одной
+            // высоте, а машина оседает на грунт (своя Z) — Z-разница раздувала бы дистанцию
+            // выше радиуса и пропускала рядом стоящую машину. visit грид не модифицирует.
+            const Vector3 delta = vehicle->getPosition() - position;
+            if (delta.x * delta.x + delta.y * delta.y <= radiusSq)
+                found = true;
+        });
+    return found;
 }
 
 void VehicleService::destroy(int vehicleId)
@@ -106,6 +122,17 @@ void VehicleService::subscribeDestroyed(VehicleObserver observer)
 void VehicleService::subscribeDied(VehicleObserver observer)
 {
     m_diedObservers.push_back(std::move(observer));
+}
+
+void VehicleService::subscribeMoved(VehicleMoveObserver observer)
+{
+    m_movedObservers.push_back(std::move(observer));
+}
+
+void VehicleService::notifyMoved(IVehicle &vehicle, Vector3 acceptedPosition)
+{
+    for (auto &obs : m_movedObservers)
+        obs(vehicle, acceptedPosition);
 }
 
 IVehicle *VehicleService::create(int model, Vector3 position, float angle, int colour1, int colour2, Owner owner,
@@ -188,6 +215,25 @@ void VehicleService::setHealth(IVehicle &vehicle, float health)
     st.lastChange = now();
     vehicle.setHealth(st.health);
     stallIfCritical(vehicle, st, now());
+}
+
+void VehicleService::explode(IVehicle &vehicle)
+{
+    const int vehicleId = vehicle.getID();
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE)
+        return;
+    VehicleState &st = m_vehicleState[vehicleId];
+    if (!st.exists)
+        return;
+    // Дев/привилегированная операция: добиваем HP до нуля В ОБХОД стола. Серверный
+    // setHealth(0) сам onVehicleDeath НЕ диспатчит (только шлёт SetVehicleHealth RPC);
+    // на нём клиент (водитель) детонирует машину и в следующем driver-sync репортит
+    // Health<=0 -> updateFromDriverSync -> setDead -> onVehicleDeath. НЕ зовём
+    // stallIfCritical: иначе HP заклампится на STALL_HEALTH (анти-грифинг) и взрыва
+    // не будет. Обычный урон остаётся под столом — это исключение только для дева.
+    st.health = 0.0f;
+    st.lastChange = now(); // грейс: клиентский репорт 0 verifyHealth примет как снижение
+    vehicle.setHealth(0.0f);
 }
 
 void VehicleService::repair(IVehicle &vehicle)
@@ -501,12 +547,6 @@ VehicleService::Outcome VehicleService::validateUnoccupied(IVehicle &vehicle, IP
     Outcome outcome;
     VehicleState &st = m_vehicleState[vehicle.getID()];
 
-    // Машину двигает сервер (редактор): её телепорты и дальний репортер легальны.
-    if (st.editBypass)
-    {
-        return outcome;
-    }
-
     const auto reject = [&](std::string detail)
     {
         if (!rateLimited(st.lastFlag, timeNow))
@@ -516,6 +556,24 @@ VehicleService::Outcome VehicleService::validateUnoccupied(IVehicle &vehicle, IP
         outcome.vehicleHack = true;
         return outcome;
     };
+
+    // Не-конечные позиция/велосити (NaN/Inf от читера): сравнения с NaN ложны, поэтому
+    // числовые гейты ниже их пропустят -> ядро применило бы NaN-позицию, машина
+    // «спряталась» бы из occupancy (NaN <= radiusSq == false). Режем ДО всех веток
+    // (включая editBypass), как прочий клиентский float (ср. refuel/setFuel/verifyHealth).
+    if (!std::isfinite(update.position.x) || !std::isfinite(update.position.y) ||
+        !std::isfinite(update.position.z) || !std::isfinite(update.velocity.x) ||
+        !std::isfinite(update.velocity.y) || !std::isfinite(update.velocity.z))
+    {
+        return reject(fmt::format("unoccupied vehicle {} non-finite sync", vehicle.getID()));
+    }
+
+    // Машину двигает сервер (редактор): её телепорты и дальний репортер легальны.
+    if (st.editBypass)
+    {
+        notifyMoved(vehicle, update.position); // апдейт принят — двигаем грид
+        return outcome;
+    }
 
     if (m_location)
     {
@@ -538,6 +596,10 @@ VehicleService::Outcome VehicleService::validateUnoccupied(IVehicle &vehicle, IP
         return reject(fmt::format("unoccupied vehicle {} speed {:.0f} m/s", vehicle.getID(), speed));
     }
 
+    // Апдейт принят: ядро применит update.position ПОСЛЕ accept (getPosition() здесь
+    // ещё старая) — двигаем грид на ПРИНЯТУЮ позицию из апдейта. Отклонённые выше
+    // читерские позиции (reject) сюда не доходят и в грид не попадают.
+    notifyMoved(vehicle, update.position);
     return outcome; // легально
 }
 
@@ -548,7 +610,23 @@ VehicleService::Outcome VehicleService::validateTrailer(IPlayer &reporter, IVehi
         return outcome;
 
     VehicleState &st = m_vehicleState[trailer.getID()];
-    const float dist = glm::distance(m_location->getPosition(reporter.getID()), trailer.getPosition());
+
+    // Не-конечная позиция прицепа (NaN/Inf от читера) прошла бы dist-гейт мимо (NaN>MAX —
+    // ложь) и попала бы в грид. Режем симметрично validateUnoccupied; cellCoord у стока —
+    // второй рубеж. (trailerSync ядро применяет безусловно, серверный pos это не откатит —
+    // общий NaN-класс; но в грид/occupancy мусор не пускаем и помечаем нарушение.)
+    const Vector3 pos = trailer.getPosition();
+    if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z))
+    {
+        if (!rateLimited(st.lastFlag, timeNow))
+        {
+            outcome.detail = fmt::format("trailer {} non-finite position", trailer.getID());
+        }
+        outcome.vehicleHack = true;
+        return outcome;
+    }
+
+    const float dist = glm::distance(m_location->getPosition(reporter.getID()), pos);
     if (dist > TRAILER_MAX_DIST)
     {
         if (!rateLimited(st.lastFlag, timeNow))
@@ -556,7 +634,16 @@ VehicleService::Outcome VehicleService::validateTrailer(IPlayer &reporter, IVehi
             outcome.detail = fmt::format("trailer {} sync from {:.0f}m", trailer.getID(), dist);
         }
         outcome.vehicleHack = true;
+        return outcome;
     }
+
+    // Прицеп — IVehicle в гриде, но водителя у него нет (тянет тягач), поэтому driver-путь
+    // (onPlayerUpdate seat==0) его не двигает. Единственный путь смены его реальной позиции —
+    // trailer-sync; ядро применяет trailerSync-позицию БЕЗУСЛОВНО ДО этого хэндлера, значит
+    // getPosition() уже свежая (в отличие от unoccupied, где позиция из update). На принятом
+    // (не-читерском) апдейте двигаем грид, иначе запись прицепа замерла бы на старой точке и
+    // anyVehicleNear/occupancy видели бы его не там. NaN гасит cellCoord у стока.
+    notifyMoved(trailer, trailer.getPosition());
     return outcome;
 }
 
@@ -667,6 +754,9 @@ void VehicleService::onVehicleRespawn(IVehicle &vehicle)
     st.lastChange = now();
     clearStall(vehicle, st); // респаун — машина снова целая и заводится
     // owner сохраняется: ту же физическую машину переспавнили — владелец тот же.
+    // Ядро уже телепортировало машину на spawn-позицию (pos = spawnData.position до
+    // onVehicleSpawn) — getPosition() верный, двигаем пространственный индекс.
+    notifyMoved(vehicle, vehicle.getPosition());
 }
 
 void VehicleService::onVehicleDeath(IVehicle &vehicle)

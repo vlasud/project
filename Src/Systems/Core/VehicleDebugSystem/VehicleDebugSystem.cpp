@@ -51,7 +51,10 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                      // владельца. Интерьер выставляем после (в сигнатуре create его нет).
                      const Vector3 position =
                          m_locationService.getPosition(player.getID()) + Vector3(3.0f, 3.0f, 0.5f);
-                     IVehicle *vehicle = m_vehicleService.create(model, position, 0.0f, -1, -1,
+                     // Ориентация машины = поворот игрока (yaw); не-конечный (NaN/Inf) -> 0.
+                     const float yaw = player.getRotation().ToEuler().z;
+                     const float angle = std::isfinite(yaw) ? yaw : 0.0f;
+                     IVehicle *vehicle = m_vehicleService.create(model, position, angle, -1, -1,
                                                                  VehicleService::Owner::None, -1);
                      if (!vehicle)
                      {
@@ -253,7 +256,8 @@ void VehicleDebugSystem::showDevMenu(IPlayer &player)
     std::string body;
     body += "Заспавнить тачку рядом (владелец Work)\n";
     body += "Заправить мою тачку (до полного)\n";
-    body += "Показать топливо моей машины";
+    body += "Показать топливо моей машины\n";
+    body += "Взорвать текущую машину";
 
     m_dialogService.show(
         player, makeDialog(DialogStyle_LIST, "Дев-меню машин", body, "Выбрать", "Закрыть"),
@@ -314,6 +318,28 @@ void VehicleDebugSystem::showDevMenu(IPlayer &player)
                     u(fmt::format("Топливо: {:.1f}/{:.0f}{}", m_vehicleService.getFuel(vehicleId),
                                   VehicleService::FUEL_CAPACITY,
                                   m_vehicleService.isOutOfFuel(vehicleId) ? " — БАК ПУСТ" : "")));
+                break;
+            }
+            case 3: // взорвать машину, в которой сидит дев (тест реального уничтожения)
+            {
+                IVehicle *vehicle = m_vehicleService.getVehicle(playerId);
+                if (!vehicle)
+                {
+                    player->sendClientMessage(DEBUG_COLOUR, u("Вы не в машине"));
+                    return;
+                }
+                // explode форсирует смерть через клиента ВОДИТЕЛЯ (его driver-sync
+                // репортит Health<=0). Пассажир детонацию не вызовет — гейтим по рулю,
+                // чтобы не показывать ложное «взорвана».
+                if (m_vehicleService.getSeat(playerId) != 0)
+                {
+                    player->sendClientMessage(DEBUG_COLOUR, u("Сядьте за руль — взрыв форсируется только из-за руля"));
+                    return;
+                }
+                // Привилегированная серверная операция: форсирует смерть (HP -> 0) мимо
+                // анти-грифинга. Клиент детонирует -> onVehicleDeath -> личная пропадает.
+                m_vehicleService.explode(*vehicle);
+                player->sendClientMessage(DEBUG_COLOUR, u("Машина взорвана"));
                 break;
             }
             default:

@@ -27,8 +27,13 @@ class AntiCheatService;
 //  * дистанция — принятая сервером позиция игрока должна быть рядом с пикапом
 //    (допуск покрывает лаг и проезд на скорости), иначе фиксируется PickupHack;
 //  * виртуальный мир игрока должен совпадать с миром пикапа;
-//  * антиспам — повторные срабатывания по тому же пикапу раньше cooldown
-//    молча отбрасываются (клиент легально дублирует событие у некоторых типов).
+//  * edge-триггер — клиент шлёт RPC подбора ПОВТОРНО, пока игрок стоит на
+//    пикапе (open.mp — чистый релей, не троттлит: pickups_main.cpp onReceive->
+//    dispatch). Обработчик зовём РАЗОВО на переходе «не на пикапе»->«на пикапе»:
+//    непрерывный поток событий держит «игрок на пикапе», повтор только если
+//    поток прерывался дольше REARM_GAP (игрок ушёл и вернулся). Иначе диалоги
+//    (парковка/дом) переоткрываются каждую секунду, а пикапы-предметы дюпят
+//    эффект.
 class PickupService final : public IService
 {
     friend PickupSystem;
@@ -41,11 +46,20 @@ class PickupService final : public IService
     // скорости — заметно), поэтому порог с запасом.
     static constexpr float MAX_PICKUP_DISTANCE = 15.0f;
 
+    // Разрыв в потоке событий подбора, после которого игрок считается сошедшим
+    // с пикапа — следующее событие снова сработает как вход. Клиент шлёт RPC
+    // подбора часто (кадрово, ~несколько раз в секунду), пока игрок стоит на
+    // пикапе; порог с большим запасом над этим интервалом, чтобы дрожание/лаг
+    // не переоткрывали handler, но сход и возврат ре-армили его. Ошибка в
+    // сторону «не переоткрыть» безопаснее флуда.
+    static constexpr Milliseconds DEFAULT_REARM_GAP{2000};
+
     // Создать пикап с обработчиком подбора. model — модель объекта,
-    // type — клиентский тип поведения пикапа (SA), cooldown — минимум между
-    // срабатываниями для одного игрока. Возвращает id пикапа или -1.
+    // type — клиентский тип поведения пикапа (SA), rearmGap — разрыв в потоке
+    // событий, после которого вход на пикап снова сработает (см. выше).
+    // Возвращает id пикапа или -1.
     int add(int model, PickupType type, const Vector3 &position, Handler onPickUp, std::uint32_t virtualWorld = 0,
-            Milliseconds cooldown = Milliseconds(1000));
+            Milliseconds rearmGap = DEFAULT_REARM_GAP);
     void remove(int pickupId);
     bool exists(int pickupId) const;
 
@@ -54,7 +68,7 @@ class PickupService final : public IService
     {
         Vector3 position{};
         std::uint32_t virtualWorld = 0;
-        Milliseconds cooldown{1000};
+        Milliseconds rearmGap{DEFAULT_REARM_GAP};
         int model = 0;
         Handler handler;
     };
@@ -69,5 +83,5 @@ class PickupService final : public IService
     AntiCheatService *m_antiCheat = nullptr;
 
     std::unordered_map<int, Def> m_defs;                                      // ключ — def id стримера
-    std::array<std::unordered_map<int, TimePoint>, MAX_PLAYERS> m_lastPickUp; // антиспам per-player per-def
+    std::array<std::unordered_map<int, TimePoint>, MAX_PLAYERS> m_lastPickUp; // время последнего события per-player per-def
 };

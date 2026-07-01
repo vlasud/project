@@ -35,9 +35,23 @@ const char *violationName(AntiCheatService::ViolationType type)
         return "SpecialActionHack";
     case AntiCheatService::ViolationType::WeaponHack:
         return "WeaponHack";
+    case AntiCheatService::ViolationType::ShotHack:
+        return "ShotHack";
+    case AntiCheatService::ViolationType::RapidFire:
+        return "RapidFire";
+    case AntiCheatService::ViolationType::SilentAim:
+        return "SilentAim";
     case AntiCheatService::ViolationType::VehicleHack:
         return "VehicleHack";
+    case AntiCheatService::ViolationType::PickupHack:
+        return "PickupHack";
+    case AntiCheatService::ViolationType::CheckpointHack:
+        return "CheckpointHack";
+    case AntiCheatService::ViolationType::SpawnHack:
+        return "SpawnHack";
     }
+    // switch исчерпывающий по всем ViolationType (без default) — добавление
+    // нового значения enum ловит -Wswitch на этапе компиляции.
     return "Unknown";
 }
 } // namespace

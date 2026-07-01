@@ -13,8 +13,10 @@
 // Ведёт динамические сущности в пространственной сетке:
 //  * игроки — добавляются при спавне, позиция обновляется на каждом апдейте
 //    (внутри сетки это дёшево: чаще всего перезапись трёх float в той же ячейке);
-//  * машины — добавляются/убираются по событиям пула, позиция обновляется
-//    апдейтом водителя (машина без водителя сама не ездит).
+//  * машины — добавляются/убираются по событиям пула; позиция обновляется на ВСЕХ
+//    путях смены: под водителем — driver-апдейтом (onPlayerUpdate), без водителя —
+//    наблюдателем VehicleService::subscribeMoved (респаун + ПРИНЯТЫЙ unoccupied-синк),
+//    т.е. серверно-принятыми позициями — стейл-индекс не становится чит-вектором.
 // Статику (объекты, пикапы, иконки) регистрируют их собственные системы
 // напрямую через GridService.
 class GridSystem : public BaseSystem,
@@ -32,9 +34,13 @@ class GridSystem : public BaseSystem,
     void onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason) override;
 
   private:
-    // Колбэки от VehicleService::subscribeCreated/Destroyed.
+    // Колбэки от VehicleService::subscribeCreated/Destroyed/Moved.
     void onVehicleAdded(IVehicle &vehicle);
     void onVehicleRemoved(IVehicle &vehicle);
+    // Смена позиции машины БЕЗ водителя (респаун, принятый unoccupied-синк):
+    // под водителем грид ведёт onPlayerUpdate, прочие пути идут сюда. Позиция —
+    // серверно-ПРИНЯТАЯ (валидатор уже отсёк чит), двигаем без ре-валидации.
+    void onVehicleMoved(IVehicle &vehicle, Vector3 acceptedPosition);
 
     GridService &m_gridService;
     PlayerLocationService &m_locationService; // позиция игрока — из источника правды

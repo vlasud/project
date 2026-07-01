@@ -4,6 +4,7 @@
 #include "Services/IService.h"
 #include "types.hpp"
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -82,6 +83,22 @@ class HouseService final : public IService
     // дом не «принадлежит» никому). Линейно по m_houses (число домов мало —
     // холодный путь занятия/гейта, не per-tick).
     bool ownsHouse(const std::string &ownerKey) const;
+
+    // Владение из БД легло в память (одноразовое стартовое событие). До этого
+    // зеркало владения неполно: занятие домов отложено, а резолв спавна «Дом»
+    // даёт фолбэк на вокзал. После — занятие разблокировано, новые логины уже
+    // видят владение.
+    bool isOwnershipLoaded() const
+    {
+        return m_ownershipLoaded;
+    }
+    // Подписка на ЗАВЕРШЕНИЕ стартовой загрузки владения (одноразовое событие).
+    // Если владение уже загружено к моменту подписки — колбэк вызывается СРАЗУ
+    // (поздний подписчик не пропустит one-shot). SpawnChoiceSystem подписывается,
+    // чтобы перерезолвить спавн уже-онлайн игрокам с выбором «Дом» (их Home-выбор
+    // применился на логине ДО прихода house_owner — иначе спавн на вокзале).
+    using OwnershipLoadedObserver = std::function<void()>;
+    void subscribeOwnershipLoaded(OwnershipLoadedObserver observer);
     // Дом, которым владеет ownerKey, или nullptr (нет дома). Один дом на игрока,
     // поэтому возвращается первый совпавший. ownerKey — ключ владельца
     // (std::to_string(accountId)); пустой всегда nullptr. Линейно по m_houses
@@ -113,10 +130,18 @@ class HouseService final : public IService
     // Финализация загрузки: выставить m_nextId = max(id)+1, но не выше MAX_HOUSE_ID+1.
     void finalizeLoad();
 
+    // Отметить завершение стартовой загрузки владения (зовёт HouseSystem на ВСЕХ
+    // ветках loadOwnershipAsync — успех/ошибка БД). Выставляет флаг и однократно
+    // оповещает подписчиков; повторные вызовы наблюдателей не дёргают.
+    void markOwnershipLoaded();
+
     // Точка выхода за спиной создателя по его углу (SA-MP конвенция «вперёд» =
     // (-sin, cos), значит «назад» = (sin, -cos)).
     static Vector3 backOf(const Vector3 &position, float angleDegrees, float distance);
 
     std::unordered_map<int, House> m_houses;
     int m_nextId = 1; // сервер — единственный писатель id домов
+
+    bool m_ownershipLoaded = false; // владение из БД легло в память (стартовое one-shot)
+    std::vector<OwnershipLoadedObserver> m_ownershipLoadedObservers;
 };

@@ -637,14 +637,30 @@ void FactionService::markPayOrderIssued(int factionId, TimePoint now)
         faction->orderIssuedAt = now;
 }
 
+void FactionService::clearPayOrderCooldown(int factionId)
+{
+    if (Faction *faction = findFaction(factionId))
+        faction->orderIssuedAt = TimePoint{}; // «приказов не было» — isPayOrderReady снова true
+}
+
 void FactionService::writeBudget(int factionId, std::int64_t budget)
 {
+    // Атомарный upsert одним запросом (faction_id — PRIMARY KEY): нет окна
+    // DELETE+INSERT, в котором сбой воркера между удалением и вставкой потерял бы
+    // строку бюджета (бюджет -> 0 на следующем старте).
     DatabaseManager::throwQuery(
         [factionId, budget](mysqlx::Schema schema)
         {
-            mysqlx::Table table = schema.getTable("faction_budget");
-            table.remove().where("faction_id = :faction").bind("faction", factionId).execute();
-            table.insert("faction_id", "budget").values(factionId, budget).execute();
+            schema.getSession()
+                .sql("INSERT INTO faction_budget (faction_id, budget) VALUES (?, ?) "
+                     "ON DUPLICATE KEY UPDATE budget = VALUES(budget)")
+                .bind(factionId, budget)
+                .execute();
+        },
+        [factionId](const std::string &error)
+        {
+            LogManager::log(Error,
+                            fmt::format("FactionService: failed to persist budget of faction {}: {}", factionId, error));
         });
 }
 

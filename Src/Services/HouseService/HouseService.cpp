@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 namespace
 {
@@ -150,6 +151,29 @@ void HouseService::finalizeLoad()
     // m_nextId не выше MAX_HOUSE_ID+1: createHouse сам откажет на потолке, а vw
     // (VW_BASE + id) гарантированно не переполнит int даже на правленом файле.
     m_nextId = std::min(maxId + 1, MAX_HOUSE_ID + 1);
+}
+
+void HouseService::subscribeOwnershipLoaded(OwnershipLoadedObserver observer)
+{
+    if (!observer)
+        return;
+    // Поздняя подписка после загрузки — колбэк сразу (one-shot не теряется).
+    if (m_ownershipLoaded)
+    {
+        observer();
+        return;
+    }
+    m_ownershipLoadedObservers.push_back(std::move(observer));
+}
+
+void HouseService::markOwnershipLoaded()
+{
+    if (m_ownershipLoaded)
+        return; // идемпотентно: оповещаем подписчиков ровно один раз
+    m_ownershipLoaded = true;
+    for (const OwnershipLoadedObserver &observer : m_ownershipLoadedObservers)
+        observer();
+    m_ownershipLoadedObservers.clear(); // подписки больше не нужны (one-shot)
 }
 
 // ------------------------------------------------------------------- сериализация

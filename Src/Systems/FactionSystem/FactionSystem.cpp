@@ -1824,49 +1824,65 @@ void FactionSystem::executePayOrder(IPlayer &player)
         return;
     const int factionId = faction->id;
 
-    // Сумма зарплат — из БД (члены и оффлайн тоже). Списание и зачисление —
-    // в колбэке; зарплаты, изменённые в эти миллисекунды, разойдутся на копейки.
-    DatabaseManager::selectQuery<std::int64_t>(
-        [factionId](mysqlx::Schema schema)
+    const TimePoint now = std::chrono::steady_clock::now();
+    if (!m_factionService.isPayOrderReady(factionId, now))
+        return; // кулдаун ещё активен либо приказ уже в полёте (двойной клик)
+
+    // L4 serial-guard: фиксируем сессию лидера, сверим в колбэке (в слоте мог
+    // оказаться другой игрок/другая сессия за время async-запроса).
+    const PlayerSessionService::Session *session = m_sessionService.get(player.getID());
+    if (!session)
+        return;
+
+    // Бюджет на момент приказа — потолок зачислений. Кредит и сумма считаются из
+    // ОДНОГО снимка salary в транзакции BankService (печать денег исключена):
+    // зачислено == возвращённой сумме, её и спишем с бюджета. Помечаем кулдаун
+    // ОПТИМИСТИЧНО до async — гасит двойной клик в окне запроса; если зачислять
+    // нечего/не хватило бюджета (credited == 0), откатываем кулдаун в колбэке.
+    const std::int64_t budgetCap = m_factionService.getBudget(factionId);
+    m_factionService.markPayOrderIssued(factionId, now);
+
+    m_bankService.creditFactionSalaries(
+        factionId, budgetCap,
+        [this, leaderId = player.getID(), serial = session->serial, factionId, budgetCap](std::int64_t credited)
         {
-            mysqlx::SqlResult result = schema.getSession()
-                                           .sql("SELECT COALESCE(SUM(salary), 0) FROM faction_member WHERE faction_id = ?")
-                                           .bind(factionId)
-                                           .execute();
-            mysqlx::Row row = result.fetchOne();
-            return row ? row.get(0).get<std::int64_t>() : std::int64_t{0};
-        },
-        [this, leaderId = player.getID(), factionId](std::int64_t total)
-        {
+            const PlayerSessionService::Session *current = m_sessionService.get(leaderId);
+            const bool leaderValid = current && current->serial == serial && m_factionService.isLeader(leaderId) &&
+                                     m_factionService.getMemberFaction(leaderId) == factionId;
+
+            if (credited <= 0)
+            {
+                // Ничего не зачислено: платить некому ИЛИ не хватило бюджета —
+                // откатываем оптимистичный кулдаун (пустая попытка не сжигает его).
+                m_factionService.clearPayOrderCooldown(factionId);
+                if (leaderValid)
+                {
+                    IPlayer *leader = m_core.getPlayers().get(leaderId);
+                    if (leader)
+                        leader->sendClientMessage(
+                            ERROR_COLOUR,
+                            u(fmt::format("Приказ не исполнен: нужно средств больше доступных ${} либо платить некому",
+                                          budgetCap)));
+                }
+                return;
+            }
+
+            // Зачисление прошло — спишем РОВНО зачисленную сумму с бюджета.
+            // setBudget (а не tryWithdraw) гарантирует списание даже если бюджет
+            // изменился за async-окно (клампим у нуля) — кредит без списания
+            // не остаётся. Запись бюджета — атомарный upsert (M3).
+            const std::int64_t remaining = std::max<std::int64_t>(0, m_factionService.getBudget(factionId) - credited);
+            m_factionService.setBudget(factionId, remaining);
+
+            if (!leaderValid)
+                return; // лидер вышел/сменился — деньги уже зачислены, уведомлять некого
             IPlayer *leader = m_core.getPlayers().get(leaderId);
-            if (!leader || !m_factionService.isLeader(leaderId) ||
-                m_factionService.getMemberFaction(leaderId) != factionId)
-                return;
-
-            if (total <= 0)
-            {
-                leader->sendClientMessage(ERROR_COLOUR, u("Платить некому: ни у кого нет зарплаты"));
-                return;
-            }
-            const TimePoint now = std::chrono::steady_clock::now();
-            if (!m_factionService.isPayOrderReady(factionId, now))
-                return; // двойной клик по диалогу
-            if (!m_factionService.tryWithdraw(factionId, total))
-            {
+            if (leader)
                 leader->sendClientMessage(
-                    ERROR_COLOUR, u(fmt::format("В бюджете не хватает: нужно ${}, есть ${}", total,
-                                                m_factionService.getBudget(factionId))));
-                return;
-            }
+                    INFO_COLOUR,
+                    u(fmt::format("Приказ исполнен: ${} списано с бюджета, чеки зачислены", credited)));
 
-            // Кулдаун — только после успешного списания: отказ из-за бюджета
-            // не сжигает попытку.
-            m_factionService.markPayOrderIssued(factionId, now);
-            m_bankService.creditFactionSalaries(factionId);
-
-            leader->sendClientMessage(INFO_COLOUR,
-                                      u(fmt::format("Приказ исполнен: ${} списано с бюджета, чеки зачислены", total)));
-            // Членам фракции онлайн — уведомление о чеке.
+            // Членам фракции онлайн — уведомление о чеке (по in-memory зарплате).
             for (IPlayer *member : m_core.getPlayers().entries())
             {
                 const int memberId = member->getID();
@@ -1878,7 +1894,22 @@ void FactionSystem::executePayOrder(IPlayer &player)
                         INFO_COLOUR, u(fmt::format("Вам начислена зарплата: чек на ${} на счёт в банке", salary)));
             }
         },
-        [](const std::string &) { LogManager::log(Error, "FactionSystem: pay order failed"); });
+        [this, leaderId = player.getID(), serial = session->serial, factionId]()
+        {
+            // Сбой транзакции: деньги не зачислены, бюджет не тронут (setBudget НЕ
+            // звался). Откатываем оптимистичный кулдаун — приказ можно повторить.
+            m_factionService.clearPayOrderCooldown(factionId);
+
+            const PlayerSessionService::Session *current = m_sessionService.get(leaderId);
+            const bool leaderValid = current && current->serial == serial && m_factionService.isLeader(leaderId) &&
+                                     m_factionService.getMemberFaction(leaderId) == factionId;
+            if (!leaderValid)
+                return;
+            IPlayer *leader = m_core.getPlayers().get(leaderId);
+            if (leader)
+                leader->sendClientMessage(
+                    ERROR_COLOUR, u("Не удалось исполнить приказ (временный сбой). Повторите."));
+        });
 }
 
 void FactionSystem::showRankMenu(IPlayer &player, std::int64_t rankId)

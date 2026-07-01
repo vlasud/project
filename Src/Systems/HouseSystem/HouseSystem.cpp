@@ -305,16 +305,16 @@ void HouseSystem::showClaimConfirm(IPlayer &player, int houseId)
             const PlayerSessionService::AccountId accountId = session->accountId;
             const std::string ownerKey = std::to_string(accountId);
 
+            HouseService &service = m_serviceRegister.getService<HouseService>();
             // Гейт старт-гонки «один дом на игрока»: пока владение из БД не легло в
             // память, ownsHouse() врёт (вернёт false на ещё не подтянутые дома), и
             // игрок мог бы занять второй дом до прихода зеркала. Откладываем занятие.
-            if (!m_ownershipLoaded)
+            if (!service.isOwnershipLoaded())
             {
                 player->sendClientMessage(ERROR_COLOUR, u("Дома ещё загружаются, попробуйте через момент"));
                 return;
             }
 
-            HouseService &service = m_serviceRegister.getService<HouseService>();
             // Перепроверка на момент СОГЛАСИЯ (диалогу не доверяем): дом ещё есть и
             // ещё ничейный; игрок ещё не владеет домом (один дом на игрока).
             const HouseService::House *house = service.getHouse(houseId);
@@ -847,15 +847,19 @@ void HouseSystem::loadOwnershipAsync()
                 service.setOwner(houseId, std::to_string(accountId)); // только память
                 refreshHouseIcon(houseId);
             }
-            m_ownershipLoaded = true; // владение в памяти — занятие домов разблокировано
+            // Владение в памяти — занятие домов разблокировано; оповещаем
+            // подписчиков (SpawnChoiceSystem перерезолвит спавн «Дом» онлайн-игрокам,
+            // чей Home-выбор применился на логине ДО прихода house_owner).
+            service.markOwnershipLoaded();
         },
         [this](const std::string &error)
         {
             LogManager::log(Error, "HouseSystem: failed to load house ownership: " + error);
             // БД-загрузка упала — НЕ блокируем фичу навсегда: работаем с пустым
             // in-memory владением. БД-бэкстопы (UNIQUE account_id, claim-DELETE по
-            // OR account_id) держат консистентность даже при пустом зеркале.
-            m_ownershipLoaded = true;
+            // OR account_id) держат консистентность даже при пустом зеркале. Флаг
+            // готовности всё равно выставляем (подписчики разблокируются).
+            m_serviceRegister.getService<HouseService>().markOwnershipLoaded();
         });
 }
 

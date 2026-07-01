@@ -1,5 +1,6 @@
 #include "Systems/Core/VehicleSystem/VehicleSystem.h"
 
+#include "Services/Core/GridService/GridService.h" // пробрасываем в VehicleService::bind
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Systems/Core/PlayerHealthSystem/WeaponLimits.h" // табличный урон оружия
 #include <chrono>
@@ -26,9 +27,12 @@ VehicleSystem::VehicleSystem(ICore &core, const ServiceRegister &serviceRegister
 void VehicleSystem::initialize(IComponentList *components)
 {
     // Единственное место queryComponent<IVehiclesComponent> в геймоде (DI-handoff):
-    // результат немедленно уходит в bind и нигде не сохраняется.
+    // результат немедленно уходит в bind и нигде не сохраняется. GridService к этому
+    // моменту сконструирован (все сервисы — до фазы initialize), хоть в реестре он и
+    // после VehicleService: anyVehicleNear спрашивает соседей-машин у него.
     m_vehicleService.bind(components->queryComponent<IVehiclesComponent>(),
-                          m_serviceRegister.getService<PlayerLocationService>(), *this, *this);
+                          m_serviceRegister.getService<PlayerLocationService>(),
+                          m_serviceRegister.getService<GridService>(), *this, *this);
 
     // Подписка на выстрелы именно здесь (initialize выполняется после всех
     // конструкторов): мы оказываемся в диспатчере ПОСЛЕ PlayerWeaponSystem —

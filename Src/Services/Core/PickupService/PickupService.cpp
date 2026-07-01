@@ -15,7 +15,7 @@ constexpr int MAX_PICKUP_TYPE = 23; // клиентские типы повед�
 } // namespace
 
 int PickupService::add(int model, PickupType type, const Vector3 &position, Handler onPickUp,
-                       std::uint32_t virtualWorld, Milliseconds cooldown)
+                       std::uint32_t virtualWorld, Milliseconds rearmGap)
 {
     if (!m_streamer)
     {
@@ -25,7 +25,7 @@ int PickupService::add(int model, PickupType type, const Vector3 &position, Hand
 
     model = std::clamp(model, 0, MAX_PICKUP_MODEL);
     type = static_cast<PickupType>(std::clamp<int>(type, 0, MAX_PICKUP_TYPE));
-    cooldown = std::max(cooldown, Milliseconds(0));
+    rearmGap = std::max(rearmGap, Milliseconds(0));
 
     const int pickupId = m_streamer->addPickup(model, type, position, virtualWorld);
     if (pickupId < 0)
@@ -37,7 +37,7 @@ int PickupService::add(int model, PickupType type, const Vector3 &position, Hand
     Def def;
     def.position = position;
     def.virtualWorld = virtualWorld;
-    def.cooldown = cooldown;
+    def.rearmGap = rearmGap;
     def.model = model;
     def.handler = std::move(onPickUp);
     m_defs[pickupId] = std::move(def);
@@ -119,15 +119,20 @@ void PickupService::handlePickUp(IPlayer &player, IPickup &pickup, TimePoint now
         return;
     }
 
-    // Антиспам: клиент легально дублирует событие у части типов пикапов —
-    // молча отбрасываем, без записи нарушения.
+    // Edge-триггер: клиент шлёт событие подбора ПОВТОРНО, пока игрок стоит на
+    // пикапе (open.mp не троттлит — чистый релей RPC). Держим время последнего
+    // ПРИНЯТОГО события; handler зовём только на СВЕЖЕМ входе — когда прошлого
+    // события не было вовсе, либо поток прерывался дольше rearmGap (игрок сходил
+    // с пикапа). Время события обновляем ВСЕГДА (валидное событие продлевает
+    // «игрок на пикапе»), решение о вызове — до обновления.
     auto &lastByDef = m_lastPickUp[playerId];
     auto lastIt = lastByDef.find(pickupId);
-    if (lastIt != lastByDef.end() && now - lastIt->second < def.cooldown)
+    const bool freshEntry = lastIt == lastByDef.end() || now - lastIt->second > def.rearmGap;
+    lastByDef[pickupId] = now;
+    if (!freshEntry)
     {
         return;
     }
-    lastByDef[pickupId] = now;
 
     // Копия на случай, если обработчик удалит свой же пикап (remove сотрёт def
     // вместе с std::function — оригинал нельзя разрушать во время вызова).

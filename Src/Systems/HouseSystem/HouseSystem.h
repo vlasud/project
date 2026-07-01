@@ -36,7 +36,7 @@
 // записи оптимистичная память владения откатывается. Удаление дома стирает строку
 // владения; на старте владение грузится из БД ПОСЛЕ разбора описаний (безусловно,
 // на всех ветках) и применяется к живым домам (зелёная -> красная). До прихода
-// зеркала занятие домов отложено флагом m_ownershipLoaded (старт-гонка «один дом на
+// зеркала занятие домов отложено флагом HouseService::isOwnershipLoaded (старт-гонка «один дом на
 // игрока»). Серверная правда: accountId берётся из PlayerSessionService, не от
 // клиента; согласие перепроверяет, что дом жив и ещё ничейный, а игрок ещё не владеет
 // домом (in-memory ownsHouse + БД UNIQUE account_id — бэкстоп).
@@ -75,7 +75,7 @@ class HouseSystem : public BaseSystem
     void onExitPickup(int houseId, IPlayer &player);
 
     // MSGBOX занятия ничейного дома. Согласие требует загруженного владения
-    // (m_ownershipLoaded — иначе отказ «дома ещё загружаются»), перепроверяет (дом
+    // (HouseService::isOwnershipLoaded — иначе отказ «дома ещё загружаются»), перепроверяет (дом
     // жив и ещё ничейный, игрок ещё не владеет домом), выставляет владельца в памяти
     // оптимистично, пишет владение в БД одной транзакцией DELETE+INSERT (house_owner
     // write-through) и перекрашивает иконку. При сбое записи память владения
@@ -100,7 +100,8 @@ class HouseSystem : public BaseSystem
     // разбора описаний домов на ВСЕХ ветках (пусто/битый/успех; getHouse-гард в
     // колбэке отбросит осиротевшие записи). Колбэк на главном потоке: setOwner в
     // памяти + refreshHouseIcon по живым домам. Без записи в БД — загрузка зеркала.
-    // По завершении (успех ИЛИ ошибка БД) выставляет m_ownershipLoaded.
+    // По завершении (успех ИЛИ ошибка БД) зовёт HouseService::markOwnershipLoaded
+    // (флаг готовности + one-shot оповещение подписчиков, напр. SpawnChoiceSystem).
     void loadOwnershipAsync();
     // Крах-безопасный парсер фиксированной схемы домов: на любой мусор/обрезку
     // возвращает то, что удалось распознать (битые объекты молча пропускаются),
@@ -125,10 +126,9 @@ class HouseSystem : public BaseSystem
     PlayerSessionService &m_sessionService; // ключ владельца = std::to_string(accountId)
 
     std::unordered_map<int, Runtime> m_runtime;            // houseId -> хэндлы
-    // Владение из БД легло в память (loadOwnershipAsync завершился — успехом или
-    // ошибкой БД). До этого занятие домов отложено: ownsHouse() ещё не видит
-    // зеркало, и можно было бы занять второй дом (старт-гонка «один дом на игрока»).
-    bool m_ownershipLoaded = false;
+    // Готовность владения (загрузка house_owner из БД завершилась) живёт в
+    // HouseService (isOwnershipLoaded + subscribeOwnershipLoaded): один источник
+    // правды + one-shot оповещение подписчиков (SpawnChoiceSystem).
     std::array<TimePoint, MAX_PLAYERS> m_exitGraceFrom{};     // момент последнего входа (грейс выхода)
     std::array<TimePoint, MAX_PLAYERS> m_entranceGraceFrom{}; // момент последнего выхода (грейс входа)
 };

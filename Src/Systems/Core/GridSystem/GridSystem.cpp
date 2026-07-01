@@ -19,6 +19,7 @@ void GridSystem::initialize(IComponentList *components)
     (void)components;
     m_vehicleService.subscribeCreated([this](IVehicle &vehicle) { onVehicleAdded(vehicle); });
     m_vehicleService.subscribeDestroyed([this](IVehicle &vehicle) { onVehicleRemoved(vehicle); });
+    m_vehicleService.subscribeMoved([this](IVehicle &vehicle, Vector3 position) { onVehicleMoved(vehicle, position); });
 }
 
 bool GridSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
@@ -90,5 +91,19 @@ void GridSystem::onVehicleRemoved(IVehicle &vehicle)
     {
         m_gridService.remove(handle);
         handle = GridService::INVALID_HANDLE;
+    }
+}
+
+void GridSystem::onVehicleMoved(IVehicle &vehicle, Vector3 acceptedPosition)
+{
+    const int vehicleId = vehicle.getID();
+    if (vehicleId < 0 || vehicleId >= static_cast<int>(m_vehicleHandles.size()))
+        return;
+    const GridService::Handle handle = m_vehicleHandles[vehicleId];
+    if (handle != GridService::INVALID_HANDLE)
+    {
+        // Позиция уже принята сервером (валидатор unoccupied / телепорт на спавн) —
+        // кладём как есть. NaN/Inf в координате гасит сам GridService (cellCoord).
+        m_gridService.move(handle, acceptedPosition);
     }
 }

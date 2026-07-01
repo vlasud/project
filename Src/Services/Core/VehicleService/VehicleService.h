@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+class GridService; // пространственный индекс машин — для anyVehicleNear (указатель-член)
+
 // Сервис машин — источник правды о том, кто в какой машине сидит, и о серверном
 // HP каждой машины, плюс валидации.
 //
@@ -63,7 +65,10 @@ class VehicleService final : public IService
 
     // Инициализация: привязывает пул машин и сервисы; регистрирует vehicleEvents и
     // poolEvents в диспатчерах компонента (VehicleSystem передаёт себя как оба).
-    void bind(IVehiclesComponent *vehicles, PlayerLocationService &location,
+    // grid — пространственный индекс (anyVehicleNear спрашивает соседей машин у него,
+    // а не проходом по пулу). Все сервисы сконструированы до фазы initialize, так что
+    // grid уже валиден, даже если GridService в реестре идёт после VehicleService.
+    void bind(IVehiclesComponent *vehicles, PlayerLocationService &location, GridService &grid,
               VehicleEventHandler &vehicleEvents, PoolEventHandler<IVehicle> &poolEvents);
 
     // Единая точка создания машин (источник правды): создаёт машину в пуле и
@@ -78,8 +83,9 @@ class VehicleService final : public IService
     // Есть ли существующая машина в радиусе от точки (кроме excludeVehicleId).
     // Близость ГОРИЗОНТАЛЬНАЯ — по XY, Z игнорируется (точки занятости на одной
     // высоте, машина оседает на грунт со своей Z; иначе Z-разница ложно вышибала бы
-    // машину из радиуса). Сравнение по квадрату дистанции (без sqrt). Проход по пулу
-    // — холодный путь (зовётся на спавне по вводу, не per-tick). Нет компонента -> false.
+    // машину из радиуса). Сравнение по квадрату дистанции (без sqrt). Соседей даёт
+    // GridService (пространственный индекс) — O(машин в соседних ячейках), не проход
+    // по всему пулу. Нет грида/компонента -> false.
     bool anyVehicleNear(Vector3 position, float radius, int excludeVehicleId = -1) const;
     // Уничтожить машину пула. No-op без компонента/машины. Пул-событие
     // уничтожения (через VehicleSystem) сбросит стейт и оповестит наблюдателей.
@@ -96,6 +102,17 @@ class VehicleService final : public IService
     void subscribeCreated(VehicleObserver observer);
     void subscribeDestroyed(VehicleObserver observer);
     void subscribeDied(VehicleObserver observer);
+
+    // Наблюдатель смены позиции БЕЗ водителя — для систем с пространственным
+    // индексом машин (GridService): под водителем грид ведёт driver-апдейт, а на
+    // прочих путях смены реальной позиции (респаун, ПРИНЯТЫЙ unoccupied-синк)
+    // машина «телепортируется» помимо него, и индекс становится стейл. Зовётся
+    // ТОЛЬКО с серверно-ПРИНЯТОЙ позицией: на респауне — getPosition() (ядро уже
+    // на spawn-позиции), на unoccupied — позиция ИЗ принятого апдейта (ядро
+    // применит её ПОСЛЕ accept, getPosition() в этот момент ещё старая).
+    // Отклонённый читерский апдейт сюда не доходит. Главный поток.
+    using VehicleMoveObserver = std::function<void(IVehicle &, Vector3 acceptedPosition)>;
+    void subscribeMoved(VehicleMoveObserver observer);
 
     // --- источник правды ---
     IVehicle *getVehicle(int playerId) const; // машина игрока (по принятому стейту)
@@ -126,6 +143,12 @@ class VehicleService final : public IService
 
     // --- серверные операции ---
     void setHealth(IVehicle &vehicle, float health);
+    // ПРИВИЛЕГИРОВАННАЯ дев-операция: форсирует смерть машины в обход анти-грифинга.
+    // Ставит серверное HP в 0 и шлёт клиенту setHealth(0) БЕЗ stallIfCritical, чтобы
+    // клиент детонировал машину, отрепортил Health<=0 в driver-sync и сервер
+    // диспатчнул onVehicleDeath. Обычный урон по-прежнему глохнет (stallIfCritical /
+    // анти-грифинг не трогаем) — это исключение только для теста реального уничтожения.
+    void explode(IVehicle &vehicle);
     void repair(IVehicle &vehicle); // полный ремонт: HP 1000 + визуал + снимает «заглохла»
     // Серверно-авторитетный урон машине (стрельба: клиент водителя чужих пуль не
     // видит при lagcomp — урон применяет сервер; модель ровно как HP игрока).
@@ -207,10 +230,15 @@ class VehicleService final : public IService
 
     IVehiclesComponent *m_vehicles = nullptr;
     PlayerLocationService *m_location = nullptr;
+    GridService *m_grid = nullptr; // пространственный индекс машин (anyVehicleNear)
+
+    // Оповещает наблюдателей смены позиции (грид) о принятой позиции машины.
+    void notifyMoved(IVehicle &vehicle, Vector3 acceptedPosition);
 
     std::vector<VehicleObserver> m_createdObservers;
     std::vector<VehicleObserver> m_destroyedObservers;
     std::vector<VehicleObserver> m_diedObservers;
+    std::vector<VehicleMoveObserver> m_movedObservers;
 
     std::array<VehicleState, VEHICLE_POOL_SIZE> m_vehicleState;
     std::array<Occupant, MAX_PLAYERS> m_occupants;

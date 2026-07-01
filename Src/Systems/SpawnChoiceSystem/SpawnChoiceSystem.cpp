@@ -52,6 +52,22 @@ SpawnChoiceSystem::SpawnChoiceSystem(ICore &core, const ServiceRegister &service
     // аргумента (он гарантированно валиден в момент события).
     m_factionService.subscribeMemberChange([this](IPlayer &player, int, int) { applySpawn(player); });
 
+    // Старт-гонка спавна «Дом»: на логине выбор Home применяется (applySpawn ->
+    // resolveSpawn -> houseOf) ДО прихода house_owner из БД -> houseOf ещё не видит
+    // владение -> фолбэк на вокзал. По завершении загрузки владения перерезолвим
+    // спавн уже-онлайн игрокам с выбором Home (зеркало FamilySystem::loadAll).
+    // One-shot: подписка отрабатывает один раз; новые логины после загрузки уже
+    // видят владение, повторно дёргать не нужно.
+    m_houseService.subscribeOwnershipLoaded(
+        [this]
+        {
+            for (IPlayer *player : m_core.getPlayers().entries())
+            {
+                if (m_choiceService.getChoice(player->getID()) == SpawnChoiceService::Choice::Home)
+                    applySpawn(*player);
+            }
+        });
+
     auto &commands = serviceRegister.getService<PlayerCommandService>();
     commands.add("setspawn", {},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showDialog(player); }, {},

@@ -3,6 +3,7 @@
 #include "glm/geometric.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fmt/format.h>
 
 namespace
@@ -54,6 +55,11 @@ float clampDt(float seconds)
     return seconds;
 }
 
+bool isFinite(const Vector3 &p)
+{
+    return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+}
+
 bool inWorldBounds(const Vector3 &p)
 {
     return p.x >= -WORLD_BOUND_XY && p.x <= WORLD_BOUND_XY && p.y >= -WORLD_BOUND_XY && p.y <= WORLD_BOUND_XY &&
@@ -69,6 +75,15 @@ bool isPlayingState(PlayerState state)
 void PlayerLocationService::forceTo(IPlayer &player, const Vector3 &position, TimePoint now)
 {
     State &st = m_state[player.getID()];
+
+    // Не-конечная цель (NaN/Inf) НИКОГДА не пишется в источник правды: ниже по
+    // потоку cellCoord делает static_cast<int>(position) — на NaN/Inf это UB.
+    // Откатываем на последнюю принятую позицию, телепорт не инициируем.
+    if (!isFinite(position))
+    {
+        player.setPosition(st.position);
+        return;
+    }
 
     // Радиус прибытия — от дальности прыжка: короткий откат требует точного
     // прибытия, дальний телепорт даёт запас на рельеф/падение в точке.
@@ -163,7 +178,11 @@ void PlayerLocationService::onSpawn(IPlayer &player)
     st.tracking = true;
     st.acceptNext = true; // спавн — легальный скачок в точку спавна
     st.pendingTeleport = false;
-    st.position = player.getPosition();
+    // Не-конечную позицию в источник правды не пишем (инвариант cellCoord); грейс
+    // acceptNext всё равно примет первый конечный апдейт.
+    const Vector3 spawnPos = player.getPosition();
+    if (isFinite(spawnPos))
+        st.position = spawnPos;
     ++st.discontinuity;
 }
 
@@ -192,6 +211,24 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
     }
 
     const Vector3 reported = player.getPosition();
+
+    // Не-конечная клиентская позиция (NaN/Inf) НИКОГДА не доходит до st.position:
+    // ниже cellCoord делает static_cast<int> из координат — на NaN/Inf это UB.
+    // Отклоняем на ВСЕХ путях (байпас/грейс/обычная проверка) ДО любой записи,
+    // оставляя последнюю принятую позицию. В байпасе (редактор) только не пишем —
+    // не дёргаем setPosition и не плодим нарушение (дев двигает игрока сам); вне
+    // байпаса форсим клиента обратно в принятую точку и фиксируем нарушение.
+    if (!isFinite(reported))
+    {
+        st.lastUpdate = now;
+        if (!st.bypass)
+        {
+            forceTo(player, st.position, now);
+            outcome.teleportHack = true;
+            outcome.detail = "non-finite position reported";
+        }
+        return outcome;
+    }
 
     // Байпас (редактор): позицию принимаем без проверок — источник правды
     // остаётся свежим, но каждый сэмпл помечен как разрыв непрерывности.

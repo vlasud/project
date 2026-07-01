@@ -244,6 +244,11 @@ class FactionService final : public IService
     // отказ из-за пустого бюджета не сжигает попытку (лидер пополнит и повторит).
     bool isPayOrderReady(int factionId, TimePoint now) const;
     void markPayOrderIssued(int factionId, TimePoint now);
+    // Сбросить кулдаун в «не было приказов» (TimePoint{}). Нужен для оптимистичной
+    // отметки: приказ помечается ДО async-кредита (гасит двойной клик в окне
+    // запроса), а если зачислять оказалось нечего/не хватило бюджета — откатываем,
+    // чтобы пустая попытка не сжигала кулдаун.
+    void clearPayOrderCooldown(int factionId);
 
     // --- операции лидера с рангами (write-through в БД) ---
     // Имя — utf-8, уже прошедшее sanitizeRankName (пустое — отказ).
