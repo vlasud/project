@@ -6,6 +6,7 @@
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "types.hpp"
 #include <array>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -45,11 +46,16 @@ class PersonalVehicleService final : public IService
     // dbId — стабильный ключ строки personal_vehicle (id), по которому шеринг семье
     // ссылается на КОНКРЕТНУЮ машину. -1 — ещё не присвоен (окно между buy и приходом
     // LAST_INSERT_ID из async-INSERT); такую машину нельзя расшарить, пока id не лёг.
+    // fuel — ПЕРСИСТЕНТНЫЙ остаток бака (0..VehicleService::FUEL_CAPACITY):
+    // источник правды, пока машина НЕ заспавнена (vehicleId == -1); пока заспавнена —
+    // источник правды VehicleService::getFuel(vehicleId), это поле лишь снимок на
+    // момент последнего сохранения (captureFuel перед уничтожением/сессией).
     struct OwnedVehicle
     {
         int model = 0;
         int vehicleId = -1;
         long long dbId = -1;
+        float fuel = -1.0f; // -1 — не загружено из БД/не сохранено; spawn() трактует как полный бак
     };
 
     // Привязать VehicleService (источник правды о машинах). Зовётся
@@ -94,15 +100,35 @@ class PersonalVehicleService final : public IService
 
     // Заспавнить владение ownedIndex игрока на заданной точке (серверные координаты
     // от парковки). Если экземпляр уже заспавнен (vehicleId != -1) — ПЕРЕ-СПАВН:
-    // старый destroy, новый на точке. Машина — через VehicleService::create
-    // (Owner::Player, ownerId=playerId). При Ok записывает новый id в владение и
-    // отдаёт *out. Запись владения НЕ удаляется ни на одной ветке — индекс стабилен.
+    // старый уничтожается, но СНАЧАЛА его fuel (VehicleService::getFuel) снимается в
+    // entry.fuel (переживает пере-спавн — иначе вызов машины заново доливал бы бак
+    // бесплатно), новый создаётся на точке. Машина — через VehicleService::create
+    // (Owner::Player, ownerId=playerId), затем ПРИМЕНЯЕТСЯ персистентный fuel записи
+    // (entry.fuel >= 0 — сохранённый остаток; -1 — ещё не сохранён/только куплена,
+    // create уже дал полный бак по дефолту, setFuel не зовём). При Ok записывает
+    // новый id в владение и отдаёт *out. Запись владения НЕ удаляется ни на одной
+    // ветке — индекс стабилен.
     SpawnResult spawn(int playerId, int ownedIndex, Vector3 position, float angle, int colour1, int colour2,
                       IVehicle **out = nullptr);
 
     // id текущего заспавненного экземпляра владения (или -1) — для исключения своей
     // машины при поиске свободной точки на пере-спавне. Bounds-safe.
     int currentVehicle(int playerId, int ownedIndex) const;
+
+    // dbId записи ownedIndex игрока (или -1). Для персиста fuel вызывающей системой
+    // (PersonalVehicleSystem — write-through UPDATE по dbId). Bounds-safe.
+    long long dbIdOf(int playerId, int ownedIndex) const;
+
+    // Записать ПЕРСИСТЕНТНЫЙ снимок остатка топлива записи ownedIndex (кламп
+    // 0..VehicleService::FUEL_CAPACITY; NaN/Inf игнорируется). Только ПАМЯТЬ — write-
+    // through делает вызывающая система. Для: (1) загрузки из БД (через load), (2)
+    // снимка перед уничтожением заспавненного экземпляра (пере-спавн/disconnect/
+    // санкционированная смерть), (3) восстановления после респавна несанкционированной
+    // смерти. Bounds-safe; no-op для несуществующей записи.
+    void setFuel(int playerId, int ownedIndex, float fuel);
+    // Текущий ПЕРСИСТЕНТНЫЙ снимок fuel записи (или -1 для bounds-промаха/невалидной
+    // записи — трактуется вызывающим как «нет сохранённого, дефолт полный бак»).
+    float fuelOf(int playerId, int ownedIndex) const;
 
     // Число владений игрока (bounds-safe; 0 для невалидного id).
     int count(int playerId) const;
@@ -125,11 +151,12 @@ class PersonalVehicleService final : public IService
 
   private:
     // --- вызывается PersonalVehicleSystem ---
-    // Загрузка владения по старту сессии: кладёт пары (dbId, модель) из БД в память
-    // как OwnedVehicle{model, -1, dbId} (БЕЗ записи в БД — это зеркало, не покупка) и
-    // поднимает per-player флаг loaded (покупка разблокирована). Память перед этим уже
-    // пуста (reset на коннекте/конце прошлой сессии). Bounds-safe.
-    void load(int playerId, const std::vector<std::pair<long long, int>> &rows);
+    // Загрузка владения по старту сессии: кладёт строки (dbId, модель, fuel) из БД в
+    // память как OwnedVehicle{model, -1, dbId, fuel} (БЕЗ записи в БД — это зеркало, не
+    // покупка) и поднимает per-player флаг loaded (покупка разблокирована). fuel
+    // клампится 0..CAP (мусор из БД — NaN/отрицательное/сверх капасити). Память перед
+    // этим уже пуста (reset на коннекте/конце прошлой сессии). Bounds-safe.
+    void load(int playerId, const std::vector<std::tuple<long long, int, double>> &rows);
 
     // Проставить dbId владению ownedIndex игрока (success-колбэк async-INSERT покупки).
     // Пишет только если запись существует и её dbId ещё -1 (не перетереть уже
@@ -138,7 +165,10 @@ class PersonalVehicleService final : public IService
 
     // Конец/начало сессии: уничтожить ВСЕ заспавненные машины игрока, очистить
     // ПАМЯТЬ владения и снять флаг loaded. БД НЕ ТРОГАЕМ — право владения остаётся в
-    // personal_vehicle и подтянется на следующем старте. Bounds-safe.
+    // personal_vehicle и подтянется на следующем старте. Bounds-safe. ВАЖНО:
+    // персист fuel (write-through UPDATE) — забота ВЫЗЫВАЮЩЕЙ системы ДО этого
+    // вызова (снять getFuel живых экземпляров, пока они ещё существуют) — reset сам
+    // БД не трогает и стирает память владения безусловно.
     void reset(int playerId);
 
     // Машину уничтожил кто-то ещё (пул-событие через VehicleService::subscribeDestroyed

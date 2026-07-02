@@ -3,12 +3,15 @@
 #include "Macro.h"
 #include "Services/IService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
+#include "Services/Core/VehicleService/RepairZones.h" // RepairZones::Zone — параметр dwelledInZone
 #include "player.hpp"
 #include "types.hpp"
 #include <Server/Components/Vehicles/vehicles.hpp>
 #include <array>
 #include <functional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class GridService; // пространственный индекс машин — для anyVehicleNear (указатель-член)
@@ -17,23 +20,69 @@ class GridService; // пространственный индекс машин �
 // HP каждой машины, плюс валидации.
 //
 // HP машины клиент-авторитетно: его диктует driver sync водителя. Поэтому сервис
-// ведёт принятое HP по модели игрокового здоровья: снижение (урон) принимается,
+// ведёт принятое HP храповиком по модели игрокового здоровья: снижение (урон)
+// принимается, вверх принятое HP клиент не двигает вовсе (HEALTH_EPS — лишь
+// допуск «не флажить дрожание» float, рост дают только серверные операции),
 // рост без серверной санкции — vehicle repair hack — откатывается и фиксируется.
+// Единственный рост по клиентскому событию — санкции ремонта мод-шопа/Pay'n'Spray
+// (SCM-события), и они гейтятся серверной позицией машины у известной ремзоны
+// (RepairZones.h) + серверной сессией мод-шопа: голый SCM-пакет ремонта не даёт.
+// Позиция машины (vehicle.getPosition()) сама по себе КЛИЕНТ-АВТОРИТЕТНА — ядро
+// пишет её безусловно из driver-sync водителя (Vehicle::updateFromDriverSync),
+// и суб-пороговый дрейф (телепорт медленнее, чем ловит PlayerLocationService::
+// verify) даёт мгновенное появление в зоне без единого флага. Поэтому зонный
+// гейт СОСТАВНОЙ: «машина в зоне СЕЙЧАС» + «непрерывно простояла там не меньше
+// ZONE_DWELL_MIN» — второе требует физического подъезда и удержания, а не
+// мгновенной телепортации; трек ведёт verifyHealth на каждом driver-sync
+// (VehicleState::zoneEnteredAt).
 //
 // Unoccupied sync (физику пустой машины считает ближайший клиент) — канал чита
 // для перетаскивания/телепорта чужих машин: валидируется дистанция репортера,
 // величина скачка и скорость; фейковый апдейт ОТКЛОНЯЕТСЯ (не применяется ядром).
 //
 // Телепорт машины С ВОДИТЕЛЕМ ловится валидатором позиции игрока (позиция
-// водителя следует за машиной) — здесь не дублируется.
+// водителя следует за машиной) — здесь не дублируется. ИСКЛЮЧЕНИЕ — легальный
+// заезд в мод-шоп: клиент физически переносит машину с водителем в интерьер
+// шопа (universe-координаты), и это честный «телепорт» на тысячи метров без
+// серверного teleport(). onModShop на ПРИНЯТОМ enter/exit выдаёт точечный грейс
+// через PlayerLocationService::grantModShopTeleportGrace — иначе честный тюнер
+// поймал бы forceTo и вылетел бы из шопа как читер.
 //
-// МАШИНЫ НЕ ВЗРЫВАЮТСЯ ВООБЩЕ, ни по какой причине: ниже ~250 HP клиент
-// поджигает машину и затем взрывает. Как только серверное HP падает к порогу,
-// машина ГЛОХНЕТ: HP клампится на STALL_HEALTH (выше порога пожара —
-// восстановление HP тушит уже занявшийся клиентский огонь), двигатель
-// глушится и не заводится до repair(). Единственное, что сервер физически не
-// перехватывает, — мгновенный локальный подрыв взрывчаткой вплотную (клиент
-// успевает отыграть смерть до ответа сервера).
+// МАШИНЫ НЕ ТЕРЯЮТСЯ, а там, где сервер ВИДИТ HP, — и не взрываются: ниже
+// ~250 HP клиент поджигает машину и затем взрывает; как только серверное HP
+// падает к порогу, машина ГЛОХНЕТ: HP клампится на STALL_HEALTH (выше порога
+// пожара — восстановление HP тушит уже занявшийся клиентский огонь), двигатель
+// глушится и не заводится до repair(). С водителем HP ведёт verifyHealth
+// (driver-sync). БЕЗ водителя ядро пишет HP из ПРИНЯТОГО unoccupied-синка
+// ТОЛЬКО когда репортер — ПАССАЖИР машины (SeatID != 0, vehicle.cpp
+// updateFromUnoccupied); этот кейс тушит кламп по ядровому getHealth()
+// (douseUnoccupiedFire: accept-путь синка + секундный проход secondTick).
+// ПО-НАСТОЯЩЕМУ ПУСТУЮ машину (репортер — ближайший клиент, SeatID == 0)
+// сервер физически НЕ видит: HP из её синков ядро не применяет, серверного
+// урона по ней нет — клиентский пожар не потушить, и на клиентах она ВИДИМО
+// детонирует (расстрел брошенной, утопление, взрывчатка). Потери при этом
+// нет: детонацию гасит контракт смерти — машина возвращается ЦЕЛОЙ респавном.
+//
+// КОНТРАКТ СМЕРТИ: легальная смерть машины — ТОЛЬКО серверная санкция
+// (explode() ставит serverKilled). Санкционированная смерть оповещает
+// died-наблюдателей (политика бизнеса: личную destroy и т.п.).
+// НЕсанкционированная (клиентская детонация пустой / фейковый репорт смерти)
+// died-политику НЕ применяет: первая смерть бэкофф-окна отложенным серверным
+// респавном (respawnIfDead) возвращает машину ЦЕЛОЙ НА МЕСТЕ — на точке, где
+// сервер зафиксировал смерть, а НЕ на spawn-точке (иначе любой застримивший
+// игрок работал бы «эвакуатором», телепортируя чужие пустые машины домой
+// фейковым VehicleDeath). ПОВТОРНАЯ смерть в окне UNSANCTIONED_DEATH_BACKOFF
+// (после возврата умерла снова: утопленная, спам-грифинг) наш респавн НЕ
+// взводит — машину вернёт ядровой death-таймер (game.vehicle_respawn_time,
+// ~10 с) на её spawn-точку: это и спасение утопленной, и потолок темпа
+// стрим-чёрна. САМ репорт смерти НАРУШЕНИЕМ не считается (сервер не видит
+// урона по пустой машине, честная детонация по серверным фактам неотличима
+// от фейка), но НЕЧЕЛОВЕЧЕСКИЙ темп репортов от одного игрока — уже серверный
+// факт и флажится (DEATH_REPORT_MAX за скользящее окно).
+//
+// subscribeUnsanctionedDeath оповещает бизнес о ФАКТЕ несанкционированной
+// смерти (без текста — Core политику не решает): бизнес резолвит владельца по
+// серверным записям и шлёт уведомление, только если тот онлайн.
 //
 // КОНТРАКТ: серверные изменения HP/ремонт — только через сервис; прямой
 // vehicle.setHealth() мимо него валидатор посчитает читерским ростом.
@@ -48,7 +97,7 @@ class VehicleService final : public IService
     static constexpr float STALL_HEALTH = 300.0f;
 
     // Бак (баланс — тюнится): полный объём и расход за секунду при заведённом
-    // двигателе. 100 / 0.1 ≈ 1000 с ≈ 16 минут езды до пустого.
+    // двигателе. 100 / 0.1 = 1000 с ≈ 17 минут (16 мин 40 с) езды до пустого.
     static constexpr float FUEL_CAPACITY = 100.0f;
     static constexpr float FUEL_DRAIN_PER_SEC = 0.1f;
 
@@ -87,6 +136,9 @@ class VehicleService final : public IService
 
     // Получить машину пула по id (nullptr — нет компонента/несуществующая).
     IVehicle *get(int vehicleId) const;
+    // Имя модели машины по vehicle id (каталог VehicleModelNames, статические
+    // литералы — O(1), без аллокаций). Пустой string_view — несуществующая машина.
+    std::string_view getModelName(int vehicleId) const;
     // Есть ли существующая машина в радиусе от точки (кроме excludeVehicleId).
     // Близость ГОРИЗОНТАЛЬНАЯ — по XY, Z игнорируется (точки занятости на одной
     // высоте, машина оседает на грунт со своей Z; иначе Z-разница ложно вышибала бы
@@ -101,14 +153,49 @@ class VehicleService final : public IService
     // Наблюдатели жизненного цикла машин — для систем со своим индексом машин.
     // created — после регистрации стейта новой машины;
     // destroyed — пока машина ещё валидна, перед сбросом стейта;
-    // died — на смерть машины (HP -> 0), машина ещё валидна. Бизнес может
-    // реагировать (напр., убрать личную машину, чтобы она не висела вреком).
+    // died — ТОЛЬКО серверно-САНКЦИОНИРОВАННАЯ смерть (explode(), serverKilled);
+    // машина ещё валидна. Бизнес может реагировать (напр., убрать личную машину,
+    // чтобы она не висела вреком). Несанкционированная смерть сюда НЕ доходит —
+    // её гасит сам сервис возвратом машины целой респавном (onVehicleDeath).
     // Это ОБЩАЯ инфраструктура: Core лишь оповещает о событии смерти, без
     // бизнес-политики.
     using VehicleObserver = std::function<void(IVehicle &)>;
     void subscribeCreated(VehicleObserver observer);
     void subscribeDestroyed(VehicleObserver observer);
     void subscribeDied(VehicleObserver observer);
+    // Машина переспавнилась (onVehicleRespawn уже проставил ПОЛНЫЙ бак/HP —
+    // источник правды об «умолчательном» состоянии свежей жизни машины). Крючок
+    // для бизнеса, которому нужно восстановить ПЕРСИСТЕНТНЫЙ остаток топлива
+    // поверх дефолта (setFuel поверх уже примененного FUEL_CAPACITY) — напр.
+    // после несанкционированной смерти (respawnIfDead) машина должна вернуться с
+    // ТЕМ ЖЕ баком, что был перед детонацией, а не долитая бесплатно. Зовётся
+    // ПОСЛЕ применения дефолтов, машина валидна. Главный поток, событийно.
+    void subscribeRespawned(VehicleObserver observer);
+
+    // Наблюдатель НЕсанкционированной смерти (контракт смерти) — только ФАКТ
+    // события, никакого текста: бизнес сам резолвит владельца и шлёт сообщение.
+    // returnsInPlace=true — первая смерть волны, respawnIfDead взведён, машина
+    // вернётся ЦЕЛОЙ НА МЕСТЕ (~100 мс); false — повторная смерть в бэкофф-окне
+    // (машина уже вернулась и умерла снова), её вернёт ядровой death-таймер
+    // (~10 с) на spawn-точку. Зовётся из onVehicleDeath ПОСЛЕ решения о
+    // возврате — машина ещё валидна (died-lock диспатча смерти держит её
+    // живой). Антиспам — одна строка на «мёртвую фазу» машины (взводится на
+    // первом вызове волны, снимается respawn'ом): читер, спамящий setDead,
+    // не размножит колбэк на каждый повторный диспатч onVehicleDeath.
+    // ВАЖНО подписчикам: наблюдатель вызывается ИЗ death-диспатча ядра — НЕЛЬЗЯ
+    // трогать пул машин (destroy/respawn/create) внутри колбэка, только читать
+    // стейт и слать сообщения игрокам.
+    using UnsanctionedDeathObserver = std::function<void(IVehicle &, bool returnsInPlace)>;
+    void subscribeUnsanctionedDeath(UnsanctionedDeathObserver observer);
+
+    // Наблюдатель момента опустошения бака ПОД ВОДИТЕЛЕМ (двигатель заглох сам,
+    // на ходу) — только ФАКТ, без текста: Core не решает бизнес-сообщения. Зовётся
+    // ОДИН раз на переход в outOfFuel (secondTick, driverId >= 0 в момент дренажа);
+    // повторно не шлётся, пока бак не наполнят и не опустеет заново. driverId —
+    // серверный водитель машины на момент опустошения (getDriver). Главный поток,
+    // из секундного таймера — не per-tick.
+    using FuelEmptyObserver = std::function<void(int vehicleId, int driverId)>;
+    void subscribeFuelEmpty(FuelEmptyObserver observer);
 
     // Вето на посадку ЗА РУЛЬ — общая инфраструктура доступа к машине (Core лишь
     // предоставляет крючок; политику — членство/оплата/бан — решает бизнес). Зовётся
@@ -153,16 +240,29 @@ class VehicleService final : public IService
     bool isOutOfFuel(int vehicleId) const;  // пустой бак — двигатель не заводится
     void refuel(IVehicle &vehicle, float amount); // долить (amount>0), кламп на CAP
     void setFuel(IVehicle &vehicle, float amount); // абсолют, кламп 0..CAP
-    // Дренаж бака за прошедшие seconds: проход по пулу, расход только у машин с
-    // заведённым двигателем (наличие водителя не важно); пустой бак глушит
-    // двигатель. Зовётся по таймеру (VehicleSystem), не per-tick.
-    void drainFuel(float seconds);
+    // Секундный обслуживающий проход по пулу (таймер VehicleSystem, не per-tick),
+    // одним циклом два дела:
+    //  * тушение машин БЕЗ водителя: ядровое getHealth() ниже порога -> кламп +
+    //    глушим (douseUnoccupiedFire), broadcast setHealth тушит огонь у
+    //    симулирующего клиента. HP в ядро без водителя пишет только принятый
+    //    unoccupied-синк ПАССАЖИРА (SeatID != 0) — фактическое покрытие
+    //    «пассажир без водителя»; по-настоящему пустой ядровое HP ниже клампа
+    //    никто не опускает (для неё это no-op, детонацию возвращает контракт
+    //    смерти). Стоящая на клампе машина RPC не генерит;
+    //  * дренаж бака за прошедшие seconds, расход по факту РАБОТАЮЩЕГО двигателя:
+    //    engine==1 жжёт всегда (в т.ч. оставленная заведённой без водителя),
+    //    engine==-1 (клиентский авто-режим, дефолт) — только при водителе за
+    //    рулём; engine==0 и -1 без водителя не расходуют (нетронутая парковка не
+    //    пустеет сама). Пустой бак глушит двигатель И, если под водителем —
+    //    зовёт subscribeFuelEmpty (только факт; текст шлёт бизнес).
+    void secondTick(float seconds);
 
     // --- серверные операции ---
     void setHealth(IVehicle &vehicle, float health);
     // ПРИВИЛЕГИРОВАННАЯ дев-операция: форсирует смерть машины в обход анти-грифинга.
-    // Ставит серверное HP в 0 и шлёт клиенту setHealth(0) БЕЗ stallIfCritical, чтобы
-    // клиент детонировал машину, отрепортил Health<=0 в driver-sync и сервер
+    // Ставит serverKilled (санкция смерти: died-наблюдатели сработают, douse-кламп
+    // её не воскресит), серверное HP в 0 и шлёт клиенту setHealth(0) БЕЗ
+    // stallIfCritical, чтобы клиент детонировал машину, отрепортил смерть и сервер
     // диспатчнул onVehicleDeath. Обычный урон по-прежнему глохнет (stallIfCritical /
     // анти-грифинг не трогаем) — это исключение только для теста реального уничтожения.
     void explode(IVehicle &vehicle);
@@ -196,29 +296,92 @@ class VehicleService final : public IService
     struct Outcome
     {
         bool vehicleHack = false;
+        // Несанкционированная смерть: назначить отложенный respawnIfDead (возврат
+        // целой НА МЕСТЕ). Взводится один раз на волну смертей (спам setDead
+        // диспатчит смерть каждый тик — таймеры не плодим) и только для ПЕРВОЙ
+        // волны в бэкофф-окне; повторную возвращает ядровой death-таймер.
+        bool queueRespawn = false;
         std::string detail;
     };
 
     // --- вызывается VehicleSystem ---
     void bindOccupant(IPlayer &player, PlayerState newState); // на смене стейта
-    Outcome verifyHealth(IPlayer &player, TimePoint now);     // на апдейте (водитель)
+    // На апдейте водителя: сверка occupant с реальной машиной ядра (форженный
+    // driver-sync на другую застримленную машину пересаживает в ядре БЕЗ
+    // стейт-чейнджа — расхождение перепривязывается через bindOccupant, включая
+    // прогон driver-gate: вето высадит) + валидация HP. Принятое HP — храповик:
+    // движется только вниз; HEALTH_EPS — допуск «не флажить дрожание», не
+    // источник роста. Рост — только серверные операции (repair/setHealth/...).
+    // ПОПУТНО обновляет zone dwell-трек (VehicleState::zoneEnteredAt) — момент
+    // непрерывного входа машины в известную ремзону: единственное место, где
+    // vehicle.getPosition() (клиент-авторитетная, ядро пишет её безусловно из
+    // driver-sync) читается на КАЖДОМ апдейте, а не разово в момент SCM-события.
+    // SCM-гейты (validateMod/validatePaintJob/validateRespray/onModShop) требуют
+    // не только «машина в зоне сейчас», но и «непрерывно не меньше ZONE_DWELL_MIN»
+    // — суб-пороговый дрейф позиции (телепорт ниже VEHICLE_MAX_SPEED игрока,
+    // остающийся под радаром PlayerLocationService::verify) даёт мгновенное
+    // появление в зоне, но не даёт мгновенного dwell.
+    Outcome verifyHealth(IPlayer &player, TimePoint now);
     // vehicleHack в Outcome означает «апдейт отклонить» (система вернёт false ядру).
     Outcome validateUnoccupied(IVehicle &vehicle, IPlayer &reporter, const UnoccupiedVehicleUpdate &update,
                                TimePoint now);
     Outcome validateTrailer(IPlayer &reporter, IVehicle &trailer, TimePoint now);
 
-    // Клиентская заявка на мод: легальна только от водителя ЭТОЙ машины внутри
-    // мод-шопа и с валидным id компонента. Иначе — отклонить + нарушение.
+    // Клиентская заявка на мод: легальна только от водителя ЭТОЙ машины с
+    // валидным id компонента, в серверно-подтверждённой сессии мод-шопа
+    // (Occupant::inModShop) и с машиной, НЕПРЕРЫВНО простоявшей в зоне шопа
+    // (RepairZones) не меньше ZONE_DWELL_MIN (см. verifyHealth). Иначе —
+    // отклонить + нарушение.
     Outcome validateMod(IPlayer &player, IVehicle &vehicle, int component, TimePoint now);
-    // Перекраска (Pay'n'Spray / мод-шоп): легальна от водителя; принятие даёт
-    // санкцию ремонта — Pay'n'Spray чинит машину на клиенте.
+    // Заявка на пейнтджоб (SetPaintjob SCM, ядро само его НЕ гейтит — дефолтная
+    // onVehiclePaintJob в SDK возвращает true): та же зона/сессия мод-шопа, что
+    // и validateMod (SA даёт пейнтджоб только в мод-шопе, не на Pay'n'Spray),
+    // плюс валидный диапазон id (0..2 — число вариантов на модель в SA). Мод-шоп
+    // и без пейнтджоба чинит машину при входе/AddComponent — санкцию здесь не
+    // повторяем (пейнтджоб её не даёт и на честном клиенте).
+    Outcome validatePaintJob(IPlayer &player, IVehicle &vehicle, int paintJob, TimePoint now);
+    // Перекраска: легальна от водителя с машиной, НЕПРЕРЫВНО простоявшей у
+    // ремзоны (Pay'n'Spray либо мод-шоп в сессии) не меньше ZONE_DWELL_MIN;
+    // принятие даёт санкцию ремонта — Pay'n'Spray чинит машину на клиенте. Вне
+    // зоны / без выдержки — фейковый SCM: нарушение без санкции.
     Outcome validateRespray(IPlayer &player, IVehicle &vehicle, TimePoint now);
-    // Вход/выход мод-шопа: покупка чинит машину — санкция ремонта.
-    void onModShop(IPlayer &player, TimePoint now);
+    // Вход/выход мод-шопа (клиентский SCM): вход принимается только с машиной,
+    // НЕПРЕРЫВНО простоявшей у ворот известного шопа (RepairZones) не меньше
+    // ZONE_DWELL_MIN, и открывает сессию inModShop; выход — только для открытой
+    // сессии И с машиной в зоне шопа (интерьер либо ворота) прямо сейчас (dwell
+    // на выход не требуем — машина уже отстояла его на входе, а интерьер шопа
+    // покидается практически сразу после решения игрока). Подавленный честный
+    // exit не увозит сессию «в кармане» для ремонта в бою. Оба принятых дают
+    // санкцию ремонта (шоп чинит машину на клиенте) И грейс позиции игрока
+    // (grantModShopTeleportGrace) — клиент физически переносит машину с
+    // водителем в интерьер/обратно, не через серверный teleport(). Событие вне
+    // зоны / без выдержки на входе / выход без входа — нарушение без ремонта и
+    // без грейса; выход вне зоны заодно закрывает сессию.
+    Outcome onModShop(IPlayer &player, bool enter, TimePoint now);
     void onVehicleCreated(IVehicle &vehicle);
     void onVehicleDestroyed(IVehicle &vehicle);
     void onVehicleRespawn(IVehicle &vehicle); // респаун — HP снова полное
-    void onVehicleDeath(IVehicle &vehicle);
+    // Смерть машины (HP -> 0). serverKilled (explode) -> died-наблюдатели
+    // (политика бизнеса). Без санкции наблюдатели НЕ зовутся; ПЕРВАЯ смерть
+    // бэкофф-окна взводит queueRespawn (VehicleSystem откладывает respawnIfDead
+    // — возврат целой НА МЕСТЕ, точка смерти фиксируется здесь), повторная —
+    // нет (машину вернёт ядровой death-таймер на spawn-точку). reporter —
+    // killer из ядра: сам репорт НЕ флажится (сервер не видит урона по пустой
+    // машине, честная клиентская детонация неотличима от фейка), но
+    // нечеловеческий ТЕМП репортов одного игрока — vehicleHack.
+    Outcome onVehicleDeath(IVehicle &vehicle, IPlayer &reporter);
+    // Отложенный возврат несанкционированно убитой машины (таймер-колбэк
+    // VehicleSystem, ВНЕ death-диспатча ядра): respawn(), только если машина всё
+    // ещё мертва и пуста. Возврат НА МЕСТЕ: SDK не умеет снять deathData без
+    // respawn(), поэтому spawn-точка на время respawn() подменяется точкой
+    // смерти и затем восстанавливается — репортер смерти не телепортирует чужую
+    // машину на её spawn-точку. Ядро само мёртвую так быстро не вернёт: перед
+    // проверкой death-таймера оно поднимает lastOccupiedTime до момента смерти
+    // (vehicles_impl.hpp onTick) — пустую, в т.ч. никогда не занятую, возвращает
+    // именно этот таймер; занятую (читер-пассажир в вреке) вернёт ядровой
+    // death-таймер после освобождения. respawn() чистит deathData ядра —
+    // второго, ядрового респавна не будет.
+    void respawnIfDead(int vehicleId);
     void resetPlayer(int playerId);
 
   private:
@@ -229,27 +392,100 @@ class VehicleService final : public IService
         int driverId = -1;      // обратный индекс «машина -> водитель»
         bool editBypass = false; // машину двигает сервер (редактор) — синк не валидируем
         bool stalled = false;   // заглохла: HP на клампе, двигатель не заводится (снимает repair)
+        bool serverKilled = false; // смерть санкционирована сервером (explode); снимают repair/респаун
+        bool respawnQueued = false; // respawnIfDead уже назначен (спам setDead не плодит таймеры)
+        Vector3 deathPos = {0.0f, 0.0f, 0.0f}; // где сервер зафиксировал несанкционированную смерть
+        float deathAngle = 0.0f;               // угол на момент смерти (spawn-подмена respawnIfDead)
+        TimePoint lastUnsanctionedDeath; // бэкофф: повторная смерть в окне уходит ядровому death-таймеру
+        // Уведомление subscribeUnsanctionedDeath уже отправлено для ТЕКУЩЕЙ мёртвой
+        // фазы машины (одна волна спама setDead -> один колбэк, а не по таймеру):
+        // взводится в onVehicleDeath на первом же вызове волны, снимается respawn'ом
+        // (onVehicleRespawn) — машина ожила, следующая смерть уже НОВАЯ волна.
+        bool unsanctionedNotified = false;
         Owner owner = Owner::None; // серверный тег владельца
         int ownerId = -1;          // id владельца в рамках типа (None — -1)
         float fuel = FUEL_CAPACITY; // топливо в баке
         bool outOfFuel = false;     // пустой бак: двигатель не заводится (снимает refuel)
-        TimePoint lastChange;   // грейс после серверного изменения
-        TimePoint lastFlag;     // rate limit нарушений
+        TimePoint lastChange;    // грейс после серверного изменения (кламп его НЕ освежает)
+        TimePoint lastClampSend; // темп повторных кламп-RPC (stallIfCritical/douse-гейт)
+        TimePoint lastFlag;      // rate limit нарушений
+
+        // Трек непрерывного пребывания МАШИНЫ в известной ремзоне
+        // (MOD_SHOPS/PAY_N_SPRAY объединённо) — обновляется ТОЛЬКО из
+        // verifyHealth на каждом принятом driver-sync (не из самой
+        // vehicle.getPosition(), которую ядро пишет безусловно из синка без
+        // валидации скорости достижения; трек ведётся, пока за рулём КТО-ТО
+        // есть, независимо от того, кто именно — привязан к машине). Зовётся
+        // только для occupant.seat==0, т.е. трек стоит, пока водителя нет
+        // (машина без водителя не может подать SCM-событие, dwell ей не нужен).
+        // zoneEnteredAt — момент, когда машина ПОСЛЕДНИЙ РАЗ вошла в зону
+        // НЕПРЕРЫВНО (сбрасывается выходом из зоны на любом апдейте, а также
+        // явно на respawn — телепорт, не физический подъезд); inZoneNow — кэш
+        // «в зоне на последнем апдейте» для детекта входа/выхода без лишнего
+        // nearAnyZone. TimePoint{} — «трек ещё не видел машину в зоне».
+        // Не персистится — одноразовая жизнь машины/сервера.
+        TimePoint zoneEnteredAt;
+        bool inZoneNow = false;
     };
 
     struct Occupant
     {
         int vehicleId = -1;
         int seat = -1;
+        // Сессия мод-шопа, подтверждённая СЕРВЕРОМ: взводится только входом с
+        // машиной у ворот шопа (onModShop + RepairZones); клиентскому
+        // isInModShop ядра не верим — его ставит тот же SCM-пакет. Гейт для
+        // validateMod/validatePaintJob/validateRespray и санкций ремонта —
+        // каждый из них ВСЕГДА перепроверяет зону по ТЕКУЩЕЙ позиции машины
+        // поверх этого флага, так что «карманная» сессия (клиент подавил exit)
+        // без физического нахождения в шопе ничего не даёт. Сбрасывают выход
+        // из шопа (в т.ч. отклонённый вне зоны), смена привязки (bindOccupant)
+        // и resetPlayer.
+        bool inModShop = false;
     };
 
-    // Санкция «машину могли починить легально» (мод-шоп, Pay'n'Spray).
+    // Темп репортов смертей машин от одного игрока (скользящее окно): сам репорт
+    // не нарушение, нечеловеческий темп флажится (см. onVehicleDeath).
+    struct DeathReportRate
+    {
+        TimePoint windowStart;
+        int count = 0;
+        TimePoint lastFlag; // rate limit записи нарушения
+    };
+
+    // Санкция «машину починил легальный сервис» (мод-шоп, Pay'n'Spray) —
+    // единственный рост серверного HP по клиентскому событию; каждый вызов
+    // обязан стоять за серверным гейтом локации (RepairZones / inModShop).
     void sanctionRepair(int vehicleId, TimePoint now);
     bool isDriverOf(int playerId, const IVehicle &vehicle) const;
     // HP у порога — кламп над пожаром + глушим (вызывать после падения HP).
+    // Повтор кламп-RPC у уже заглохшей темпуется lastClampSend (раз в SYNC_GRACE);
+    // lastChange (грейс repair-детектора) кламп НЕ освежает. Повтор belowClamp —
+    // не нарушение (перевёрнутая машина честно даёт его минутами).
     void stallIfCritical(IVehicle &vehicle, VehicleState &st, TimePoint timeNow);
+    // Тушение машины БЕЗ водителя по ядровому HP: ниже порога — кламп + глушим,
+    // как stallIfCritical у водителя. Ядровое HP без водителя опускает только
+    // принятый unoccupied-синк ПАССАЖИРА (SeatID != 0) — у по-настоящему пустой
+    // оно ниже клампа не бывает (вызов — no-op). Мёртвую (isDead) и serverKilled
+    // НЕ трогает — кламп воскресил бы HP до детонации explode(). NaN/Inf из
+    // синка считается добитой (кламп перетирает мусор). Зовётся из secondTick и
+    // с accept-пути validateUnoccupied.
+    void douseUnoccupiedFire(IVehicle &vehicle, VehicleState &st, TimePoint timeNow);
     // Снять «заглохла» (ремонт/респаун): вернуть двигателю клиентский авто-режим.
     void clearStall(IVehicle &vehicle, VehicleState &st);
+    // Обновляет zone dwell-трек по ТЕКУЩЕЙ позиции машины: зовётся ТОЛЬКО из
+    // verifyHealth на каждом принятом driver-sync. Вход в зону (inZoneNow
+    // false->true) фиксирует zoneEnteredAt = timeNow; выход (true->false) стирает
+    // его (TimePoint{}); внутри зоны без выхода — не трогает (иначе непрерывность
+    // рвалась бы каждым апдейтом). Дешёвая проверка O(зон), без аллокаций — та же
+    // цена, что уже была у гейтов SCM, просто теперь ещё и на driver-sync.
+    void trackZoneDwell(VehicleState &st, Vector3 position, TimePoint timeNow);
+    // Машина СЕЙЧАС в зоне И непрерывно простояла в ней не меньше ZONE_DWELL_MIN
+    // (см. trackZoneDwell/verifyHealth). Заменяет голое nearAnyZone во ВСЕХ
+    // SCM-гейтах ремонта — мгновенная сверка позиции доверяла бы клиент-
+    // авторитетному vehicle.getPosition() без истории.
+    bool dwelledInZone(const VehicleState &st, std::span<const RepairZones::Zone> zones, Vector3 position,
+                       TimePoint timeNow) const;
 
     IVehiclesComponent *m_vehicles = nullptr;
     PlayerLocationService *m_location = nullptr;
@@ -261,9 +497,13 @@ class VehicleService final : public IService
     std::vector<VehicleObserver> m_createdObservers;
     std::vector<VehicleObserver> m_destroyedObservers;
     std::vector<VehicleObserver> m_diedObservers;
+    std::vector<VehicleObserver> m_respawnedObservers;
     std::vector<VehicleMoveObserver> m_movedObservers;
     std::vector<DriverGateObserver> m_driverGateObservers;
+    std::vector<UnsanctionedDeathObserver> m_unsanctionedDeathObservers;
+    std::vector<FuelEmptyObserver> m_fuelEmptyObservers;
 
     std::array<VehicleState, VEHICLE_POOL_SIZE> m_vehicleState;
     std::array<Occupant, MAX_PLAYERS> m_occupants;
+    std::array<DeathReportRate, MAX_PLAYERS> m_deathReports;
 };

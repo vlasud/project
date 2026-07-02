@@ -114,7 +114,11 @@
 - `model` — модель машины;
 - `spot` (`Vector3`), `angle` (`float`) — АБСОЛЮТНАЯ точка спавна у дома;
 - `familyId` — `NO_FAMILY` (личная owner-only) ИЛИ id семьи (расшарена);
-- `vehicleId` — id живого экземпляра (`Owner::Parked`) или `-1`.
+- `vehicleId` — id живого экземпляра (`Owner::Parked`) или `-1`;
+- `fuel` — ПЕРСИСТЕНТНЫЙ остаток бака (`0..VehicleService::FUEL_CAPACITY`): источник
+  правды, пока `vehicleId == -1`; пока заспавнена — источник правды
+  `VehicleService::getFuel(vehicleId)`, поле лишь снимок на момент последнего
+  сохранения (см. «Персист топлива» ниже).
 
 Индексы (все O(1)/холодные): `m_byDbId` (владеющий), `m_byVehicleId`
 (гейт доступа/снятие), `m_byAccount` (`parkedByAccount`/`countParkedByAccount`/крайние
@@ -135,9 +139,11 @@
 ## Owner::Parked (единый тег)
 
 `VehicleService::Owner::Family` обобщён в `Owner::Parked` — ЕДИНЫЙ тег для всех
-припаркованных машин (и личных, и семейных). Тег лишь маркирует, что машину при смерти
-НЕ удаляет `PersonalVehicleSystem` (`onVehicleDied` трогает только `Owner::Player`,
-ранний return для прочих) — ядро переспавнит её на `spawnData.position = spot`.
+припаркованных машин (и личных, и семейных). Тег лишь маркирует, что машину при
+СМЕРТИ (died-наблюдатели видят только серверно-санкционированную — контракт смерти в
+`Docs/Vehicles.md`) НЕ удаляет `PersonalVehicleSystem` (`onVehicleDied` трогает только
+`Owner::Player`, ранний return для прочих) — машина вернётся на
+`spawnData.position = spot` респавном.
 **`ownerId` тега служебный/неиспользуемый** (`create(..., Owner::Parked, -1)`):
 `accountId` владельца (int64) не влезает в `int ownerId`, а для личной машины нет
 `familyId`. Всё право доступа — в записи `Parked`, а не в теге.
@@ -192,9 +198,12 @@ HP/позиция/состояние сохраняются.
 машину в сессионный трекинг (обычный жизненный цикл: уничтожается на дисконнекте/смерти);
 c) `unparkKeepInstance(dbId)` — снять запись + DELETE строки, живой экземпляр НЕ трогая.
 Машина ОСТАЁТСЯ стоять на месте (не исчезает, не телепортируется), становится обычной
-личной сессионной. Если экземпляр пропал внешним destroy (`veh == nullptr`) — снимаем
-только запись (`unparkKeepInstance`), вернуть в мир нечем. Если была расшарена — доступ
-семьи уходит вместе со снятием записи.
+личной сессионной. Если экземпляр пропал внешним destroy (`veh == nullptr`) — переносим
+последний известный снимок `parked->fuel` записи в владение
+(`PersonalVehicleService::setFuel`) ДО снятия записи (иначе следующий спавн через
+центральную парковку взял бы устаревший `entry.fuel`, каким он был ДО парковки у дома),
+затем снимаем только запись (`unparkKeepInstance`) — вернуть в мир нечем. Если была
+расшарена — доступ семьи уходит вместе со снятием записи.
 
 ### Расшарить семье (лично у дома → семейный доступ)
 
@@ -260,13 +269,35 @@ accountId)` (по ЗАПИСИ `Parked`, НЕ по тегу):
 `setSpawnPosition(*veh, spot, angle)`
 задаёт ту же spawn-точку СУЩЕСТВУЮЩЕЙ машине (через `get/setSpawnData` — прочие поля
 spawnData сохранены, машина не пересоздаётся). При смерти машина НЕ уничтожается:
-`PersonalVehicleSystem::onVehicleDied` трогает ТОЛЬКО `Owner::Player`. Значит `vehicleId`
-живого экземпляра сохраняется, и ядро само переспавнит ТОТ ЖЕ pool-id на
-`spawnData.position = spot` через `game.vehicle_respawn_time` (≈ 10 с). На death-респавне
-`subscribeDestroyed` НЕ дёргается — `vehicleId` в `Parked` НЕ обнуляется (отличаем
-«died→respawn» от «destroy»). Штатный destroy живого экземпляра — ТОЛЬКО через `unpark`
-(пул-очистка, чистит и БД); ре-тег парковки/снятия (`park`/`unparkKeepInstance`)
-экземпляр НЕ трогает.
+`PersonalVehicleSystem::onVehicleDied` трогает ТОЛЬКО `Owner::Player` (и вообще видит
+лишь серверно-САНКЦИОНИРОВАННЫЕ смерти). Значит `vehicleId` живого экземпляра
+сохраняется, и машина вернётся ТЕМ ЖЕ pool-id на `spawnData.position = spot`:
+несанкционированную смерть (грифер) `VehicleService` сам гасит отложенным респавном
+(~100 мс, контракт смерти — `Docs/Vehicles.md`), санкционированную переспавнит ядро
+через `game.vehicle_respawn_time` (≈ 10 с). На death-респавне `subscribeDestroyed` НЕ
+дёргается — `vehicleId` в `Parked` НЕ обнуляется (отличаем «died→respawn» от
+«destroy»). Штатный destroy живого экземпляра — ТОЛЬКО через `unpark` (пул-очистка,
+чистит и БД); ре-тег парковки/снятия (`park`/`unparkKeepInstance`) экземпляр НЕ
+трогает.
+
+### Уведомление владельцу о несанкционированной смерти
+
+`ParkedVehicleSystem::onUnsanctionedDeath` подписан на
+`VehicleService::subscribeUnsanctionedDeath` (контракт крючка и антиспам-гейт —
+`Docs/Vehicles.md`, «Уведомление владельца»). Владелец резолвится по ЗАПИСИ
+`Parked` (`byVehicleId(vehicleId) -> ownerAccountId`), НЕ по тегу
+`VehicleService` (`ownerId` тега `Owner::Parked` служебный/`-1`) —
+`PlayerSessionService::playerByAccount(ownerAccountId)` (тот же резолв, что
+`ownerOnline`), offline → `-1` → уведомление молча пропускаем. **Уведомляем
+ТОЛЬКО владельца машины, не членов семьи** — расшаренная стоит на своей обычной
+точке у дома, для остальных членов ничего не изменилось.
+
+Текст (`INFO_COLOUR`, `{имя}` — `VehicleModelNames::displayName`):
+
+| `returnsInPlace` | Текст |
+|----|----|
+| `true` (первая смерть волны, вернулась НА МЕСТЕ) | `Вашу машину {имя} пытались уничтожить, но она цела` |
+| `false` (повторная смерть окна, вернёт ядровой таймер к дому) | `Вашу машину {имя} пытались уничтожить. Она эвакуирована к вашему дому` |
 
 ## Ловушка reset (почему detach на парковке обязателен)
 
@@ -321,22 +352,72 @@ spawnData сохранены, машина не пересоздаётся). П�
 
 ## Персист (`parked_vehicle`, write-through)
 
-Схема `Sql/parked_vehicle.sql` (применяется ВРУЧНУЮ, заменяет `family_vehicle.sql` —
-тот НЕ применять). `personal_vehicle_id` — PK (одна парковка на машину);
-`owner_account_id`; `model`; `x/y/z/angle` (`DOUBLE`); `family_id` (`INT NOT NULL
-DEFAULT -1`: `-1 == NO_FAMILY` — ближе к in-memory модели, без nullable-биндинга).
-Индексы по `owner_account_id` и `family_id`.
+Схема — сводный `Sql/schema_all.sql` (применяется ВРУЧНУЮ, заменяет
+`family_vehicle.sql` — тот НЕ применять). `personal_vehicle_id` — PK (одна парковка
+на машину); `owner_account_id`; `model`; `x/y/z/angle` (`DOUBLE`); `family_id`
+(`INT NOT NULL DEFAULT -1`: `-1 == NO_FAMILY` — ближе к in-memory модели, без
+nullable-биндинга); `fuel` (`DOUBLE NOT NULL DEFAULT 100` — персистентный остаток
+бака, см. «Персист топлива» ниже). Индексы по `owner_account_id` и `family_id`.
 
-- **park** — INSERT (`throwQuery`, `family_id = -1`); экземпляр НЕ создаётся (ре-тег
-  живого через `setOwner`/`setSpawnPosition` делает `CarMenuSystem`);
+- **park** — INSERT (`throwQuery`, `family_id = -1`, `fuel` = РЕАЛЬНЫЙ снимок на
+  момент парковки, не дефолт схемы); экземпляр НЕ создаётся (ре-тег живого через
+  `setOwner`/`setSpawnPosition` делает `CarMenuSystem`);
 - **unparkKeepInstance** — DELETE по `personal_vehicle_id`, живой экземпляр НЕ трогает
-  (снятие НА МЕСТЕ); **unpark** — то же + `destroy` экземпляра (пул-очистка);
+  (снятие НА МЕСТЕ, fuel остаётся в живом экземпляре — источник правды переходит
+  обратно к `PersonalVehicleService` через `attach`); **unpark** — то же + `destroy`
+  экземпляра (пул-очистка, не вызывается нигде в коде сейчас — задел);
 - **shareToFamily / unshareFromFamily / крайние случаи** — UPDATE `family_id`; в конце
   каждого пути смены `family_id` сервис зовёт `notifyReconcile(dbId)` →
-  `subscribeReconcile` (система приводит экземпляр к желаемому — спавн/деспавн).
+  `subscribeReconcile` (система приводит экземпляр к желаемому — спавн/деспавн, с
+  восстановлением персистентного `fuel` в `spawnInstance`);
+- **UPDATE fuel** (`ParkedVehicleSystem::persistFuel`) — write-through по
+  `personal_vehicle_id`, вызывается из `despawnInstance` (перед деспавном) и
+  `onVehicleRespawned` (после восстановления снимка несанкционированной смерти).
 
-`personal_vehicle.sql` НЕ меняется. **SQL-миграций эта фича НЕ добавляет** (жизненный
-цикл экземпляра — целиком в памяти; схема `parked_vehicle` без изменений).
+### Персист топлива — закрывает «бесплатный эвакуатор с заправкой»
+
+Задача (`Docs/GameDesign/Economy.md`, «Задел на будущий сток: топливо и заправки»):
+без персиста цикл «докатал бак → владелец вышел (машина деспавнится) → вернулся
+(машина спавнится с полным баком)» или «докатал бак → детонация → машина возвращается
+целой respawn'ом с полным баком» давал бы бесплатный полный бак — самый удобный обход
+будущего стока топлива (припаркованная машина уже стоит у дома, эвакуатор не нужен).
+
+**Снимается** (в память `ParkedVehicleService::setFuel` + БД `persistFuel`):
+
+- **`despawnInstance`** (выход владельца оффлайн — личная запись деспавнится) —
+  `getFuel` живого экземпляра ДО `destroy`, иначе после уничтожения `getFuel` вернул
+  бы `0` для несуществующей машины;
+- **`onUnsanctionedDeath`** (контракт смерти — `Docs/Vehicles.md`) — снимок в
+  `m_pendingFuelRestore[vehicleId]` НЕЗАВИСИМО от того, онлайн ли владелец (топливо
+  не должно теряться из-за того, что уведомлять некого); машина ещё валидна
+  (died-lock диспатча смерти), физический возврат случится позже.
+
+**Восстанавливается** (`VehicleService::setFuel` поверх дефолтного полного бака от
+`create`/`onVehicleRespawn`):
+
+- **`spawnInstance`** (вход владельца/старт сервера для расшаренных) — `rec->fuel`
+  применяется СРАЗУ после `create`;
+- **`onVehicleRespawned`** (подписка `VehicleService::subscribeRespawned`, зовётся
+  ПОСЛЕ того, как `onVehicleRespawn` уже поставил полный бак) — если для
+  `vehicleId` есть снимок в `m_pendingFuelRestore`, применяет его И в память записи
+  (`ParkedVehicleService::setFuel`), И в живой экземпляр (`VehicleService::setFuel`),
+  И персистит (`persistFuel`); перепроверяет, что запись `Parked` для этого
+  `vehicleId` ещё существует (могла исчезнуть между смертью и возвратом крайне
+  редким `unpark` — тогда снимок применить некуда, оставляем дефолтный полный бак).
+
+Снимок `m_pendingFuelRestore` чистится И на успешном восстановлении, И в
+`subscribeDestroyed` (машина исчезла НЕ через респавн) — `vehicleId` пула
+переиспользуем, без очистки следующая СОВСЕМ ДРУГАЯ машина на этом id ложно
+унаследовала бы чужой fuel на своём первом респавне.
+
+Мусор из БД (`fuel` NaN/отрицательный/сверх `FUEL_CAPACITY`) клампится при загрузке
+(`clampParkedFuel` в сервисе): не-конечное → `FUEL_CAPACITY` (полный бак безопаснее
+пустого — не подозрительная выгода, а страховка от битых данных), отрицательное →
+`0`, избыток → `FUEL_CAPACITY`.
+
+**SQL-миграция** — одна колонка `fuel` в существующую таблицу (см. текст миграции в
+отчёте задачи); жизненный цикл экземпляра по-прежнему целиком в памяти, менять
+пришлось только схему хранения топлива.
 
 ## Константы баланса
 
@@ -345,7 +426,7 @@ DEFAULT -1`: `-1 == NO_FAMILY` — ближе к in-memory модели, без 
 | `PARK_HOUSE_RADIUS` | 30 м    | радиус у своего дома, в котором можно припарковать (двор дома; в текст игроку не выводится) |
 | `House.parkingCap`  | `[1, 10]`, дефолт 1 | кап ПРИПАРКОВАННЫХ у дома машин владельца (дев-контент дома, `houses.json`); enforce в `parkHere` через `countParkedByAccount` |
 | лимит владения      | число личных машин (`MAX_PERSONAL_VEHICLES = 2`) | парковка/шеринг не создают машину — переносят/открывают существующую |
-| death-респавн       | `game.vehicle_respawn_time` (≈ 10 с) | возврат машины на точку у дома делает ЯДРО (не форсим) |
+| death-респавн       | `game.vehicle_respawn_time` (≈ 10 с) | возврат машины на точку у дома после САНКЦИОНИРОВАННОЙ смерти делает ЯДРО (не форсим); несанкционированную возвращает `VehicleService` (~100 мс) |
 
 Парковка и шеринг **бесплатны и обратимы**, машину не создают — инфляции парка нет.
 **Будущее узкое горло:** припаркованная машина занимает pool-слот ПОСТОЯННО (спавн на
@@ -387,9 +468,21 @@ DEFAULT -1`: `-1 == NO_FAMILY` — ближе к in-memory модели, без 
   тике диалог-колбэка (внешний дисконнект между шагами невозможен, main однопоточный),
   `destroy` не зовётся → нет ре-энтрантного `onVehicleDestroyed`, правящего индексы под
   нами; `setSpawnPosition` режет NaN/Inf (не осядет в spawnData); `detach`/`attach`
-  bounds-safe по `dbId`.
+  bounds-safe по `dbId`. `onUnsanctionedDeath` НЕ трогает пул машин (контракт
+  подписки `subscribeUnsanctionedDeath` — только чтение записи `Parked` +
+  сообщение); `playerByAccount` возвращает `-1` для оффлайна ДО обращения к
+  `m_core.getPlayers()`, второй null-гард на случай гонки дисконнекта в тот же
+  тик. **Персист fuel:** `setFuel`/`clampParkedFuel` режут NaN/Inf/отрицательное/сверх
+  `CAP`; `m_pendingFuelRestore` чистится И на успешном восстановлении
+  (`onVehicleRespawned`), И на `subscribeDestroyed` — иначе `vehicleId`
+  (переиспользуемый pool-слот) ложно передал бы чужой fuel следующей, СОВСЕМ ДРУГОЙ
+  машине на этом id; `onVehicleRespawned` перепроверяет существование записи `Parked`
+  для `vehicleId` (могла исчезнуть между смертью и возвратом) прежде чем писать.
 - **Перф:** спавн — на старте (по числу парковок, мало); гейт доступа — O(1)
   (`m_byVehicleId` hash + `familyByAccount` hash); запросы `/car`/парковки/`/family`,
   переходы, крайние случаи (N UPDATE) — холодные (по команде/диалогу);
   `countParkedByAccount` (enforce капа) — `multimap.count`, O(записей владельца ≤ кап),
-  на холодном пути парковки (клик в `/car`), без аллокации. PER-TICK НЕТ.
+  на холодном пути парковки (клик в `/car`), без аллокации. `onUnsanctionedDeath` —
+  РЕДКОЕ событие (антиспам на стороне `VehicleService`), `byVehicleId`/
+  `playerByAccount` O(1) + один `sendClientMessage`. `persistFuel`/восстановление
+  fuel — те же редкие события (деспавн/респавн), O(1) + один `UPDATE`. PER-TICK НЕТ.

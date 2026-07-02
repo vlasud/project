@@ -28,6 +28,13 @@ constexpr std::chrono::milliseconds PAUSE_GAP{2000};
 // может занять секунды; пауза в апдейтах при загрузке сама продлевает ожидание).
 constexpr std::chrono::milliseconds TELEPORT_GRACE{4000};
 
+// Грейс-ОКНО позиции на клиентский телепорт машины с водителем в интерьер мод-шопа
+// и обратно (SCM). Не однократный acceptNext: SCM-событие и телепорт-синк идут
+// разными пакетами, и одноразовый грейс мог бы «съесть» стрей-синк с воротной
+// позицией до фактического телепорта, зафлажив честного тюнера. Окно покрывает всю
+// фазу enter→fade→интерьер (симметрично exit).
+constexpr std::chrono::milliseconds MODSHOP_TELEPORT_GRACE{5000};
+
 // Радиус прибытия: не больше этого, и не больше 40% дальности прыжка — иначе при
 // коротком откате (10-20 м) запоздавшие пакеты с читерской позицией сами попадают
 // в радиус и засчитываются как «прибыл», порождая каскад ложных нарушений.
@@ -165,6 +172,20 @@ bool PlayerLocationService::isBypassed(int playerId) const
     return m_state[playerId].bypass;
 }
 
+void PlayerLocationService::grantModShopTeleportGrace(int playerId, TimePoint now)
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return;
+    State &st = m_state[playerId];
+    // Временное ОКНО, не однократный acceptNext и не pendingTeleport: точку
+    // прибытия (интерьер шопа/ворота) диктует клиент, а не сервер — ждать
+    // конкретный teleportTarget нечем; а SCM-событие приходит отдельным пакетом
+    // от driver-sync, поэтому одноразовый грейс мог бы уйти на стрей-синк с
+    // прежней позицией до фактического телепорта. Пока окно открыто, verify
+    // принимает любой конечный синк как правду (разрыв непрерывности — там же).
+    st.modShopGraceUntil = now + MODSHOP_TELEPORT_GRACE;
+}
+
 std::uint32_t PlayerLocationService::getDiscontinuity(int playerId) const
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)
@@ -241,12 +262,27 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
         return outcome;
     }
 
-    // Первый игровой апдейт или разовый грейс (спавн/байпас — серверные скачки) —
+    // Первый игровой апдейт или разовый грейс (спавн/байпас — серверные скачки;
+    // мод-шоп — легальный клиентский, см. grantModShopTeleportGrace) —
     // принимаем как есть.
     if (!st.tracking || st.acceptNext)
     {
         st.tracking = true;
         st.acceptNext = false;
+        st.position = reported;
+        st.lastUpdate = now;
+        ++st.discontinuity;
+        return outcome;
+    }
+
+    // Грейс-окно мод-шопа (клиентский телепорт машины с водителем в интерьер и
+    // обратно): пока открыто — принимаем любой конечный синк как правду. ОКНО, а
+    // не однократный acceptNext, чтобы стрей-синк между принятым SCM-enter и
+    // телепортом не потратил грейс и не дал ложный teleportHack (см.
+    // grantModShopTeleportGrace). Заработано dwell'ом машины в реальной зоне шопа.
+    if (st.modShopGraceUntil.time_since_epoch().count() != 0 && now < st.modShopGraceUntil)
+    {
+        st.tracking = true;
         st.position = reported;
         st.lastUpdate = now;
         ++st.discontinuity;

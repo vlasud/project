@@ -3,6 +3,7 @@
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
+#include "Services/Core/VehicleService/VehicleModelNames.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <chrono>
@@ -707,12 +708,14 @@ void FamilySystem::showFamilyVehicles(IPlayer &player)
         return;
     }
 
+    // Пункт — «{n}. {имя}» (без статуса: тут все «в семье» по определению). Имя — из
+    // каталога VehicleModelNames (displayName: пустое имя -> фолбэк «Модель {id}»).
     std::string body;
     for (std::size_t i = 0; i < dbIds.size(); ++i)
     {
         const ParkedVehicleService::Parked *parked = m_parkedService.byDbId(dbIds[i]);
         const int model = parked ? parked->model : 0;
-        body += fmt::format("{}. Модель {}\n", i + 1, model);
+        body += fmt::format("{}. {}\n", i + 1, VehicleModelNames::displayName(model));
     }
     if (!body.empty())
         body.pop_back();

@@ -11,6 +11,9 @@
 // Привод сервиса машин: смены стейта привязывают/отвязывают пассажира, апдейт
 // водителя сверяет HP машины, unoccupied/trailer sync валидируются и при фейке
 // отклоняются (ядро их не применяет), нарушения уходят в журнал античита.
+// Секундный таймер гонит secondTick (дренаж топлива + тушение машин без
+// водителя); смерть машины без серверной санкции возвращает машину целой
+// отложенным респавном, БЕЗ записи нарушения (контракт смерти — VehicleService.h).
 class VehicleSystem : public BaseSystem,
                       public PlayerChangeEventHandler,
                       public PlayerUpdateEventHandler,
@@ -33,6 +36,7 @@ class VehicleSystem : public BaseSystem,
     void onVehicleDeath(IVehicle &vehicle, IPlayer &player) override;
     void onPlayerEnterVehicle(IPlayer &player, IVehicle &vehicle, bool passenger) override;
     bool onVehicleMod(IPlayer &player, IVehicle &vehicle, int component) override;
+    bool onVehiclePaintJob(IPlayer &player, IVehicle &vehicle, int paintJob) override;
     bool onVehicleRespray(IPlayer &player, IVehicle &vehicle, int colour1, int colour2) override;
     void onEnterExitModShop(IPlayer &player, bool enterexit, int interiorID) override;
     bool onUnoccupiedVehicleUpdate(IVehicle &vehicle, IPlayer &player, UnoccupiedVehicleUpdate const updateData) override;

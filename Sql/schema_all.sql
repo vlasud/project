@@ -313,13 +313,24 @@ CREATE TABLE IF NOT EXISTS `player_weapon_skill` (
 -- (продажа/тюнинг конкретной машины); в in-memory владении пока не используется.
 -- account_id НЕ уникален: один аккаунт может владеть несколькими машинами
 -- (лимит > 1 — будущее), поэтому только индекс idx_account для загрузки.
+-- fuel — ПЕРСИСТЕНТНЫЙ остаток бака (0..VehicleService::FUEL_CAPACITY, DOUBLE как и
+-- координаты parked_vehicle — SA-MP float проходит round-trip без потерь). DEFAULT
+-- 100 = полный бак (только что купленная машина заводится полной). Снимается перед
+-- каждым исчезновением заспавненного экземпляра (пере-спавн на парковке, дисконнект
+-- владельца, санкционированная смерть) и восстанавливается при появлении — закрывает
+-- «докатал бак -> убрал в гараж/детонация -> бесплатный полный бак» (см.
+-- Docs/GameDesign/Economy.md «Задел на будущий сток: топливо и заправки»).
 CREATE TABLE IF NOT EXISTS `personal_vehicle` (
     `id`         BIGINT NOT NULL AUTO_INCREMENT,
     `account_id` BIGINT NOT NULL,
     `model`      INT    NOT NULL,
+    `fuel`       DOUBLE NOT NULL DEFAULT 100,
     PRIMARY KEY (`id`),
     INDEX `idx_account` (`account_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- Миграция для уже существующей таблицы (MySQL 8.0.29+, идемпотентно):
+-- ALTER TABLE `personal_vehicle` ADD COLUMN IF NOT EXISTS `fuel` DOUBLE NOT NULL DEFAULT 100;
 
 
 -- ============ [10/11] parked_vehicle.sql ============
@@ -351,6 +362,13 @@ CREATE TABLE IF NOT EXISTS `personal_vehicle` (
 -- выход владельца / забрать через /family -> UPDATE family_id = -1 (машина остаётся
 -- припаркована ЛИЧНО). Расшаренную с несуществующей семьёй старт НЕ теряет —
 -- деградирует в личную (family_id трактуется как -1).
+--
+-- fuel — ПЕРСИСТЕНТНЫЙ остаток бака (0..VehicleService::FUEL_CAPACITY), DEFAULT 100
+-- = полный бак (первая парковка INSERT'ит РЕАЛЬНЫЙ остаток на момент парковки, не
+-- дефолт — DEFAULT здесь лишь страховка схемы). Снимается перед деспавном экземпляра
+-- (выход владельца оффлайн) и восстанавливается при спавне (вход владельца/старт
+-- сервера для расшаренных) — тот же принцип, что personal_vehicle.fuel (см.
+-- Docs/GameDesign/Economy.md «Задел на будущий сток: топливо и заправки»).
 CREATE TABLE IF NOT EXISTS `parked_vehicle` (
     `personal_vehicle_id` BIGINT NOT NULL,
     `owner_account_id`    BIGINT NOT NULL,
@@ -360,10 +378,14 @@ CREATE TABLE IF NOT EXISTS `parked_vehicle` (
     `z`                   DOUBLE NOT NULL,
     `angle`               DOUBLE NOT NULL,
     `family_id`           INT    NOT NULL DEFAULT -1,
+    `fuel`                DOUBLE NOT NULL DEFAULT 100,
     PRIMARY KEY (`personal_vehicle_id`),
     INDEX `idx_owner` (`owner_account_id`),
     INDEX `idx_family` (`family_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- Миграция для уже существующей таблицы (MySQL 8.0.29+, идемпотентно):
+-- ALTER TABLE `parked_vehicle` ADD COLUMN IF NOT EXISTS `fuel` DOUBLE NOT NULL DEFAULT 100;
 
 
 -- ============ [11/11] player_spawn.sql ============

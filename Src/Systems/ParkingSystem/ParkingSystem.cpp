@@ -1,5 +1,6 @@
 #include "Systems/ParkingSystem/ParkingSystem.h"
 
+#include "Services/Core/VehicleService/VehicleModelNames.h"
 #include "Utils/Encoding/Encoding.h"
 #include "Utils/Geometry/Geometry.h"
 #include <fmt/format.h>
@@ -103,10 +104,10 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
         return;
     }
 
-    // Диалог LIST: пункт — «{n}. Модель {model}  —  {статус}» (статус: «у дома»
+    // Диалог LIST: пункт — «{n}. {имя}  —  {статус}» (статус: «у дома»
     // (припаркована лично), «в семье» (расшарена), «в гараже» (не в мире), «вызвана»
-    // (в мире) — единый словарь с /car по parkedMode). Имя машины SA не показываем
-    // (таблицы имён в гейммоде нет) — «Модель {id}».
+    // (в мире) — единый словарь с /car по parkedMode). Имя машины — из каталога
+    // VehicleModelNames (displayName: пустое имя -> фолбэк «Модель {id}»).
     std::string body;
     for (std::size_t i = 0; i < owned.size(); ++i)
     {
@@ -116,7 +117,7 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
                              : mode != -1                     ? "в семье"
                              : entry.vehicleId == -1          ? "в гараже"
                                                               : "вызвана";
-        body += fmt::format("{}. Модель {}  —  {}\n", i + 1, entry.model, status);
+        body += fmt::format("{}. {}  —  {}\n", i + 1, VehicleModelNames::displayName(entry.model), status);
     }
 
     m_dialogService.show(

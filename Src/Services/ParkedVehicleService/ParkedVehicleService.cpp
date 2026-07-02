@@ -2,9 +2,31 @@
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
+#include <cmath>
 #include <mysqlx/xdevapi.h>
 #include <string>
 #include <utility>
+
+namespace
+{
+// Кламп персистентного fuel 0..CAP; мусор (NaN/Inf/отрицательное/сверх капасити).
+float clampParkedFuel(double raw)
+{
+    if (!std::isfinite(raw))
+    {
+        return VehicleService::FUEL_CAPACITY; // мусор из БД — полный бак безопаснее пустого
+    }
+    if (raw < 0.0)
+    {
+        return 0.0f;
+    }
+    if (raw > static_cast<double>(VehicleService::FUEL_CAPACITY))
+    {
+        return VehicleService::FUEL_CAPACITY;
+    }
+    return static_cast<float>(raw);
+}
+} // namespace
 
 void ParkedVehicleService::bind(VehicleService &vehicleService, FamilyService &familyService)
 {
@@ -13,7 +35,7 @@ void ParkedVehicleService::bind(VehicleService &vehicleService, FamilyService &f
 }
 
 void ParkedVehicleService::loadParked(long long dbId, AccountId owner, int model, Vector3 spot, float angle,
-                                      int familyId)
+                                      int familyId, float fuel)
 {
     if (dbId < 0 || m_byDbId.count(dbId))
     {
@@ -26,6 +48,7 @@ void ParkedVehicleService::loadParked(long long dbId, AccountId owner, int model
     parked.spot = spot;
     parked.angle = angle;
     parked.familyId = familyId;
+    parked.fuel = clampParkedFuel(fuel);
     m_byDbId.emplace(dbId, parked);
     m_byAccount.emplace(owner, dbId);
     // NO_FAMILY (личная) в семейный индекс НЕ кладём — иначе parkedOfFamily(NO_FAMILY)
@@ -37,7 +60,7 @@ void ParkedVehicleService::loadParked(long long dbId, AccountId owner, int model
 }
 
 ParkedVehicleService::Result ParkedVehicleService::park(long long dbId, AccountId owner, int model, Vector3 spot,
-                                                        float angle)
+                                                        float angle, float fuel)
 {
     if (dbId < 0 || !m_vehicleService)
     {
@@ -48,17 +71,22 @@ ParkedVehicleService::Result ParkedVehicleService::park(long long dbId, AccountI
         return Result::AlreadyParked;
     }
 
-    loadParked(dbId, owner, model, spot, angle, FamilyService::NO_FAMILY); // те же индексы, что и на загрузке
+    const float clampedFuel = clampParkedFuel(fuel);
+    loadParked(dbId, owner, model, spot, angle, FamilyService::NO_FAMILY, clampedFuel); // те же индексы, что и на загрузке
 
-    // Write-through INSERT (family_id = NO_FAMILY: личная у дома). Ошибка БД лишь
-    // логируется (память уже обновлена, экземпляр создаст система). На следующем старте
-    // зеркало из БД либо подтвердит, либо снимет.
+    // Write-through INSERT (family_id = NO_FAMILY: личная у дома). fuel — РЕАЛЬНЫЙ
+    // снимок на момент парковки (машина ре-тегается НА МЕСТЕ, не пересоздаётся —
+    // писать дефолт БД вместо наезженного остатка открыло бы бесплатную доливку).
+    // Ошибка БД лишь логируется (память уже обновлена, экземпляр создаст система).
+    // На следующем старте зеркало из БД либо подтвердит, либо снимет.
     DatabaseManager::throwQuery(
-        [dbId, owner, model, spot, angle](mysqlx::Schema schema)
+        [dbId, owner, model, spot, angle, clampedFuel](mysqlx::Schema schema)
         {
             schema.getTable("parked_vehicle")
-                .insert("personal_vehicle_id", "owner_account_id", "model", "x", "y", "z", "angle", "family_id")
-                .values(dbId, owner, model, spot.x, spot.y, spot.z, angle, FamilyService::NO_FAMILY)
+                .insert("personal_vehicle_id", "owner_account_id", "model", "x", "y", "z", "angle", "family_id",
+                       "fuel")
+                .values(dbId, owner, model, spot.x, spot.y, spot.z, angle, FamilyService::NO_FAMILY,
+                       static_cast<double>(clampedFuel))
                 .execute();
         },
         [dbId](const std::string &error)
@@ -66,6 +94,21 @@ ParkedVehicleService::Result ParkedVehicleService::park(long long dbId, AccountI
                                      "): " + error); });
 
     return Result::Ok;
+}
+
+void ParkedVehicleService::setFuel(long long dbId, float fuel)
+{
+    if (!std::isfinite(fuel))
+    {
+        return; // мусорный float не оседает в снимке
+    }
+    const auto it = m_byDbId.find(dbId);
+    if (it == m_byDbId.end())
+    {
+        return;
+    }
+    it->second.fuel =
+        fuel < 0.0f ? 0.0f : (fuel > VehicleService::FUEL_CAPACITY ? VehicleService::FUEL_CAPACITY : fuel);
 }
 
 ParkedVehicleService::Result ParkedVehicleService::unpark(long long dbId)

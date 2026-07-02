@@ -1,14 +1,38 @@
 #include "Systems/Core/VehicleControlSystem/VehicleControlSystem.h"
 
+#include "Utils/Encoding/Encoding.h"
+
+namespace
+{
+const Colour ERROR_COLOUR{255, 90, 90};
+
+std::string u(const std::string &text)
+{
+    return Encoding::utf8Tocp1251(text);
+}
+} // namespace
+
 VehicleControlSystem::VehicleControlSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_keyService(serviceRegister.getService<PlayerKeyService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>())
 {
     // Подписки на фронт клавиш. Антиспам повторов уже внутри PlayerKeyService.
-    // Двигатель — Fire: в машине этот бит ставит левый Ctrl.
-    m_keyService.onPress(PlayerKeyService::Key::Fire, [this](IPlayer &player) { toggleEngine(player); });
-    // Фары — Action: в машине этот бит ставит ЛКМ (в машине ЛКМ это не Fire).
-    m_keyService.onPress(PlayerKeyService::Key::Action, [this](IPlayer &player) { toggleLights(player); });
+    // Двигатель — Action: в машине этот бит ставит левый Ctrl (а также ALT GR / NUM0).
+    m_keyService.onPress(PlayerKeyService::Key::Action, [this](IPlayer &player) { toggleEngine(player); });
+    // Фары — Fire: в машине этот бит ставят ЛКМ и левый Alt (drive-by огонь).
+    m_keyService.onPress(PlayerKeyService::Key::Fire, [this](IPlayer &player) { toggleLights(player); });
+
+    // Момент опустошения бака ПОД ВОДИТЕЛЕМ (secondTick VehicleService, не
+    // per-tick) — Core оповещает фактом, текст шлём здесь. driverId — серверный
+    // (getDriver на момент опустошения), не клиентский ввод.
+    m_vehicleService.subscribeFuelEmpty(
+        [this](int /*vehicleId*/, int driverId)
+        {
+            IPlayer *player = m_core.getPlayers().get(driverId);
+            if (!player)
+                return; // водитель уже вышел — страховка от гонки колбэка/дисконнекта
+            player->sendClientMessage(ERROR_COLOUR, u("Бак пуст — двигатель заглох"));
+        });
 }
 
 IVehicle *VehicleControlSystem::drivenVehicle(IPlayer &player) const
@@ -45,6 +69,25 @@ void VehicleControlSystem::toggleEngine(IPlayer &player)
     // не заведёт (сначала repair) — тоггл это уважает автоматически.
     const int8_t engine = vehicle->getParams().engine;
     const bool on = engine != 0; // -1 (авто) и 1 — считаем включённым
+    const bool wantsStart = !on; // нажатие пытается ЗАВЕСТИ, а не заглушить
+
+    // Причина будущего отказа спрашивается ДО setEngine (Core-сервис сам текста не
+    // шлёт) — только на попытке завести: заглушить можно всегда. isStalled — раньше
+    // outOfFuel (машина может быть и добита, и с пустым баком одновременно — стол
+    // важнее для игрока, это про сам корпус, а не про расход). Антиспам — сам
+    // фронт клавиши (PlayerKeyService), строка раз на нажатие.
+    const int vehicleId = vehicle->getID();
+    if (wantsStart && m_vehicleService.isStalled(vehicleId))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Двигатель не заводится - машина слишком разбита"));
+        return;
+    }
+    if (wantsStart && m_vehicleService.isOutOfFuel(vehicleId))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Двигатель не заводится - бак пуст"));
+        return;
+    }
+
     m_vehicleService.setEngine(*vehicle, !on);
 }
 

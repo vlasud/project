@@ -1,6 +1,7 @@
 #include "Systems/CarMenuSystem/CarMenuSystem.h"
 
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
+#include "Services/Core/VehicleService/VehicleModelNames.h"
 #include "Utils/Encoding/Encoding.h"
 #include "glm/geometric.hpp"
 #include <algorithm>
@@ -82,9 +83,9 @@ void CarMenuSystem::showCarList(IPlayer &player)
         return;
     }
 
-    // LIST: «{n}. Модель {model}  —  {статус}» — формат байт-в-байт с парковкой.
+    // LIST: «{n}. {имя}  —  {статус}» — формат байт-в-байт с парковкой.
     // Статус: «у дома»/«в семье»/«в гараже»/«вызвана» (единый словарь placementStatus).
-    // Имя машины SA не показываем — «Модель {id}».
+    // Имя — из каталога VehicleModelNames (displayName: пустое имя -> «Модель {id}»).
     std::string body;
     for (std::size_t i = 0; i < owned.size(); ++i)
     {
@@ -93,7 +94,7 @@ void CarMenuSystem::showCarList(IPlayer &player)
         // parked-записи, иначе «вызвана/в гараже» считались бы по -1.
         const char *status =
             placementStatus(m_parkedService, entry.dbId, liveVehicleId(entry.vehicleId, entry.dbId));
-        body += fmt::format("{}. Модель {}  —  {}\n", i + 1, entry.model, status);
+        body += fmt::format("{}. {}  —  {}\n", i + 1, VehicleModelNames::displayName(entry.model), status);
     }
 
     m_dialogService.show(
@@ -158,10 +159,11 @@ void CarMenuSystem::showCarActions(IPlayer &player, int carIndex)
         }
     }
 
-    // Под-диалог LIST. Заголовок «Модель {model}» — по какой машине действия. Правая
-    // кнопка «Назад»: под-диалог не корень, у него есть родитель (список /car).
+    // Под-диалог LIST. Заголовок — имя машины (по какой машине действия; displayName:
+    // пустое имя -> «Модель {id}»). Правая кнопка «Назад»: под-диалог не корень, у
+    // него есть родитель (список /car).
     m_dialogService.show(
-        player, makeDialog(DialogStyle_LIST, fmt::format("Модель {}", model), body, "Выбрать", "Назад"),
+        player, makeDialog(DialogStyle_LIST, VehicleModelNames::displayName(model), body, "Выбрать", "Назад"),
         [this, playerId, carIndex, actions](DialogResponse response, int listItem, StringView)
         {
             IPlayer *player = m_core.getPlayers().get(playerId);
@@ -286,6 +288,10 @@ void CarMenuSystem::parkHere(IPlayer &player, int carIndex)
     }
 
     const float angle = veh->getZAngle();
+    // Снимок остатка топлива НА МОМЕНТ парковки: живой экземпляр ре-тегается НА
+    // МЕСТЕ (не пересоздаётся) — INSERT обязан записать РЕАЛЬНЫЙ остаток, не дефолт
+    // БД, иначе «доехал впритык -> припарковал -> убрал -> вызвал» доливал бы бак.
+    const float fuel = m_vehicleService.getFuel(liveVehicleId);
 
     // Парковка = ре-тег НА МЕСТЕ (тот же liveVehicleId): без destroy/create. Игрок
     // остаётся за рулём (driver-gate только на входе, под сидящим водителем не
@@ -295,9 +301,9 @@ void CarMenuSystem::parkHere(IPlayer &player, int carIndex)
     m_vehicleService.setOwner(*veh, VehicleService::Owner::Parked, -1);
     // b) spawn-позиция = текущая точка: death-респавн ядра вернёт машину сюда.
     m_vehicleService.setSpawnPosition(*veh, spot, angle);
-    // c) запись парковки (память + write-through INSERT) + связь с живым экземпляром =
-    // ТЕМ ЖЕ liveVehicleId (машину не создаём).
-    m_parkedService.park(dbId, session->accountId, model, spot, angle);
+    // c) запись парковки (память + write-through INSERT, с реальным fuel) + связь с
+    // живым экземпляром = ТЕМ ЖЕ liveVehicleId (машину не создаём).
+    m_parkedService.park(dbId, session->accountId, model, spot, angle, fuel);
     m_parkedService.setVehicleId(dbId, liveVehicleId);
     // d) КРИТИЧНО: отвязать от сессионного трекинга Personal (vehicleId владения -> -1),
     // иначе reset на дисконнекте владельца уничтожит припаркованную машину. Без destroy.
@@ -333,8 +339,15 @@ void CarMenuSystem::unpark(IPlayer &player, int carIndex)
     if (!veh)
     {
         // Экземпляр пропал (внешний destroy между показом меню и кликом) — вернуть
-        // машину в мир нечем. Снимаем только запись (владение и так в гараже,
-        // vehicleId=-1); на следующем заходе игрок возьмёт машину на центральной парковке.
+        // машину в мир нечем. Переносим последний известный снимок fuel записи в
+        // владение (иначе следующий спавн через центральную парковку взял бы
+        // устаревший entry.fuel, каким он был ДО парковки у дома). Снимаем только
+        // запись (владение и так в гараже, vehicleId=-1); на следующем заходе игрок
+        // возьмёт машину на центральной парковке.
+        if (parked)
+        {
+            m_personalService.setFuel(playerId, carIndex, parked->fuel);
+        }
         m_parkedService.unparkKeepInstance(dbId);
         player.sendClientMessage(INFO_COLOUR, u("Машина убрана с парковки"));
         return;

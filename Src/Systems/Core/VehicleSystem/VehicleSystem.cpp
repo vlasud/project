@@ -11,6 +11,11 @@ TimePoint now()
 {
     return std::chrono::steady_clock::now();
 }
+
+// Задержка серверного респавна после НЕсанкционированной смерти машины: вне
+// death-диспатча ядра (см. onVehicleDeath), но намного раньше ядрового
+// game.vehicle_respawn_time (10 с) — врек не успевает повисеть.
+constexpr Milliseconds UNSANCTIONED_DEATH_RESPAWN_DELAY{100};
 } // namespace
 
 VehicleSystem::VehicleSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -39,11 +44,11 @@ void VehicleSystem::initialize(IComponentList *components)
     // фейковый выстрел из невыданного оружия отброшен до нас и урона не нанесёт.
     m_core.getPlayers().getPlayerShotDispatcher().addEventHandler(this);
 
-    // Дренаж топлива — по таймеру (после bind: пул машин готов), не per-tick.
-    // Тик 1 с: проход по пулу с bool-фильтром, расход у машин с РАБОТАЮЩИМ
-    // двигателем (engine != 0), наличие водителя не важно (см. drainFuel). Колбэк
-    // на главном потоке.
-    m_timerService.setInterval(Seconds{1}, [this]() { m_vehicleService.drainFuel(1.0f); });
+    // Секундный проход по пулу — по таймеру (после bind: пул машин готов), не
+    // per-tick: дренаж топлива + тушение машин без водителя (их HP пишут принятые
+    // unoccupied-синки пассажира мимо verifyHealth — см. secondTick). Колбэк на
+    // главном потоке.
+    m_timerService.setInterval(Seconds{1}, [this]() { m_vehicleService.secondTick(1.0f); });
 }
 
 bool VehicleSystem::onPlayerShotVehicle(IPlayer &player, IVehicle &target, const PlayerBulletData &bulletData)
@@ -97,9 +102,25 @@ void VehicleSystem::onVehicleSpawn(IVehicle &vehicle)
     m_vehicleService.onVehicleRespawn(vehicle);
 }
 
-void VehicleSystem::onVehicleDeath(IVehicle &vehicle, IPlayer &player)
+void VehicleSystem::onVehicleDeath(IVehicle &vehicle, IPlayer &reporter)
 {
-    m_vehicleService.onVehicleDeath(vehicle);
+    // Сам репорт смерти нарушением не считается (честная клиентская детонация
+    // пустой машины неотличима от фейка), но НЕЧЕЛОВЕЧЕСКИЙ темп репортов одного
+    // игрока сервис флажит — записываем как обычное нарушение.
+    VehicleService::Outcome outcome = m_vehicleService.onVehicleDeath(vehicle, reporter);
+    record(reporter, outcome);
+    if (outcome.queueRespawn)
+    {
+        // Несанкционированная смерть: вернуть машину целой НА МЕСТЕ смерти.
+        // respawn() ПРЯМО из death-диспатча нельзя: ядро после диспатча сверяет
+        // now - lastOccupiedTime >= game.vehicle_respawn_time, а _respawn()
+        // обнуляет lastOccupiedTime — условие стало бы истинным, и ядро тут же
+        // респавнило бы ВТОРОЙ раз. Откладываем на таймер вне диспатча;
+        // respawnIfDead респавнит, только если машина всё ещё мертва и пуста.
+        const int vehicleId = vehicle.getID();
+        m_timerService.setTimeout(UNSANCTIONED_DEATH_RESPAWN_DELAY,
+                                  [this, vehicleId]() { m_vehicleService.respawnIfDead(vehicleId); });
+    }
 }
 
 void VehicleSystem::onPlayerEnterVehicle(IPlayer &player, IVehicle &vehicle, bool passenger)
@@ -120,6 +141,17 @@ bool VehicleSystem::onVehicleMod(IPlayer &player, IVehicle &vehicle, int compone
     return true;
 }
 
+bool VehicleSystem::onVehiclePaintJob(IPlayer &player, IVehicle &vehicle, int paintJob)
+{
+    VehicleService::Outcome outcome = m_vehicleService.validatePaintJob(player, vehicle, paintJob, now());
+    if (outcome.vehicleHack)
+    {
+        record(player, outcome);
+        return false; // пейнтджоб вне мод-шопа / не водителем ядро не применит
+    }
+    return true;
+}
+
 bool VehicleSystem::onVehicleRespray(IPlayer &player, IVehicle &vehicle, int colour1, int colour2)
 {
     VehicleService::Outcome outcome = m_vehicleService.validateRespray(player, vehicle, now());
@@ -133,7 +165,10 @@ bool VehicleSystem::onVehicleRespray(IPlayer &player, IVehicle &vehicle, int col
 
 void VehicleSystem::onEnterExitModShop(IPlayer &player, bool enterexit, int interiorID)
 {
-    m_vehicleService.onModShop(player, now());
+    // Ядро возврат не читает (диспатч .all) — эффект гейта в том, что фейковое
+    // событие не получает санкции ремонта; нарушение уходит в журнал.
+    VehicleService::Outcome outcome = m_vehicleService.onModShop(player, enterexit, now());
+    record(player, outcome);
 }
 
 bool VehicleSystem::onUnoccupiedVehicleUpdate(IVehicle &vehicle, IPlayer &player, UnoccupiedVehicleUpdate const updateData)

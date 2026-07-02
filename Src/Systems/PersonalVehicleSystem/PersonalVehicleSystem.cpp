@@ -4,6 +4,7 @@
 #include "Log/LogManager.h"
 #include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
+#include "Services/Core/VehicleService/VehicleModelNames.h"
 #include "Utils/Encoding/Encoding.h"
 #include <cstdint>
 #include <fmt/format.h>
@@ -31,8 +32,9 @@ PersonalVehicleSystem::PersonalVehicleSystem(ICore &core, const ServiceRegister 
     m_personalService.bind(m_vehicleService);
 
     // Жизненный цикл владения — по сессии (account-data, по конвенции; не raw
-    // disconnect). Старт: грузим модели аккаунта из БД. Конец: reset (уничтожить
-    // машины + очистить ПАМЯТЬ владения; право владения остаётся в БД).
+    // disconnect). Старт: грузим модели+fuel аккаунта из БД. Конец: СНАЧАЛА снять
+    // остаток топлива живых экземпляров (персист), ПОТОМ reset (уничтожить машины +
+    // очистить ПАМЯТЬ владения; право владения и fuel остаются в БД).
     m_sessionService.subscribeStart(
         [this](IPlayer &player, const PlayerSessionService::Session &session) { loadOwnership(player, session); });
     m_sessionService.subscribeEnd(
@@ -41,22 +43,44 @@ PersonalVehicleSystem::PersonalVehicleSystem(ICore &core, const ServiceRegister 
             const int playerId = player.getID();
             if (playerId < 0 || playerId >= MAX_PLAYERS)
                 return;
+            captureFuelBeforeReset(playerId); // fuel живых экземпляров -> память + БД
             m_personalService.reset(playerId);
         });
 
     // Машину могли уничтожить извне (взрыв, другая система, респаун-цикл, /destroyveh):
     // обнуляем её id во владении (владение остаётся, машину спавнят заново через
-    // парковку) — нет висячих id и двойного destroy.
+    // парковку) — нет висячих id и двойного destroy. Заодно снимаем висящий снимок
+    // m_pendingFuelRestore (если был): vehicleId — переиспользуемый pool-слот, и без
+    // очистки следующая СОВСЕМ ДРУГАЯ машина на этом id ложно унаследовала бы чужой
+    // fuel на своём первом респавне.
     m_vehicleService.subscribeDestroyed(
-        [this](IVehicle &vehicle) { m_personalService.onWorldVehicleDestroyed(vehicle.getID()); });
+        [this](IVehicle &vehicle)
+        {
+            m_personalService.onWorldVehicleDestroyed(vehicle.getID());
+            m_pendingFuelRestore.erase(vehicle.getID());
+        });
 
-    // Смерть машины (HP -> 0): личную машину удаляем, чтобы она ПРОПАДАЛА, а не
-    // висела мёртвым вреком и НЕ вернулась. Машину «возвращает» death-респавн ядра по
-    // ГЛОБАЛЬНОМУ конфигу game.vehicle_respawn_time (НЕ по respawnDelay=-1 — тот гасит
-    // лишь респавн по простою); немедленный destroy убирает её до этого таймера, в том
-    // же тике. Урон её не взрывает (глохнет как все — анти-грифинг в VehicleService),
-    // значит реальная смерть — редкий мгновенный подрыв вплотную, сервер его не ловит.
+    // Смерть машины: died-наблюдатели получают ТОЛЬКО серверно-САНКЦИОНИРОВАННУЮ
+    // смерть (explode()); несанкционированную (клиентская детонация пустой /
+    // фейковый репорт) VehicleService гасит сам — машина возвращается целой
+    // респавном, сюда не доходит.
+    // Санкционированно умершую личную удаляем, чтобы она ПРОПАДАЛА, а не висела
+    // мёртвым вреком и НЕ вернулась death-респавном ядра (game.vehicle_respawn_time;
+    // respawnDelay=-1 гасит лишь респавн по простою) — немедленный destroy убирает
+    // её до этого таймера, в том же тике.
     m_vehicleService.subscribeDied([this](IVehicle &vehicle) { onVehicleDied(vehicle); });
+
+    // Несанкционированная смерть (контракт смерти): только ФАКТ, без пула машин —
+    // подписчик лишь читает стейт и шлёт сообщение (см. контракт подписки в
+    // VehicleService.h). Owner-фильтр — внутри onUnsanctionedDeath. Снимает остаток
+    // топлива ДО возврата машины (машина ещё валидна) — восстановит subscribeRespawned.
+    m_vehicleService.subscribeUnsanctionedDeath([this](IVehicle &vehicle, bool returnsInPlace)
+                                                { onUnsanctionedDeath(vehicle, returnsInPlace); });
+
+    // Респавн (после несанкционированной смерти либо ядрового death-таймера):
+    // VehicleService уже дал ПОЛНЫЙ бак по умолчанию — если для этого vehicleId есть
+    // снимок (onUnsanctionedDeath), восстанавливаем его поверх дефолта.
+    m_vehicleService.subscribeRespawned([this](IVehicle &vehicle) { onVehicleRespawned(vehicle); });
 
     auto &commands = serviceRegister.getService<PlayerCommandService>();
     commands.add("pvbuy", {{PlayerCommandService::Param::Int, "id модели"}},
@@ -68,22 +92,23 @@ PersonalVehicleSystem::PersonalVehicleSystem(ICore &core, const ServiceRegister 
 
 void PersonalVehicleSystem::loadOwnership(IPlayer &player, const PlayerSessionService::Session &session)
 {
-    // SELECT (id, model) владения аккаунта; запрос И вычитка — на воркере (возвращаем
-    // владеющий vector<pair>, mysqlx-объект границу потока не пересекает). dbId (id
-    // строки) нужен шерингу — по нему он ссылается на конкретную машину.
-    using OwnershipRow = std::pair<long long, int>;
+    // SELECT (id, model, fuel) владения аккаунта; запрос И вычитка — на воркере
+    // (возвращаем владеющий vector<tuple>, mysqlx-объект границу потока не
+    // пересекает). dbId (id строки) нужен шерингу — по нему он ссылается на
+    // конкретную машину. fuel — персистентный остаток бака (клампится в сервисе).
+    using OwnershipRow = std::tuple<long long, int, double>;
     DatabaseManager::selectQuery<std::vector<OwnershipRow>>(
         [accountId = session.accountId](mysqlx::Schema schema)
         {
             mysqlx::RowResult result = schema.getTable("personal_vehicle")
-                                           .select("id", "model")
+                                           .select("id", "model", "fuel")
                                            .where("account_id = :account")
                                            .bind("account", accountId)
                                            .execute();
             std::vector<OwnershipRow> rows;
             for (mysqlx::Row row = result.fetchOne(); row; row = result.fetchOne())
             {
-                rows.emplace_back(row.get(0).get<std::int64_t>(), row.get(1).get<int>());
+                rows.emplace_back(row.get(0).get<std::int64_t>(), row.get(1).get<int>(), row.get(2).get<double>());
             }
             return rows;
         },
@@ -111,6 +136,46 @@ void PersonalVehicleSystem::loadOwnership(IPlayer &player, const PlayerSessionSe
         });
 }
 
+void PersonalVehicleSystem::captureFuelBeforeReset(int playerId)
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return;
+    // Снимаем fuel КАЖДОЙ заспавненной записи, пока экземпляры ещё живы (reset
+    // уничтожит их следом). Индекс стабилен — count() не меняется этим циклом.
+    const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(playerId);
+    for (int i = 0; i < static_cast<int>(owned.size()); ++i)
+    {
+        const int vehicleId = owned[i].vehicleId;
+        if (vehicleId == -1)
+            continue; // не заспавнена — снимать нечего, в памяти уже актуальный снимок
+        const float fuel = m_vehicleService.getFuel(vehicleId);
+        m_personalService.setFuel(playerId, i, fuel);
+        persistFuel(m_personalService.dbIdOf(playerId, i), fuel);
+    }
+}
+
+void PersonalVehicleSystem::persistFuel(long long dbId, float fuel)
+{
+    if (dbId < 0)
+        return; // id ещё не присвоен (окно между покупкой и LAST_INSERT_ID) — снимок только в памяти
+    DatabaseManager::throwQuery(
+        [dbId, fuel](mysqlx::Schema schema)
+        {
+            schema.getTable("personal_vehicle")
+                .update()
+                .set("fuel", static_cast<double>(fuel))
+                .where("id = :id")
+                .bind("id", dbId)
+                .execute();
+        },
+        [dbId](const std::string &error)
+        {
+            LogManager::log(Error,
+                            "PersonalVehicleSystem: failed to persist fuel (dbId " + std::to_string(dbId) +
+                                "): " + error);
+        });
+}
+
 void PersonalVehicleSystem::onVehicleDied(IVehicle &vehicle)
 {
     const int vehicleId = vehicle.getID();
@@ -118,11 +183,88 @@ void PersonalVehicleSystem::onVehicleDied(IVehicle &vehicle)
     // решают свою политику смерти сами. getOwner — серверный тег, O(1).
     if (m_vehicleService.getOwner(vehicleId) != VehicleService::Owner::Player)
         return;
+    // Снять остаток топлива ДО destroy (после уничтожения getFuel вернёт 0 для
+    // несуществующей машины) — persistFuel по dbId записи владения. ownerId тега —
+    // playerId (сессионный ключ), поиск ownedIndex по vehicleId — линейный (мало).
+    const int ownerId = m_vehicleService.getOwnerId(vehicleId);
+    if (ownerId >= 0)
+    {
+        const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(ownerId);
+        for (int i = 0; i < static_cast<int>(owned.size()); ++i)
+        {
+            if (owned[i].vehicleId == vehicleId)
+            {
+                const float fuel = m_vehicleService.getFuel(vehicleId);
+                m_personalService.setFuel(ownerId, i, fuel);
+                persistFuel(owned[i].dbId, fuel);
+                break;
+            }
+        }
+    }
     // destroy зовётся из died-наблюдателя внутри события смерти — машина залочена в
     // пуле, release откладывается до unlock (SDK MarkedPoolStorage): диспатч смерти
     // не рвётся, onVehicleDestroyed придёт позже и обнулит vehicleId владения
     // (владение СОХРАНЯЕТСЯ) — спавн заново только вручную на парковке.
     m_vehicleService.destroy(vehicleId);
+}
+
+void PersonalVehicleSystem::onUnsanctionedDeath(IVehicle &vehicle, bool returnsInPlace)
+{
+    const int vehicleId = vehicle.getID();
+    // Только ЛИЧНАЯ (Owner::Player, сессионная — «в общем гараже»/вызванная с
+    // парковки) машина: припаркованные у дома (Owner::Parked) — своя система
+    // (ParkedVehicleSystem). getOwner — серверный тег, O(1).
+    if (m_vehicleService.getOwner(vehicleId) != VehicleService::Owner::Player)
+        return;
+
+    // Снимок остатка топлива ДО возврата (машина ещё валидна — died-lock диспатча
+    // смерти держит её живой; сам возврат случится позже — respawnIfDead ~100 мс
+    // либо ядровой death-таймер ~10 с). subscribeRespawned применит его поверх
+    // дефолтного полного бака: закрывает «бесплатный эвакуатор с заправкой»
+    // (Docs/GameDesign/Economy.md «Задел на будущий сток»). НЕЛЬЗЯ трогать пул
+    // машин здесь (контракт subscribeUnsanctionedDeath) — только чтение+запись
+    // локальной мапы, что и делаем.
+    m_pendingFuelRestore[vehicleId] = m_vehicleService.getFuel(vehicleId);
+
+    // ownerId тега Player — playerId (сессионный ключ владельца), НЕ accountId.
+    // Владение сессионное — машина существует только пока владелец онлайн (reset
+    // на конце сессии уничтожает все её экземпляры), поэтому валидный playerId тега
+    // уже означает «этот же игрок online»; проверка живого игрока — страховка от
+    // гонки колбэка/дисконнекта в тот же тик, не смена владельца.
+    const int ownerId = m_vehicleService.getOwnerId(vehicleId);
+    IPlayer *owner = ownerId >= 0 ? m_core.getPlayers().get(ownerId) : nullptr;
+    if (!owner)
+        return; // владелец оффлайн — уведомление молча пропускаем (контракт: только online)
+
+    const std::string name = VehicleModelNames::displayName(vehicle.getModel());
+    if (returnsInPlace)
+    {
+        owner->sendClientMessage(INFO_COLOUR,
+                                 u(fmt::format("Вашу машину {} пытались уничтожить, но она цела", name)));
+    }
+    else
+    {
+        owner->sendClientMessage(
+            INFO_COLOUR,
+            u(fmt::format("Вашу машину {} пытались уничтожить. Она эвакуирована на парковку", name)));
+    }
+}
+
+void PersonalVehicleSystem::onVehicleRespawned(IVehicle &vehicle)
+{
+    const int vehicleId = vehicle.getID();
+    const auto it = m_pendingFuelRestore.find(vehicleId);
+    if (it == m_pendingFuelRestore.end())
+        return; // не наш снимок (обычный респавн/чужой owner-тег) — полный бак остаётся
+    const float fuel = it->second;
+    m_pendingFuelRestore.erase(it);
+    // Owner-тег на респавне не меняется (VehicleService сохраняет владельца) — но
+    // перепроверяем на случай, если машину успели ре-тегнуть в парковку между
+    // смертью и возвратом (крайне маловероятно, т.к. припаркованная не детонирует
+    // этим путём, но дешёвая страховка). Не-Player — оставляем дефолтный полный бак.
+    if (m_vehicleService.getOwner(vehicleId) != VehicleService::Owner::Player)
+        return;
+    m_vehicleService.setFuel(vehicle, fuel);
 }
 
 void PersonalVehicleSystem::buyDebug(IPlayer &player, int model)
@@ -149,8 +291,11 @@ void PersonalVehicleSystem::buyDebug(IPlayer &player, int model)
         // сессией того же воркер-таска — connection-scoped, корректен). dbId нужен
         // шерингу; проставляем его в память в success-колбэке с serial-guard.
         persistPurchase(playerId, accountId, model, ownedIndex);
+        // Имя — из каталога (на Ok модель валидна, buy её сверил; displayName при
+        // пустом имени сам даёт фолбэк «Модель {id}»). Ввод команды остаётся по id.
         player.sendClientMessage(
-            INFO_COLOUR, u(fmt::format("Личная машина куплена (модель {}). Возьмите её на парковке", model)));
+            INFO_COLOUR, u(fmt::format("Личная машина куплена ({}). Возьмите её на парковке",
+                                       VehicleModelNames::displayName(model))));
         break;
     case PersonalVehicleService::BuyResult::LimitReached:
         player.sendClientMessage(

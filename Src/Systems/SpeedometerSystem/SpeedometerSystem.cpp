@@ -1,6 +1,7 @@
 #include "Systems/SpeedometerSystem/SpeedometerSystem.h"
 
 #include "Log/LogManager.h"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <fmt/format.h>
@@ -156,6 +157,12 @@ void SpeedometerSystem::showFor(IPlayer &player)
     }
     hud.driving = true;
 
+    // Кеш прошлой поездки сбрасываем к сентинелу: после hide/show текст надо
+    // перерисовать, даже если значения совпали с последними отправленными.
+    hud.lastSpeed = Hud::UNSENT;
+    hud.lastHp = Hud::UNSENT;
+    hud.lastFuel = Hud::UNSENT;
+
     // Сразу показать актуальные значения, не дожидаясь ближайшего тика.
     updateHud(player);
 }
@@ -231,11 +238,10 @@ void SpeedometerSystem::updateHud(IPlayer &player)
     IVehicle *vehicle = m_vehicleService.getVehicle(playerId);
     if (!vehicle)
     {
-        // Машины нет (рассинхрон стейта) — честно показываем «0», прибор не врёт.
-        if (hud.speedId >= 0)
-        {
-            m_textDrawService.setTextForPlayer(player, hud.speedId, "0");
-        }
+        // Машины нет (уничтожили, а смена стейта ещё не дошла) — прячем прибор
+        // целиком: «живой» ноль скорости рядом со стейл-цифрами HP/топлива
+        // прежней машины врал бы. Вернётся на следующем входе за руль (showFor).
+        hideFor(playerId);
         return;
     }
     const int vehicleId = vehicle->getID();
@@ -248,11 +254,17 @@ void SpeedometerSystem::updateHud(IPlayer &player)
         // Велосити приходит из клиентского sync без серверной валидации — читер
         // может прислать NaN/Inf. lround от не-финитного значения реализационно-
         // зависим, поэтому не-финитную скорость показываем как «0» (косметика, но
-        // без мусора на приборе).
+        // без мусора на приборе). Конечную клампим: long на MSVC x86 32-битный,
+        // lround огромного float дал бы LONG_MIN == Hud::UNSENT и сломал кеш.
         const Vector3 v = m_vehicleService.getVelocity(vehicleId);
         const float raw = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z) * SA_VELOCITY_TO_KMH;
-        const long speed = std::isfinite(raw) ? std::lround(raw) : 0;
-        m_textDrawService.setTextForPlayer(player, hud.speedId, fmt::format("{}", speed));
+        const long speed = std::isfinite(raw) ? std::lround(std::min(raw, 9999.0f)) : 0;
+        // Текст шлём только на смене округлённого значения, не каждый тик.
+        if (speed != hud.lastSpeed)
+        {
+            hud.lastSpeed = speed;
+            m_textDrawService.setTextForPlayer(player, hud.speedId, fmt::format("{}", speed));
+        }
     }
 
     // Двигатель заглушён (engine == 0; -1/1 — работает) -> число скорости тускнеет
@@ -274,13 +286,21 @@ void SpeedometerSystem::updateHud(IPlayer &player)
     if (hud.hpId >= 0)
     {
         const long hp = std::lround(m_vehicleService.getHealth(vehicleId));
-        const long maxHp = std::lround(VehicleService::MAX_HEALTH);
-        m_textDrawService.setTextForPlayer(player, hud.hpId, fmt::format("{}/{}", hp, maxHp));
+        if (hp != hud.lastHp)
+        {
+            hud.lastHp = hp;
+            const long maxHp = std::lround(VehicleService::MAX_HEALTH);
+            m_textDrawService.setTextForPlayer(player, hud.hpId, fmt::format("{}/{}", hp, maxHp));
+        }
     }
     if (hud.fuelId >= 0)
     {
         const long fuel = std::lround(m_vehicleService.getFuel(vehicleId));
-        const long capacity = std::lround(VehicleService::FUEL_CAPACITY);
-        m_textDrawService.setTextForPlayer(player, hud.fuelId, fmt::format("{}/{}", fuel, capacity));
+        if (fuel != hud.lastFuel)
+        {
+            hud.lastFuel = fuel;
+            const long capacity = std::lround(VehicleService::FUEL_CAPACITY);
+            m_textDrawService.setTextForPlayer(player, hud.fuelId, fmt::format("{}/{}", fuel, capacity));
+        }
     }
 }

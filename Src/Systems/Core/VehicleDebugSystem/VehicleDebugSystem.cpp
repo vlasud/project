@@ -2,6 +2,7 @@
 
 #include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
+#include "Services/Core/VehicleService/VehicleModelNames.h"
 #include "Utils/Encoding/Encoding.h"
 #include <cmath>
 #include <fmt/format.h>
@@ -44,7 +45,7 @@ VehicleDebugSystem::VehicleDebugSystem(ICore &core, const ServiceRegister &servi
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
                      int model = args.getInt(0);
-                     if (model < 400 || model > 611)
+                     if (model < VehicleModelNames::MIN_MODEL || model > VehicleModelNames::MAX_MODEL)
                          model = 411; // Infernus по умолчанию
 
                      // Создание — через единый API VehicleService; тестовая машина без
@@ -337,7 +338,8 @@ void VehicleDebugSystem::showDevMenu(IPlayer &player)
                     return;
                 }
                 // Привилегированная серверная операция: форсирует смерть (HP -> 0) мимо
-                // анти-грифинга. Клиент детонирует -> onVehicleDeath -> личная пропадает.
+                // анти-грифинга, с серверной санкцией (serverKilled). Клиент детонирует ->
+                // onVehicleDeath -> died-политика -> личная пропадает.
                 m_vehicleService.explode(*vehicle);
                 player->sendClientMessage(DEBUG_COLOUR, u("Машина взорвана"));
                 break;

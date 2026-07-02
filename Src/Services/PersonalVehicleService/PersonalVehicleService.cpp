@@ -1,10 +1,30 @@
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 
+#include <cmath>
+
 namespace
 {
 bool validPlayer(int playerId)
 {
     return playerId >= 0 && playerId < MAX_PLAYERS;
+}
+
+// Кламп персистентного fuel 0..CAP; мусор (NaN/Inf) -> дефолт «нет сохранённого».
+float clampFuel(double raw)
+{
+    if (!std::isfinite(raw))
+    {
+        return -1.0f; // мусор из БД — трактуем как «не сохранено», spawn даст полный бак
+    }
+    if (raw < 0.0)
+    {
+        return 0.0f;
+    }
+    if (raw > static_cast<double>(VehicleService::FUEL_CAPACITY))
+    {
+        return VehicleService::FUEL_CAPACITY;
+    }
+    return static_cast<float>(raw);
 }
 
 // Диапазон моделей машин SA — тот же, что форсит VehicleService::create. Валидируем
@@ -97,11 +117,15 @@ PersonalVehicleService::SpawnResult PersonalVehicleService::spawn(int playerId, 
 
     OwnedVehicle &entry = owned[ownedIndex];
 
-    // Пере-спавн: экземпляр уже стоит — уничтожаем старый. destroy СИНХРОННО
-    // триггерит onWorldVehicleDestroyed по старому id, который обнулит entry.vehicleId
-    // (запись НЕ удаляется — индекс/ссылка entry стабильны), мы ниже пишем новый id.
+    // Пере-спавн: экземпляр уже стоит — СНАЧАЛА снимаем его остаток топлива (иначе
+    // «убрать в гараж -> вызвать заново» доливало бы бак бесплатно, см. Docs/
+    // GameDesign/Economy.md «Задел на будущий сток»), ПОТОМ уничтожаем старый. destroy
+    // СИНХРОННО триггерит onWorldVehicleDestroyed по старому id, который обнулит
+    // entry.vehicleId (запись НЕ удаляется — индекс/ссылка entry стабильны), мы ниже
+    // пишем новый id.
     if (entry.vehicleId != -1)
     {
+        entry.fuel = m_vehicleService->getFuel(entry.vehicleId);
         m_vehicleService->destroy(entry.vehicleId);
         entry.vehicleId = -1; // на случай, если наблюдатель не сработал (страховка)
     }
@@ -115,6 +139,13 @@ PersonalVehicleService::SpawnResult PersonalVehicleService::spawn(int playerId, 
     if (!vehicle)
     {
         return SpawnResult::PoolFull;
+    }
+
+    // Применить персистентный остаток поверх дефолтного полного бака от create:
+    // entry.fuel < 0 — ещё не сохранён (первая покупка/не грузился) — оставляем полный.
+    if (entry.fuel >= 0.0f)
+    {
+        m_vehicleService->setFuel(*vehicle, entry.fuel);
     }
 
     entry.vehicleId = vehicle->getID();
@@ -137,6 +168,49 @@ int PersonalVehicleService::currentVehicle(int playerId, int ownedIndex) const
         return -1;
     }
     return owned[ownedIndex].vehicleId;
+}
+
+long long PersonalVehicleService::dbIdOf(int playerId, int ownedIndex) const
+{
+    if (!validPlayer(playerId))
+    {
+        return -1;
+    }
+    const std::vector<OwnedVehicle> &owned = m_owned[playerId];
+    if (ownedIndex < 0 || ownedIndex >= static_cast<int>(owned.size()))
+    {
+        return -1;
+    }
+    return owned[ownedIndex].dbId;
+}
+
+void PersonalVehicleService::setFuel(int playerId, int ownedIndex, float fuel)
+{
+    if (!validPlayer(playerId) || !std::isfinite(fuel))
+    {
+        return; // мусорный float не оседает в снимке
+    }
+    std::vector<OwnedVehicle> &owned = m_owned[playerId];
+    if (ownedIndex < 0 || ownedIndex >= static_cast<int>(owned.size()))
+    {
+        return;
+    }
+    owned[ownedIndex].fuel =
+        fuel < 0.0f ? 0.0f : (fuel > VehicleService::FUEL_CAPACITY ? VehicleService::FUEL_CAPACITY : fuel);
+}
+
+float PersonalVehicleService::fuelOf(int playerId, int ownedIndex) const
+{
+    if (!validPlayer(playerId))
+    {
+        return -1.0f;
+    }
+    const std::vector<OwnedVehicle> &owned = m_owned[playerId];
+    if (ownedIndex < 0 || ownedIndex >= static_cast<int>(owned.size()))
+    {
+        return -1.0f;
+    }
+    return owned[ownedIndex].fuel;
 }
 
 int PersonalVehicleService::count(int playerId) const
@@ -197,7 +271,7 @@ bool PersonalVehicleService::attach(long long dbId, int vehicleId)
     return false;
 }
 
-void PersonalVehicleService::load(int playerId, const std::vector<std::pair<long long, int>> &rows)
+void PersonalVehicleService::load(int playerId, const std::vector<std::tuple<long long, int, double>> &rows)
 {
     if (!validPlayer(playerId))
     {
@@ -207,9 +281,10 @@ void PersonalVehicleService::load(int playerId, const std::vector<std::pair<long
     // сессии). Кладём владения БЕЗ записи в БД (это загрузка, не покупка). Модель из
     // БД фильтруем тем же validModel — мусорная/устаревшая запись не даст спавнить.
     // dbId (id строки) сохраняем — по нему шеринг ссылается на конкретную машину.
+    // fuel клампится 0..CAP (мусор из БД — NaN/отрицательное/сверх капасити).
     std::vector<OwnedVehicle> &owned = m_owned[playerId];
     owned.clear();
-    for (const auto &[dbId, model] : rows)
+    for (const auto &[dbId, model, fuel] : rows)
     {
         if (static_cast<int>(owned.size()) >= MAX_PERSONAL_VEHICLES)
         {
@@ -217,7 +292,7 @@ void PersonalVehicleService::load(int playerId, const std::vector<std::pair<long
         }
         if (validModel(model))
         {
-            owned.push_back(OwnedVehicle{model, -1, dbId});
+            owned.push_back(OwnedVehicle{model, -1, dbId, clampFuel(fuel)});
         }
     }
     m_loaded[playerId] = true; // зеркало легло — покупка разблокирована

@@ -7,10 +7,11 @@
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 #include <array>
+#include <limits>
 
 // HUD за рулём — приборка водителя: скорость (км/ч), HP машины и топливо.
-// Три per-player textdraw, видны пока игрок за рулём, обновление раз в 0.5 с.
-// Бизнес-фича (не Core).
+// Три per-player textdraw, видны пока игрок за рулём, обновление раз в 0.5 с
+// (текст шлётся только на смене округлённого значения). Бизнес-фича (не Core).
 //
 // Скорость — КЛИЕНТСКАЯ велосити машины (VehicleService::getVelocity, то, что
 // водитель заявил в driver sync), отзывчивее серверной. Это безопасно: HUD
@@ -36,7 +37,8 @@ class SpeedometerSystem : public BaseSystem, public PlayerChangeEventHandler, pu
     void hideFor(int playerId);
     // Глобальный 0.5-с тик: обновить значения у всех водителей с активным HUD.
     void tick();
-    // Вычислить и записать скорость/HP/топливо в textdraw'ы игрока.
+    // Вычислить и записать скорость/HP/топливо в textdraw'ы игрока; текст шлётся
+    // только при изменении относительно кеша последних отправленных значений.
     void updateHud(IPlayer &player);
     // Лениво создать (если ещё нет) и показать один элемент HUD; nullptr при
     // исчерпании пула per-player текстдравов.
@@ -44,11 +46,20 @@ class SpeedometerSystem : public BaseSystem, public PlayerChangeEventHandler, pu
 
     struct Hud
     {
+        // Сентинел «ещё не отправляли»: вне диапазона реальных значений прибора,
+        // первое сравнение с кешем гарантированно даёт отправку.
+        static constexpr long UNSENT = std::numeric_limits<long>::min();
+
         int speedId = -1;       // textdraw скорости (крупное число)
         int hpId = -1;          // textdraw HP машины
         int fuelId = -1;        // textdraw топлива
         bool driving = false;   // HUD сейчас показан (игрок за рулём)
         bool speedDimmed = false; // число скорости приглушено (двигатель заглушён)
+        // Последние ОТПРАВЛЕННЫЕ значения (округлённые, как в тексте): совпадение
+        // пропускает и fmt::format, и setTextForPlayer.
+        long lastSpeed = UNSENT;
+        long lastHp = UNSENT;
+        long lastFuel = UNSENT;
     };
 
     TextDrawService &m_textDrawService;

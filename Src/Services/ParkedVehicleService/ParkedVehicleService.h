@@ -52,6 +52,11 @@ class ParkedVehicleService final : public IService
         // NO_FAMILY = личная owner-only; иначе = расшарена этой семье (режим доступа).
         int familyId = FamilyService::NO_FAMILY;
         int vehicleId = -1; // id живого экземпляра (Owner::Parked) или -1
+        // ПЕРСИСТЕНТНЫЙ снимок остатка бака (0..VehicleService::FUEL_CAPACITY):
+        // источник правды, пока экземпляр НЕ заспавнен (vehicleId == -1); пока
+        // заспавнен — источник правды VehicleService::getFuel(vehicleId), это поле
+        // лишь снимок на момент последнего сохранения (перед despawn/детонацией).
+        float fuel = VehicleService::FUEL_CAPACITY;
     };
 
     // Итог операции: код для сообщения вызывающему (тексты — в системе).
@@ -73,13 +78,17 @@ class ParkedVehicleService final : public IService
     // --- стартовая загрузка (из parked_vehicle, строго после семей) ---
     // Зарегистрировать парковку из БД в памяти (БЕЗ записи — это зеркало). vehicleId
     // проставит система после create через setVehicleId. familyId==NO_FAMILY — личная.
-    void loadParked(long long dbId, AccountId owner, int model, Vector3 spot, float angle, int familyId);
+    // fuel — персистентный остаток бака, клампится 0..VehicleService::FUEL_CAPACITY
+    // (мусор из БД — NaN/отрицательное/сверх капасити).
+    void loadParked(long long dbId, AccountId owner, int model, Vector3 spot, float angle, int familyId, float fuel);
 
     // --- операции (write-through в parked_vehicle) ---
     // Припарковать машину лично (familyId=NO_FAMILY): регистрирует Parked в памяти +
     // INSERT. Живой экземпляр (create Owner::Parked) заводит система и связывает
-    // setVehicleId.
-    Result park(long long dbId, AccountId owner, int model, Vector3 spot, float angle);
+    // setVehicleId. fuel — снимок остатка бака НА МОМЕНТ парковки (живой экземпляр
+    // ре-тегается НА МЕСТЕ, не пересоздаётся — топливо у него уже то, что наездил
+    // игрок; INSERT обязан записать РЕАЛЬНЫЙ остаток, не дефолт БД).
+    Result park(long long dbId, AccountId owner, int model, Vector3 spot, float angle, float fuel);
     // Убрать с парковки, УНИЧТОЖИВ живой экземпляр (через VehicleService): удаляет
     // Parked из памяти + DELETE строки. Для путей, где машина должна ИСЧЕЗНУТЬ вместе с
     // парковкой (напр. пул-очистка). Централизует «destroy + БД» — строка не осиротеет.
@@ -123,6 +132,13 @@ class ParkedVehicleService final : public IService
     std::vector<long long> parkedOfFamily(int familyId) const;
     const Parked *byDbId(long long dbId) const;
     const Parked *byVehicleId(int vehicleId) const;
+
+    // Записать ПЕРСИСТЕНТНЫЙ снимок остатка топлива записи dbId (кламп 0..CAP;
+    // NaN/Inf игнорируется). Только ПАМЯТЬ — write-through делает вызывающая система
+    // (ParkedVehicleSystem). Для снимка перед деспавном/детонацией и восстановления
+    // после респавна несанкционированной смерти. Bounds-safe; no-op для
+    // несуществующего dbId.
+    void setFuel(long long dbId, float fuel);
 
     // Гейт доступа за руль. Не-Parked машина — всегда true (гейт не наш). Личная
     // (familyId==NO_FAMILY) — только владелец (accountId == ownerAccountId, accountId
