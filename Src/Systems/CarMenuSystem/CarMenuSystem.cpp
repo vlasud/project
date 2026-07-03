@@ -26,12 +26,12 @@ std::string u(const std::string &text)
 
 // Статус машины для списков /car (единый словарь с центральной парковкой):
 //  «у дома» — припаркована лично; «в семье» — припаркована и расшарена; иначе —
-//  «в гараже» (не в мире) / «вызвана» (в мире через центральную парковку).
+//  «на парковке» (не в мире — взять на центральной парковке) / «вызвана» (в мире).
 const char *placementStatus(const ParkedVehicleService &parked, long long dbId, int liveVehicleId)
 {
     const int mode = parked.parkedMode(dbId);
     if (mode == ParkedVehicleService::NOT_PARKED)
-        return liveVehicleId == -1 ? "в гараже" : "вызвана";
+        return liveVehicleId == -1 ? "на парковке" : "вызвана";
     return mode == FamilyService::NO_FAMILY ? "у дома" : "в семье";
 }
 
@@ -272,8 +272,17 @@ void CarMenuSystem::showMyCars(IPlayer &player)
     std::string body = "Машина\tГде находится\n";
     for (const PersonalVehicleService::OwnedVehicle &entry : owned)
     {
-        const char *status = placementStatus(m_parkedService, entry.dbId, liveVehicleId(entry.vehicleId, entry.dbId));
-        body += fmt::format("{}\t{}\n", VehicleModelNames::displayName(entry.model), status);
+        const int liveId = liveVehicleId(entry.vehicleId, entry.dbId);
+        // За рулём кто-то сидит — вместо статуса размещения показываем КТО
+        // («Ник[id]»): владельцу важнее «кто сейчас в моей машине». Водитель —
+        // серверный (getDriver); ник строго латиница (NicknameService), без
+        // \t/\n/{} — для tablist-строки безопасен и u() его не меняет.
+        const int driverId = liveId != -1 ? m_vehicleService.getDriver(liveId) : -1;
+        IPlayer *driver = driverId != -1 ? m_core.getPlayers().get(driverId) : nullptr;
+        const std::string where = driver
+                                      ? fmt::format("{}[{}]", driver->getName().to_string(), driverId)
+                                      : std::string(placementStatus(m_parkedService, entry.dbId, liveId));
+        body += fmt::format("{}\t{}\n", VehicleModelNames::displayName(entry.model), where);
     }
     body.pop_back(); // убрать хвостовой '\n' — иначе пустая строка-фантом в tablist (как AdminSystem::cmdAdminHelp)
 
@@ -424,7 +433,7 @@ void CarMenuSystem::respawnAction(IPlayer &player, int carIndex)
         const int vehicleId = owned[carIndex].vehicleId;
         if (vehicleId == -1)
         {
-            player.sendClientMessage(ERROR_COLOUR, u("Машина уже в гараже"));
+            player.sendClientMessage(ERROR_COLOUR, u("Машина уже на парковке"));
             return;
         }
         const int driverId = m_vehicleService.getDriver(vehicleId);
@@ -438,11 +447,11 @@ void CarMenuSystem::respawnAction(IPlayer &player, int carIndex)
                                          : u("Пока в машине водитель, респавн недоступен"));
             return;
         }
-        // Убрать в гараж: destroy — subscribeDestroyed сам обнулит vehicleId владения
-        // (onWorldVehicleDestroyed), запись владения НЕ удаляется.
+        // Вернуть на парковку: destroy — subscribeDestroyed сам обнулит vehicleId
+        // владения (onWorldVehicleDestroyed), запись владения НЕ удаляется.
         m_vehicleService.destroy(vehicleId);
         player.sendClientMessage(INFO_COLOUR,
-                                 u("Машина отправлена в гараж. Возьмите её на парковке"));
+                                 u("Машина отправлена на парковку. Возьмите её там"));
         return;
     }
 
@@ -771,7 +780,7 @@ void CarMenuSystem::showOnMap(IPlayer &player, int carIndex)
     {
         // Владение есть, но машина не в мире — отметить нечего.
         player.sendClientMessage(ERROR_COLOUR,
-                                 u("Эта машина в гараже. Возьмите её на парковке, чтобы отметить на карте"));
+                                 u("Эта машина на парковке. Возьмите её, чтобы отметить на карте"));
         return;
     }
 

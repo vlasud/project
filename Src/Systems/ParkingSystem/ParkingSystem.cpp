@@ -105,7 +105,7 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
     }
 
     // Диалог LIST: пункт — «{n}. {имя}  —  {статус}» (статус: «у дома»
-    // (припаркована лично), «в семье» (расшарена), «в гараже» (не в мире), «вызвана»
+    // (припаркована лично), «в семье» (расшарена), «на парковке» (не в мире), «вызвана»
     // (в мире) — единый словарь с /car по parkedMode). Имя машины — из каталога
     // VehicleModelNames (displayName: пустое имя -> фолбэк «Модель {id}»).
     std::string body;
@@ -114,7 +114,7 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
         const PersonalVehicleService::OwnedVehicle &entry = owned[i];
         const int mode = m_parkedService.parkedMode(entry.dbId);
         const char *status = mode == ParkedVehicleService::NOT_PARKED
-                                 ? (entry.vehicleId == -1 ? "в гараже" : "вызвана")
+                                 ? (entry.vehicleId == -1 ? "на парковке" : "вызвана")
                                  : (mode == FamilyService::NO_FAMILY ? "у дома" : "в семье");
         body += fmt::format("{}. {}  —  {}\n", i + 1, VehicleModelNames::displayName(entry.model), status);
     }

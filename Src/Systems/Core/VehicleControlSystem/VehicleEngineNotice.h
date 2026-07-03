@@ -26,6 +26,6 @@ inline void showEngineBroken(ScreenNoticeService &notice, IPlayer &player)
 // Пустой бак (двигатель заглох сам / не заводится) — жёлтый.
 inline void showNoFuel(ScreenNoticeService &notice, IPlayer &player)
 {
-    notice.show(player, "no fuel", SHOW_TIME, Colour(0xF0, 0xC0, 0x30, 0xFF));
+    notice.show(player, "no fuel", SHOW_TIME, Colour(0xE0, 0x30, 0x30, 0xFF));
 }
 } // namespace VehicleEngineNotice
