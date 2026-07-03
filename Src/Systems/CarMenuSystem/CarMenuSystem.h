@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
+#include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 #include "Services/FamilyService/FamilyService.h"
 #include "Services/HouseService/HouseService.h"
@@ -98,4 +99,5 @@ class CarMenuSystem : public BaseSystem
     HouseService &m_houseService;
     PlayerSessionService &m_sessionService;
     VehicleLockService &m_lockService;
+    ScreenNoticeService &m_screenNotice; // попапы отказа двигателя (общие с клавишей)
 };

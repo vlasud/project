@@ -2,6 +2,7 @@
 
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/VehicleService/VehicleModelNames.h"
+#include "Systems/Core/VehicleControlSystem/VehicleEngineNotice.h"
 #include "Utils/Encoding/Encoding.h"
 #include "glm/geometric.hpp"
 #include <algorithm>
@@ -57,7 +58,8 @@ CarMenuSystem::CarMenuSystem(ICore &core, const ServiceRegister &serviceRegister
       m_parkedService(serviceRegister.getService<ParkedVehicleService>()),
       m_houseService(serviceRegister.getService<HouseService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
-      m_lockService(serviceRegister.getService<VehicleLockService>())
+      m_lockService(serviceRegister.getService<VehicleLockService>()),
+      m_screenNotice(serviceRegister.getService<ScreenNoticeService>())
 {
     auto &commands = serviceRegister.getService<PlayerCommandService>();
     commands.add("car", {},
@@ -195,20 +197,19 @@ void CarMenuSystem::toggleEngine(IPlayer &player)
     const bool on = engine != 0;
     const bool wantsStart = !on;
 
-    // Причины отказа согласованы с тумблером клавиши (VehicleControlSystem::
-    // toggleEngine): заглохшую (stall) чинит только repair(), пустой бак — только
-    // refuel(). Заглушить можно всегда.
+    // Причины отказа и обратная связь ОДИНАКОВЫ с клавишным тумблером
+    // (VehicleControlSystem): тот же попап VehicleEngineNotice (не чат), единый
+    // текст/цвет. Заглохшую (stall) чинит только repair(), пустой бак — refuel().
+    // Заглушить можно всегда. После попапа переоткрываем меню.
     if (wantsStart && m_vehicleService.isStalled(vehicleId))
     {
-        // Формулировка совпадает с красным попапом клавишного тумблера; канал
-        // здесь чат — естественный ответ на клик в диалоге.
-        player.sendClientMessage(ERROR_COLOUR, u("Двигатель сломан"));
+        VehicleEngineNotice::showEngineBroken(m_screenNotice, player);
         showCurrentVehicle(player);
         return;
     }
     if (wantsStart && m_vehicleService.isOutOfFuel(vehicleId))
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Двигатель не заводится - бак пуст"));
+        VehicleEngineNotice::showNoFuel(m_screenNotice, player);
         showCurrentVehicle(player);
         return;
     }

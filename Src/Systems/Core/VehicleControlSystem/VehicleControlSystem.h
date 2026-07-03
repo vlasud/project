@@ -43,6 +43,9 @@ class VehicleControlSystem : public BaseSystem
     // Попап «двигатель сломан» водителю: и на попытку завести сломанный
     // двигатель, и на сам момент поломки.
     void showEngineBroken(IPlayer &player);
+    // Попап «пустой бак» водителю: и на попытку завести с пустым баком, и на сам
+    // момент опустошения бака на ходу.
+    void showNoFuel(IPlayer &player);
 
     PlayerKeyService &m_keyService;
     VehicleService &m_vehicleService;

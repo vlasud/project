@@ -1,21 +1,6 @@
 #include "Systems/Core/VehicleControlSystem/VehicleControlSystem.h"
 
-#include "Utils/Encoding/Encoding.h"
-#include <chrono>
-
-namespace
-{
-const Colour ERROR_COLOUR{255, 90, 90};
-
-// «Двигатель сломан» — попап через ScreenNoticeService вместо чата.
-constexpr std::chrono::milliseconds ENGINE_BROKEN_TIME{3000};
-const Colour ENGINE_BROKEN_COLOUR{0xE0, 0x30, 0x30, 0xFF};
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-} // namespace
+#include "Systems/Core/VehicleControlSystem/VehicleEngineNotice.h"
 
 VehicleControlSystem::VehicleControlSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_keyService(serviceRegister.getService<PlayerKeyService>()),
@@ -37,15 +22,15 @@ VehicleControlSystem::VehicleControlSystem(ICore &core, const ServiceRegister &s
                          });
 
     // Момент опустошения бака ПОД ВОДИТЕЛЕМ (secondTick VehicleService, не
-    // per-tick) — Core оповещает фактом, текст шлём здесь. driverId — серверный
-    // (getDriver на момент опустошения), не клиентский ввод.
+    // per-tick) — Core оповещает фактом, попап шлём здесь (не чат). driverId —
+    // серверный (getDriver на момент опустошения), не клиентский ввод.
     m_vehicleService.subscribeFuelEmpty(
         [this](int /*vehicleId*/, int driverId)
         {
             IPlayer *player = m_core.getPlayers().get(driverId);
             if (!player)
                 return; // водитель уже вышел — страховка от гонки колбэка/дисконнекта
-            player->sendClientMessage(ERROR_COLOUR, u("Бак пуст — двигатель заглох"));
+            showNoFuel(*player);
         });
 
     // Момент ПОЛОМКИ двигателя ПОД ВОДИТЕЛЕМ (HP добит, машина заглохла) — Core
@@ -109,7 +94,7 @@ void VehicleControlSystem::toggleEngine(IPlayer &player)
     }
     if (wantsStart && m_vehicleService.isOutOfFuel(vehicleId))
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Двигатель не заводится - бак пуст"));
+        showNoFuel(player); // попап вместо чата
         return;
     }
 
@@ -132,6 +117,11 @@ void VehicleControlSystem::toggleLights(IPlayer &player)
 
 void VehicleControlSystem::showEngineBroken(IPlayer &player)
 {
-    // Цвет задаётся параметром show() (тильда-коды ~r~ в textdraw не работают).
-    m_screenNotice.show(player, u("engine is broken"), ENGINE_BROKEN_TIME, ENGINE_BROKEN_COLOUR);
+    // Тот же попап, что в /car — единый источник текста/цвета (VehicleEngineNotice).
+    VehicleEngineNotice::showEngineBroken(m_screenNotice, player);
+}
+
+void VehicleControlSystem::showNoFuel(IPlayer &player)
+{
+    VehicleEngineNotice::showNoFuel(m_screenNotice, player);
 }
