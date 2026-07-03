@@ -19,6 +19,7 @@
 #include "Systems/FactionSystem/FactionSystem.h"
 #include "Systems/FamilySystem/FamilySystem.h"
 #include "Systems/GreetingSystem/GreetingSystem.h"
+#include "Systems/HomeMenuSystem/HomeMenuSystem.h"
 #include "Systems/HouseSystem/HouseSystem.h"
 #include "Systems/ParkedVehicleSystem/ParkedVehicleSystem.h"
 #include "Systems/VehicleLockSystem/VehicleLockSystem.h"
@@ -291,6 +292,13 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // команд/диалога зарегистрированы раньше. Команда /car регистрируется в
     // конструкторе; меню/под-диалоги/указатель/замок — холодный путь.
     m_systems.push_back(std::make_unique<CarMenuSystem>(core, serviceRegister));
+    // HomeMenuSystem (/home — меню владельца дома, бизнес-фича вне Core) после
+    // HouseSystem (владение/иконки/персист владения через subscribeOwnerChanged —
+    // подписчик там, HomeMenuSystem лишь зовёт HouseService::setOwner),
+    // ParkedVehicleSystem (unpark припаркованных при передаче/выселении) и
+    // VehicleWaypointSystem (общий чекпоинт-указатель, target-режим «точка» для
+    // входа дома). Команда /home регистрируется в конструкторе; меню — холодный путь.
+    m_systems.push_back(std::make_unique<HomeMenuSystem>(core, serviceRegister));
     // SpawnChoiceSystem (/setspawn, бизнес-фича вне Core) после: PlayerSessionSystem
     // (подписки на старт/конец сессии), PlayerSpawnSystem (спавн-сервис),
     // FactionSystem + конкретные фракции (спавны орг уже зарегистрированы) и

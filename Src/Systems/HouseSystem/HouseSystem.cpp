@@ -132,6 +132,12 @@ HouseSystem::HouseSystem(ICore &core, const ServiceRegister &serviceRegister)
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showMain(player); },
                  PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "дома — дев-меню (создание/список/удаление)",
                  PlayerCommandService::HelpCategory::Hidden);
+
+    // Единая точка персиста владения: занятие (showClaimConfirm) и передача/
+    // выселение (HomeMenuSystem) идут через один и тот же наблюдатель.
+    m_serviceRegister.getService<HouseService>().subscribeOwnerChanged(
+        [this](int houseId, const std::string &oldKey, const std::string &newKey)
+        { onOwnerChanged(houseId, oldKey, newKey); });
 }
 
 void HouseSystem::initialize(IComponentList * /*components*/)
@@ -337,66 +343,95 @@ void HouseSystem::showClaimConfirm(IPlayer &player, int houseId)
                 return;
             }
 
-            if (!service.setOwner(houseId, ownerKey)) // оптимистичная память (зеркало БД)
+            if (!service.setOwner(houseId, ownerKey)) // оптимистичная память; персист/иконку доводит onOwnerChanged
             {
                 return; // дом исчез между проверкой и записью — игнор
             }
-            // Владение — в БД (write-through, как членство фракций). DELETE по дому
-            // И по аккаунту + INSERT в ОДНОЙ ТРАНЗАКЦИИ: либо вся пара применилась,
-            // либо ничего (rollback) — нет окна, где прежние привязки сняты, а новая
-            // не вписана. DELETE снимает старые ссылки (этого дома и этого аккаунта —
-            // UNIQUE-бэкстоп «один дом на аккаунт»). Список домов (houses.json) при
-            // занятии НЕ меняется — файл не пишем.
-            DatabaseManager::throwQuery(
-                [houseId, accountId, claimedAt = static_cast<std::int64_t>(std::time(nullptr))](mysqlx::Schema schema)
-                {
-                    mysqlx::Table table = schema.getTable("house_owner");
-                    mysqlx::Session &dbSession = schema.getSession();
-                    dbSession.startTransaction();
-                    try
-                    {
-                        table.remove()
-                            .where("house_id = :house OR account_id = :account")
-                            .bind("house", houseId)
-                            .bind("account", accountId)
-                            .execute();
-                        table.insert("house_id", "account_id", "claimed_at")
-                            .values(houseId, accountId, claimedAt)
-                            .execute();
-                        dbSession.commit();
-                    }
-                    catch (...)
-                    {
-                        dbSession.rollback(); // не оставляем частичную запись владения
-                        throw;                // errorCallback откатит память; сессия вернётся чистой
-                    }
-                },
-                // Главный поток: запись владения в БД не прошла — откатываем
-                // оптимистичную память, чтобы зеркало не расходилось с БД (иначе дом
-                // числился бы за игроком только в памяти и блокировал бы второе занятие).
-                [this, playerId, houseId, ownerKey](const std::string &error)
-                {
-                    LogManager::log(
-                        Error, fmt::format("HouseSystem: failed to persist claim of house {}: {}", houseId, error));
-
-                    HouseService &service = m_serviceRegister.getService<HouseService>();
-                    const HouseService::House *house = service.getHouse(houseId);
-                    if (house && house->owner == ownerKey) // дом мог быть удалён/перезанят за время запроса
-                    {
-                        service.setOwner(houseId, ""); // снять оптимистичное владение
-                        refreshHouseIcon(houseId);     // красная -> зелёная
-                    }
-                    if (IPlayer *player = m_core.getPlayers().get(playerId))
-                    {
-                        player->sendClientMessage(ERROR_COLOUR, u("Не удалось закрепить дом, попробуйте позже"));
-                    }
-                });
-
-            refreshHouseIcon(houseId); // зелёная -> красная
 
             player->sendClientMessage(
                 INFO_COLOUR, u(fmt::format("Дом #{} теперь ваш. Возвращайтесь сюда в любое время", houseId)));
         });
+}
+
+void HouseSystem::onOwnerChanged(int houseId, const std::string &oldKey, const std::string &newKey)
+{
+    // Иконка перекрашивается оптимистично сразу (как было при занятии) — БД лишь
+    // подтверждает write-through, откат при сбое перекрасит обратно.
+    refreshHouseIcon(houseId);
+
+    // Владение — в БД (write-through, как членство фракций). newKey непустой:
+    // DELETE по дому И по аккаунту + INSERT В ОДНОЙ ТРАНЗАКЦИИ (либо вся пара
+    // применилась, либо ничего) — та же атомарность, что раньше была только у
+    // занятия, теперь общая для занятия/передачи. newKey пустой (выселение) —
+    // просто DELETE строки дома. Список домов (houses.json) НЕ меняется — файл не
+    // пишем ни на одном из путей смены владения.
+    if (!newKey.empty())
+    {
+        PlayerSessionService::AccountId accountId = PlayerSessionService::NO_ACCOUNT;
+        try
+        {
+            accountId = std::stoll(newKey);
+        }
+        catch (...)
+        {
+            return; // ключ не число — не наш формат ownerKey, персист невозможен
+        }
+        DatabaseManager::throwQuery(
+            [houseId, accountId, claimedAt = static_cast<std::int64_t>(std::time(nullptr))](mysqlx::Schema schema)
+            {
+                mysqlx::Table table = schema.getTable("house_owner");
+                mysqlx::Session &dbSession = schema.getSession();
+                dbSession.startTransaction();
+                try
+                {
+                    table.remove()
+                        .where("house_id = :house OR account_id = :account")
+                        .bind("house", houseId)
+                        .bind("account", accountId)
+                        .execute();
+                    table.insert("house_id", "account_id", "claimed_at")
+                        .values(houseId, accountId, claimedAt)
+                        .execute();
+                    dbSession.commit();
+                }
+                catch (...)
+                {
+                    dbSession.rollback(); // не оставляем частичную запись владения
+                    throw;                // errorCallback откатит память
+                }
+            },
+            // Запись владения в БД не прошла — откатываем оптимистичную память на
+            // oldKey БЕЗ повторной нотификации (setOwnerSilent — иначе рекурсия
+            // запустила бы ещё одну БД-попытку и при затяжном сбое БД зациклила бы
+            // откаты), перекрашиваем иконку обратно.
+            [this, houseId, newKey, oldKey](const std::string &error)
+            {
+                LogManager::log(Error,
+                                fmt::format("HouseSystem: failed to persist owner change of house {}: {}", houseId,
+                                            error));
+                HouseService &service = m_serviceRegister.getService<HouseService>();
+                const HouseService::House *house = service.getHouse(houseId);
+                if (house && house->owner == newKey) // дом мог смениться ещё раз за время запроса
+                {
+                    service.setOwnerSilent(houseId, oldKey);
+                    refreshHouseIcon(houseId);
+                }
+            });
+    }
+    else
+    {
+        DatabaseManager::throwQuery(
+            [houseId](mysqlx::Schema schema)
+            { schema.getTable("house_owner").remove().where("house_id = :house").bind("house", houseId).execute(); },
+            [houseId](const std::string &error)
+            {
+                LogManager::log(Error, fmt::format("HouseSystem: failed to delete ownership of house {}: {}",
+                                                    houseId, error));
+                // Выселение уже применено в памяти/иконке — оставляем как есть.
+                // Осиротевшая строка house_owner (дом снова занят при следующей
+                // попытке) снимется её же DELETE-веткой транзакции занятия.
+            });
+    }
 }
 
 void HouseSystem::onExitPickup(int houseId, IPlayer &player)
@@ -895,7 +930,10 @@ void HouseSystem::loadOwnershipAsync()
                 {
                     continue; // дома из houses.json больше нет — осиротевшее владение
                 }
-                service.setOwner(houseId, std::to_string(accountId)); // только память
+                // Загрузка зеркала из БД — БЕЗ нотификации onOwnerChanged (иначе
+                // каждая строка спровоцировала бы избыточный write-through обратно
+                // в ту же БД, откуда она только что прочитана).
+                service.setOwnerSilent(houseId, std::to_string(accountId));
                 refreshHouseIcon(houseId);
             }
             // Владение в памяти — занятие домов разблокировано; оповещаем

@@ -125,14 +125,28 @@ class HouseService final : public IService
     // Выставить владельца дома в ПАМЯТИ (зеркало БД). ownerKey — ключ аккаунта
     // (std::to_string(accountId)); "" снимает владельца (ничейный). false — дома
     // нет. Запись владения в БД (house_owner) и пересоздание иконки делает
-    // HouseSystem — этот метод НЕ трогает ни json, ни БД.
+    // HouseSystem — этот метод НЕ трогает ни json, ни БД. На успехе нотифицирует
+    // subscribeOwnerChanged(houseId, oldKey, newKey) — ЕДИНАЯ точка приведения
+    // персиста/иконки для ВСЕХ путей смены владения (занятие/передача/выселение),
+    // персист не дублируется в нескольких местах.
     bool setOwner(int houseId, const std::string &ownerKey);
+
+    // Наблюдатель смены владельца дома (после успешного setOwner): houseId, старый
+    // и новый ключ владельца ("" — ничейный). HouseSystem подписывается и делает
+    // БД-персист (house_owner) + пересоздание иконки — единая точка для занятия,
+    // передачи и выселения (паттерн subscribeReconcile из ParkedVehicleService).
+    using OwnerChangedObserver = std::function<void(int houseId, const std::string &oldKey, const std::string &newKey)>;
+    void subscribeOwnerChanged(OwnerChangedObserver observer);
 
     // --- сериализация JSON (только ОПИСАНИЕ домов, без владения) ---
     std::string serialize() const; // весь набор домов в JSON (для записи файла)
 
   private:
     // --- вызывается HouseSystem ---
+    // Откат памяти БЕЗ нотификации (для errorCallback персиста — иначе
+    // рекурсивная нотификация запустила бы ещё одну БД-попытку и при затяжном
+    // сбое БД зациклила бы откаты). false — дома нет.
+    bool setOwnerSilent(int houseId, const std::string &ownerKey);
     // Загрузить дом из распарсенной строки (на старте). Дубликат id отбрасывается.
     void loadHouse(const House &house);
     // Финализация загрузки: выставить m_nextId = max(id)+1, но не выше MAX_HOUSE_ID+1.
@@ -152,4 +166,5 @@ class HouseService final : public IService
 
     bool m_ownershipLoaded = false; // владение из БД легло в память (стартовое one-shot)
     std::vector<OwnershipLoadedObserver> m_ownershipLoadedObservers;
+    std::vector<OwnerChangedObserver> m_ownerChangedObservers;
 };

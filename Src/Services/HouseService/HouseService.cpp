@@ -129,8 +129,30 @@ bool HouseService::setOwner(int houseId, const std::string &ownerKey)
     {
         return false; // дома нет
     }
-    // Только память (зеркало БД); запись владения в house_owner делает HouseSystem.
+    // Только память (зеркало БД); запись владения в house_owner делает HouseSystem
+    // по нотификации ниже (единая точка персиста для занятия/передачи/выселения).
+    const std::string oldKey = it->second.owner;
     it->second.owner = ownerKey; // "" снимает владельца (ничейный)
+    for (const OwnerChangedObserver &observer : m_ownerChangedObservers)
+        observer(houseId, oldKey, ownerKey);
+    return true;
+}
+
+void HouseService::subscribeOwnerChanged(OwnerChangedObserver observer)
+{
+    if (!observer)
+        return;
+    m_ownerChangedObservers.push_back(std::move(observer));
+}
+
+bool HouseService::setOwnerSilent(int houseId, const std::string &ownerKey)
+{
+    const auto it = m_houses.find(houseId);
+    if (it == m_houses.end())
+    {
+        return false;
+    }
+    it->second.owner = ownerKey; // без нотификации — только откат памяти при сбое персиста
     return true;
 }
 
