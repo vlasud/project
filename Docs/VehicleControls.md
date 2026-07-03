@@ -81,16 +81,16 @@ GameText в этом сетапе неуправляем клиентом, см.
 | Причина | Точки показа | Текст | Цвет | Смысл |
 |---------|--------------|-------|------|-------|
 | Поломка (HP добито) | `subscribeEngineBroken` (сам момент) + ветка `isStalled` в `toggleEngine` | `engine is broken` | красный `(0xE0,0x30,0x30)` | тревога: чинится только `repair()` |
-| Пустой бак | `subscribeFuelEmpty` (сам момент на ходу) + ветка `isOutOfFuel` в `toggleEngine` | `no fuel` | жёлтый `(0xF0,0xC0,0x30)` | предупреждение: восстановимо `refuel()` |
+| Пустой бак | `subscribeFuelEmpty` (сам момент на ходу) + ветка `isOutOfFuel` в `toggleEngine` | `no fuel` | красный `(0xE0,0x30,0x30)` | двигатель не работает: нужен `refuel()` |
 
 - `subscribeEngineBroken` / `subscribeFuelEmpty` — Core оповещает ФАКТОМ ОДИН раз
   на переход в `stalled` / `outOfFuel`, только при `driverId >= 0` (пул из колбэка
   не трогаем); текст шлёт бизнес (эта система).
 - Текст/цвет/длительность обоих попапов — в ОДНОМ месте, общем хелпере
   `VehicleEngineNotice` (`Src/Systems/Core/VehicleControlSystem/VehicleEngineNotice.h`):
-  `VehicleEngineNotice::showEngineBroken` / `showNoFuel` (срок 3000ms). Разные
-  цвета (красный vs жёлтый) отличают «сломан» от «пустой бак» в одной экранной
-  области — свод цветов в `Docs/GameDesign/UI_Texts.md`.
+  `VehicleEngineNotice::showEngineBroken` / `showNoFuel` (срок 3000ms). Оба —
+  красным (единый сигнал «двигатель не работает»); различает их текст.
+  Свод цветов — `Docs/GameDesign/UI_Texts.md`.
 - **`/car` → «Текущая машина» показывает ТЕ ЖЕ попапы** через тот же
   `VehicleEngineNotice` (не чат) — одна причина отказа даёт одинаковую обратную
   связь и по клавише, и в меню (см. `Docs/CarMenu.md`). Единый источник исключает

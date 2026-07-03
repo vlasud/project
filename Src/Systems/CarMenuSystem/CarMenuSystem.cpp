@@ -25,14 +25,18 @@ std::string u(const std::string &text)
 }
 
 // Статус машины для списков /car (единый словарь с центральной парковкой):
-//  «у дома» — припаркована лично; «в семье» — припаркована и расшарена; иначе —
+//  «у дома» — припаркована лично И реально стоит у своей точки; «брошена» —
+//  припаркована лично, но владелец уехал на ней и оставил дальше
+//  HOME_SPOT_RADIUS; «в семье» — припаркована и расшарена; иначе —
 //  «на парковке» (не в мире — взять на центральной парковке) / «вызвана» (в мире).
 const char *placementStatus(const ParkedVehicleService &parked, long long dbId, int liveVehicleId)
 {
     const int mode = parked.parkedMode(dbId);
     if (mode == ParkedVehicleService::NOT_PARKED)
         return liveVehicleId == -1 ? "на парковке" : "вызвана";
-    return mode == FamilyService::NO_FAMILY ? "у дома" : "в семье";
+    if (mode == FamilyService::NO_FAMILY)
+        return parked.isAwayFromSpot(dbId) ? "брошена" : "у дома";
+    return "в семье";
 }
 
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
@@ -73,8 +77,14 @@ CarMenuSystem::CarMenuSystem(ICore &core, const ServiceRegister &serviceRegister
 void CarMenuSystem::showRoot(IPlayer &player)
 {
     const int playerId = player.getID();
-    Dialog dialog =
-        makeDialog(DialogStyle_LIST, "Личный транспорт", "Текущая машина\nМои машины", "Выбрать", "Закрыть");
+    // Первая строка подсказывает состояние ДО клика: сидит в своей машине — её
+    // имя, иначе «не за рулем» (гейт всё равно в обработчике — лейбл лишь превью).
+    IVehicle *current = ownCurrentVehicle(playerId);
+    const std::string currentLine =
+        current ? fmt::format("Текущая машина - {}", VehicleModelNames::displayName(current->getModel()))
+                : std::string("Текущая машина - не за рулем");
+    Dialog dialog = makeDialog(DialogStyle_LIST, "Личный транспорт", currentLine + "\nМои машины", "Выбрать",
+                               "Закрыть");
     m_dialogService.show(
         player, dialog,
         [this, playerId](DialogResponse response, int listItem, StringView)
@@ -128,73 +138,81 @@ IVehicle *CarMenuSystem::ownCurrentVehicle(int playerId) const
     return nullptr;
 }
 
-void CarMenuSystem::showCurrentVehicle(IPlayer &player)
+int CarMenuSystem::currentCarIndex(int playerId) const
 {
-    const int playerId = player.getID();
     IVehicle *vehicle = ownCurrentVehicle(playerId);
     if (!vehicle)
+    {
+        return -1;
+    }
+    // Своя машина всегда соответствует записи владения: сессионная — по vehicleId
+    // владения, припаркованная — через parked-запись (liveVehicleId). Не нашлась —
+    // окно регистрации/рассинхрон зеркала, ведём себя как «не в своей машине».
+    const int vehicleId = vehicle->getID();
+    const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(playerId);
+    for (std::size_t i = 0; i < owned.size(); ++i)
+    {
+        if (liveVehicleId(owned[i].vehicleId, owned[i].dbId) == vehicleId)
+        {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+void CarMenuSystem::showCurrentVehicle(IPlayer &player)
+{
+    const int carIndex = currentCarIndex(player.getID());
+    if (carIndex == -1)
     {
         player.sendClientMessage(ERROR_COLOUR, u("Вы не в своей машине"));
         return;
     }
-
-    const VehicleParams params = vehicle->getParams();
-    // Трактовки — как у клавишных тумблеров (VehicleControlSystem): двигатель
-    // -1 (авто)/1 — «работает» (первый клик глушит); фары только явная 1 — «включены».
-    const bool engineOn = params.engine != 0;
-    const bool lightsOn = params.lights == 1;
-    const bool locked = m_lockService.isLocked(vehicle->getID());
-
-    std::string body;
-    body += engineOn ? "Заглушить двигатель\n" : "Завести двигатель\n";
-    body += lightsOn ? "Выключить фары\n" : "Включить фары\n";
-    body += locked ? "Открыть двери\n" : "Закрыть двери\n";
-
-    m_dialogService.show(
-        player, makeDialog(DialogStyle_LIST, VehicleModelNames::displayName(vehicle->getModel()), body, "Выбрать", "Назад"),
-        [this, playerId](DialogResponse response, int listItem, StringView)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
-            if (!player)
-            {
-                return;
-            }
-            if (response != DialogResponse_Left)
-            {
-                showRoot(*player);
-                return;
-            }
-            switch (listItem)
-            {
-            case 0:
-                toggleEngine(*player);
-                break;
-            case 1:
-                toggleLights(*player);
-                break;
-            case 2:
-                toggleLock(*player);
-                break;
-            default:
-                break;
-            }
-        });
+    showCarMenu(player, carIndex, MenuOrigin::Root);
 }
 
-void CarMenuSystem::toggleEngine(IPlayer &player)
+// Живой экземпляр машины carIndex, в котором игрок СИДИТ сейчас (любое сиденье);
+// nullptr — машины нет в мире либо игрок не внутри неё. Гейт тумблеров единого
+// меню: управлять двигателем/фарами/замком можно только изнутри СВОЕЙ машины
+// (владение уже гарантирует carIndex из owned, ре-валидированный вызывающим).
+IVehicle *CarMenuSystem::seatedVehicle(int playerId, const PersonalVehicleService::OwnedVehicle &entry) const
+{
+    const int liveId = liveVehicleId(entry.vehicleId, entry.dbId);
+    IVehicle *vehicle = liveId != -1 ? m_vehicleService.get(liveId) : nullptr;
+    if (!vehicle || m_vehicleService.getVehicle(playerId) != vehicle)
+    {
+        return nullptr;
+    }
+    return vehicle;
+}
+
+void CarMenuSystem::toggleEngine(IPlayer &player, int carIndex, MenuOrigin origin)
 {
     const int playerId = player.getID();
-    // Ре-валидация «своей машины» на КАЖДОМ клике — диалог мог висеть, пока игрок
-    // вышел или машина исчезла.
-    IVehicle *vehicle = ownCurrentVehicle(playerId);
+    // Ре-валидация на КАЖДОМ клике — диалог мог висеть, пока владение/посадка менялись.
+    const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(playerId);
+    if (carIndex < 0 || carIndex >= static_cast<int>(owned.size()))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Эта машина больше недоступна"));
+        return;
+    }
+    // Разные причины — разные тексты: машины нет в мире (инструкция «сядьте» была
+    // бы невыполнимой) vs в мире, но игрок не внутри.
+    if (liveVehicleId(owned[carIndex].vehicleId, owned[carIndex].dbId) == -1)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Эта машина на парковке. Возьмите её, чтобы управлять"));
+        showCarMenu(player, carIndex, origin);
+        return;
+    }
+    IVehicle *vehicle = seatedVehicle(playerId, owned[carIndex]);
     if (!vehicle)
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Вы не в своей машине"));
+        player.sendClientMessage(ERROR_COLOUR, u("Сядьте в эту машину, чтобы управлять двигателем"));
+        showCarMenu(player, carIndex, origin);
         return;
     }
     const int vehicleId = vehicle->getID();
-    const int8_t engine = vehicle->getParams().engine;
-    const bool on = engine != 0;
+    const bool on = vehicle->getParams().engine != 0;
     const bool wantsStart = !on;
 
     // Причины отказа и обратная связь ОДИНАКОВЫ с клавишным тумблером
@@ -204,48 +222,72 @@ void CarMenuSystem::toggleEngine(IPlayer &player)
     if (wantsStart && m_vehicleService.isStalled(vehicleId))
     {
         VehicleEngineNotice::showEngineBroken(m_screenNotice, player);
-        showCurrentVehicle(player);
+        showCarMenu(player, carIndex, origin);
         return;
     }
     if (wantsStart && m_vehicleService.isOutOfFuel(vehicleId))
     {
         VehicleEngineNotice::showNoFuel(m_screenNotice, player);
-        showCurrentVehicle(player);
+        showCarMenu(player, carIndex, origin);
         return;
     }
 
     m_vehicleService.setEngine(*vehicle, !on);
     player.sendClientMessage(INFO_COLOUR, !on ? u("Двигатель заведён") : u("Двигатель заглушён"));
-    showCurrentVehicle(player); // переоткрыть с обновлёнными лейблами
+    showCarMenu(player, carIndex, origin); // переоткрыть с обновлёнными лейблами
 }
 
-void CarMenuSystem::toggleLights(IPlayer &player)
+void CarMenuSystem::toggleLights(IPlayer &player, int carIndex, MenuOrigin origin)
 {
     const int playerId = player.getID();
-    IVehicle *vehicle = ownCurrentVehicle(playerId);
+    const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(playerId);
+    if (carIndex < 0 || carIndex >= static_cast<int>(owned.size()))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Эта машина больше недоступна"));
+        return;
+    }
+    if (liveVehicleId(owned[carIndex].vehicleId, owned[carIndex].dbId) == -1)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Эта машина на парковке. Возьмите её, чтобы управлять"));
+        showCarMenu(player, carIndex, origin);
+        return;
+    }
+    IVehicle *vehicle = seatedVehicle(playerId, owned[carIndex]);
     if (!vehicle)
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Вы не в своей машине"));
+        player.sendClientMessage(ERROR_COLOUR, u("Сядьте в эту машину, чтобы управлять фарами"));
+        showCarMenu(player, carIndex, origin);
         return;
     }
     const bool on = vehicle->getParams().lights == 1;
     m_vehicleService.setLights(*vehicle, !on);
     player.sendClientMessage(INFO_COLOUR, !on ? u("Фары включены") : u("Фары выключены"));
-    showCurrentVehicle(player);
+    showCarMenu(player, carIndex, origin);
 }
 
-void CarMenuSystem::toggleLock(IPlayer &player)
+void CarMenuSystem::toggleLock(IPlayer &player, int carIndex, MenuOrigin origin)
 {
     const int playerId = player.getID();
-    IVehicle *vehicle = ownCurrentVehicle(playerId);
-    if (!vehicle)
+    const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(playerId);
+    if (carIndex < 0 || carIndex >= static_cast<int>(owned.size()))
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Вы не в своей машине"));
+        player.sendClientMessage(ERROR_COLOUR, u("Эта машина больше недоступна"));
         return;
     }
-    const bool nowLocked = m_lockService.toggle(vehicle->getID());
+    // Замок — «брелок»: в отличие от двигателя/фар посадка НЕ нужна, работает на
+    // любом расстоянии (уехал-вышел-забыл закрыть -> закрывается из /car). Гейт
+    // владения уже дал carIndex (owned = свои); нужен лишь живой экземпляр —
+    // замок сессионный и живёт на экземпляре, «на парковке» запирать нечего.
+    const int liveId = liveVehicleId(owned[carIndex].vehicleId, owned[carIndex].dbId);
+    if (liveId == -1)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Эта машина на парковке. Возьмите её, чтобы управлять"));
+        showCarMenu(player, carIndex, origin);
+        return;
+    }
+    const bool nowLocked = m_lockService.toggle(liveId);
     player.sendClientMessage(INFO_COLOUR, nowLocked ? u("Двери закрыты") : u("Двери открыты"));
-    showCurrentVehicle(player);
+    showCarMenu(player, carIndex, origin);
 }
 
 // -------------------------------------------------------- раздел «Мои машины»
@@ -269,7 +311,7 @@ void CarMenuSystem::showMyCars(IPlayer &player)
     // TABLIST_HEADERS: колонки «Машина | Где находится» (образец —
     // WeaponProficiencySystem::showSkills). Первая строка — шапка колонок, НЕ пункт
     // списка (listItem индексирует строки данных с 0, см. FactionSystem::showMembersMenu).
-    std::string body = "Машина\tГде находится\n";
+    std::string body = "Машина\tГде находится\tТопливо\n";
     for (const PersonalVehicleService::OwnedVehicle &entry : owned)
     {
         const int liveId = liveVehicleId(entry.vehicleId, entry.dbId);
@@ -282,7 +324,25 @@ void CarMenuSystem::showMyCars(IPlayer &player)
         const std::string where = driver
                                       ? fmt::format("{}[{}]", driver->getName().to_string(), driverId)
                                       : std::string(placementStatus(m_parkedService, entry.dbId, liveId));
-        body += fmt::format("{}\t{}\n", VehicleModelNames::displayName(entry.model), where);
+        // Топливо — по источнику правды состояния: живой экземпляр -> getFuel;
+        // припаркованная без экземпляра -> персист-снимок записи; «на парковке» ->
+        // снимок владения (-1 — ещё не сохранялся, спавн даст полный бак).
+        float fuel;
+        if (liveId != -1)
+        {
+            fuel = m_vehicleService.getFuel(liveId);
+        }
+        else if (const ParkedVehicleService::Parked *rec =
+                     entry.dbId != -1 ? m_parkedService.byDbId(entry.dbId) : nullptr)
+        {
+            fuel = rec->fuel;
+        }
+        else
+        {
+            fuel = entry.fuel >= 0.0f ? entry.fuel : VehicleService::FUEL_CAPACITY;
+        }
+        body += fmt::format("{}\t{}\t{}/{}\n", VehicleModelNames::displayName(entry.model), where,
+                            static_cast<int>(fuel), static_cast<int>(VehicleService::FUEL_CAPACITY));
     }
     body.pop_back(); // убрать хвостовой '\n' — иначе пустая строка-фантом в tablist (как AdminSystem::cmdAdminHelp)
 
@@ -306,20 +366,24 @@ void CarMenuSystem::showMyCars(IPlayer &player)
                 player->sendClientMessage(ERROR_COLOUR, u("Эта машина больше недоступна"));
                 return;
             }
-            showCarActions(*player, listItem);
+            showCarMenu(*player, listItem, MenuOrigin::MyCars);
         });
 }
 
 std::vector<CarMenuSystem::Action> CarMenuSystem::buildActions(int /*playerId*/, int /*carIndex*/) const
 {
-    // Правило видимости: все пункты видны ВСЕГДА (по членству/роли/состоянию не прячем)
-    // — недоступность объясняет сообщением сам обработчик действия. Пункты прав не
-    // дают: обработчик авторитетно гейтит владельца, за-рулём, дом, семью, dbId и
-    // состояние парковки.
-    return {Action::Respawn, Action::ShowOnMap, Action::ParkHere, Action::Unpark, Action::ShareToFamily};
+    // Правило видимости: все пункты видны ВСЕГДА (по членству/роли/состоянию/посадке
+    // не прячем) — недоступность объясняет сообщением сам обработчик. Пункты прав не
+    // дают: обработчик авторитетно гейтит владельца, посадку, дом, семью, dbId и
+    // состояние парковки. Тумблеры — сверху (самое частое: игрок сидит в машине).
+    // Набор сейчас статичен (параметры не используются) — сверка «набор изменился»
+    // в обработчике клика недостижима и оставлена как шов под будущий динамический
+    // набор (паттерн FamilySystem::showMenu).
+    return {Action::Engine,  Action::Lights, Action::Lock,          Action::Respawn,
+            Action::ShowOnMap, Action::ParkHere, Action::Unpark, Action::ShareToFamily};
 }
 
-void CarMenuSystem::showCarActions(IPlayer &player, int carIndex)
+void CarMenuSystem::showCarMenu(IPlayer &player, int carIndex, MenuOrigin origin)
 {
     const int playerId = player.getID();
     const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(playerId);
@@ -330,8 +394,14 @@ void CarMenuSystem::showCarActions(IPlayer &player, int carIndex)
     }
     const int model = owned[carIndex].model;
     const long long dbId = owned[carIndex].dbId;
-    // Лейбл 5-го пункта динамический по текущему режиму парковки (не скрытие —
+    // Динамические лейблы: тумблеры — по живому экземпляру (не в мире — базовый
+    // лейбл, клик объяснит), 5-й пункт действий — по режиму парковки (не скрытие —
     // недоступность объясняет обработчик сообщением при клике).
+    const int liveId = liveVehicleId(owned[carIndex].vehicleId, dbId);
+    IVehicle *live = liveId != -1 ? m_vehicleService.get(liveId) : nullptr;
+    const bool engineOn = live && live->getParams().engine != 0;
+    const bool lightsOn = live && live->getParams().lights == 1;
+    const bool locked = live && m_lockService.isLocked(liveId);
     const int mode = dbId != -1 ? m_parkedService.parkedMode(dbId) : ParkedVehicleService::NOT_PARKED;
     const bool shared = mode != ParkedVehicleService::NOT_PARKED && mode != FamilyService::NO_FAMILY;
 
@@ -341,6 +411,15 @@ void CarMenuSystem::showCarActions(IPlayer &player, int carIndex)
     {
         switch (action)
         {
+        case Action::Engine:
+            body += engineOn ? "Заглушить двигатель\n" : "Завести двигатель\n";
+            break;
+        case Action::Lights:
+            body += lightsOn ? "Выключить фары\n" : "Включить фары\n";
+            break;
+        case Action::Lock:
+            body += locked ? "Открыть двери\n" : "Закрыть двери\n";
+            break;
         case Action::Respawn:
             body += "Респавн\n";
             break;
@@ -359,10 +438,10 @@ void CarMenuSystem::showCarActions(IPlayer &player, int carIndex)
         }
     }
 
-    // Под-диалог LIST. Заголовок — имя машины. Правая кнопка «Назад» -> «Мои машины».
+    // Единое меню машины (LIST). Заголовок — имя машины. «Назад» -> откуда пришли.
     m_dialogService.show(
         player, makeDialog(DialogStyle_LIST, VehicleModelNames::displayName(model), body, "Выбрать", "Назад"),
-        [this, playerId, carIndex, actions](DialogResponse response, int listItem, StringView)
+        [this, playerId, carIndex, actions, origin](DialogResponse response, int listItem, StringView)
         {
             IPlayer *player = m_core.getPlayers().get(playerId);
             if (!player)
@@ -371,7 +450,15 @@ void CarMenuSystem::showCarActions(IPlayer &player, int carIndex)
             }
             if (response != DialogResponse_Left)
             {
-                showMyCars(*player); // «Назад» — вернуть в список машин
+                // «Назад» — в точку входа: корень («Текущая машина») либо список.
+                if (origin == MenuOrigin::Root)
+                {
+                    showRoot(*player);
+                }
+                else
+                {
+                    showMyCars(*player);
+                }
                 return;
             }
             // Машину идентифицирует ЗАХВАЧЕННЫЙ carIndex (НЕ listItem — это выбор
@@ -391,11 +478,20 @@ void CarMenuSystem::showCarActions(IPlayer &player, int carIndex)
             const Action chosen = actions[listItem];
             if (std::find(current.begin(), current.end(), chosen) == current.end())
             {
-                showCarActions(*player, carIndex); // набор изменился — перепоказать
+                showCarMenu(*player, carIndex, origin); // набор изменился — перепоказать
                 return;
             }
             switch (chosen)
             {
+            case Action::Engine:
+                toggleEngine(*player, carIndex, origin);
+                break;
+            case Action::Lights:
+                toggleLights(*player, carIndex, origin);
+                break;
+            case Action::Lock:
+                toggleLock(*player, carIndex, origin);
+                break;
             case Action::Respawn:
                 respawnAction(*player, carIndex);
                 break;

@@ -319,6 +319,26 @@ int ParkedVehicleService::parkedMode(long long dbId) const
     return it != m_byDbId.end() ? it->second.familyId : NOT_PARKED;
 }
 
+bool ParkedVehicleService::isAwayFromSpot(long long dbId) const
+{
+    const auto it = m_byDbId.find(dbId);
+    if (it == m_byDbId.end() || it->second.vehicleId == -1 || !m_vehicleService)
+    {
+        return false;
+    }
+    IVehicle *vehicle = m_vehicleService->get(it->second.vehicleId);
+    if (!vehicle)
+    {
+        return false;
+    }
+    // Близость горизонтальная (XY, без sqrt) — Z машины оседает на рельеф и дала
+    // бы ложное «далеко» на своей же точке (как anyVehicleNear в VehicleService).
+    const Vector3 pos = vehicle->getPosition();
+    const float dx = pos.x - it->second.spot.x;
+    const float dy = pos.y - it->second.spot.y;
+    return dx * dx + dy * dy > HOME_SPOT_RADIUS * HOME_SPOT_RADIUS;
+}
+
 std::vector<long long> ParkedVehicleService::parkedByAccount(AccountId accountId) const
 {
     std::vector<long long> result;

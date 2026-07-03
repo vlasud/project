@@ -113,9 +113,14 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
     {
         const PersonalVehicleService::OwnedVehicle &entry = owned[i];
         const int mode = m_parkedService.parkedMode(entry.dbId);
-        const char *status = mode == ParkedVehicleService::NOT_PARKED
-                                 ? (entry.vehicleId == -1 ? "на парковке" : "вызвана")
-                                 : (mode == FamilyService::NO_FAMILY ? "у дома" : "в семье");
+        // Единый словарь с /car: «у дома» — только если реально стоит у точки,
+        // уехал и бросил — «брошена» (isAwayFromSpot).
+        const char *status =
+            mode == ParkedVehicleService::NOT_PARKED
+                ? (entry.vehicleId == -1 ? "на парковке" : "вызвана")
+                : (mode == FamilyService::NO_FAMILY
+                       ? (m_parkedService.isAwayFromSpot(entry.dbId) ? "брошена" : "у дома")
+                       : "в семье");
         body += fmt::format("{}. {}  —  {}\n", i + 1, VehicleModelNames::displayName(entry.model), status);
     }
 
@@ -141,7 +146,11 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
             // Личный спавн вернул бы дубль.
             if (m_parkedService.isParked(owned[listItem].dbId))
             {
-                player->sendClientMessage(ERROR_COLOUR, u("Эта машина припаркована у дома"));
+                // Текст честен и для «у дома», и для «брошена» (уехал и вышел):
+                // слово отказа не должно противоречить статусу строки списка.
+                player->sendClientMessage(
+                    ERROR_COLOUR,
+                    u("Эта машина припаркована — она стоит у дома или где вы её оставили. /car поможет найти"));
                 return;
             }
             spawnAtParking(*player, listItem);
