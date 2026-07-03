@@ -67,7 +67,9 @@ class ParkedVehicleService final : public IService
         NotParked,     // машина не припаркована (снятие/запрос по несуществующему dbId)
         AlreadyShared, // при shareToFamily: уже расшарена (familyId != NO_FAMILY)
         NotShared,     // при unshareFromFamily: не расшарена (familyId == NO_FAMILY)
-        Invalid        // невалидный dbId/сервис не связан
+        Invalid,       // невалидный dbId/сервис не связан
+        NoInstance,    // при respawnHome: экземпляр сейчас не в мире (vehicleId == -1)
+        Occupied       // при respawnHome: за рулём есть водитель — респавн под ним недопустим
     };
 
     // Привязать зависимости (реестр создаёт сервис дефолтным ctor; bind — в
@@ -107,6 +109,20 @@ class ParkedVehicleService final : public IService
     // (экземпляр не уничтожается). Только UPDATE + правка m_byFamily.
     Result unshareFromFamily(long long dbId);
 
+    // --- «Респавн» из /car для припаркованной у дома/в семье машины ---
+    // Вернуть живой экземпляр НА ЕГО ТОЧКУ У ДОМА (spawn-позиция уже = точка
+    // парковки — VehicleService::respawn). respawn() ядра ДАЁТ ПОЛНЫЙ БАК
+    // (VehicleService::onVehicleRespawn) — АНТИ-АБЬЮЗ: перед вызовом снимается
+    // ТЕКУЩИЙ остаток топлива живого экземпляра в саму запись (Parked::fuel —
+    // то же поле, источник правды для деспавненной машины);
+    // ParkedVehicleSystem::onVehicleRespawned (уже подписан на VehicleService::
+    // subscribeRespawned для восстановления после несанкционированной смерти)
+    // восстанавливает ЕГО поверх дефолтного полного бака — тот же путь, без
+    // дублирования кода восстановления. НЕ уничтожает и не создаёт машину.
+    // Отказы: NotParked (нет записи), NoInstance (vehicleId == -1, машина «в гараже»),
+    // Occupied (за рулём есть водитель — не выдёргиваем машину из-под сидящего).
+    Result respawnHome(long long dbId);
+
     // --- связь с живым экземпляром ---
     void setVehicleId(long long dbId, int vehicleId); // после create/respawn-цикла
     void onVehicleDestroyed(int vehicleId);           // экземпляр уничтожен — обнулить vehicleId
@@ -121,8 +137,13 @@ class ParkedVehicleService final : public IService
 
     // --- запросы (O(1)/холодные) ---
     bool isParked(long long dbId) const;
-    // Режим размещения: -1 — не припаркована; NO_FAMILY — личная у дома; иначе familyId
-    // расшаренной. Единый словарь статусов /car/парковки читает отсюда.
+    // Сентинел «не припаркована» для parkedMode. НЕ -1: FamilyService::NO_FAMILY тоже
+    // равен -1, и с общим значением «не припаркована» и «припаркована лично» были бы
+    // неразличимы (непри­паркованные показывались «у дома», гейт шеринга отказывал
+    // уже припаркованной).
+    static constexpr int NOT_PARKED = -2;
+    // Режим размещения: NOT_PARKED — не припаркована; NO_FAMILY — личная у дома;
+    // иначе familyId расшаренной. Единый словарь статусов /car/парковки читает отсюда.
     int parkedMode(long long dbId) const;
     std::vector<long long> parkedByAccount(AccountId accountId) const;
     // Число припаркованных машин аккаунта (личные + расшаренные — все в m_byAccount).

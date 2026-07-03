@@ -12,6 +12,7 @@
 #include "Services/ParkedVehicleService/ParkedVehicleService.h"
 #include "Services/InventoryService/InventoryService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
+#include "Services/VehicleLockService/VehicleLockService.h"
 #include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/CameraService/CameraService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
@@ -46,6 +47,7 @@
 #include "Services/SpawnChoiceService/SpawnChoiceService.h"
 #include "Services/VehicleWaypointService/VehicleWaypointService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
+#include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
 #include "Services/Core/WeaponSkillService/WeaponSkillService.h"
 #include "Services/WeaponProficiencyService/WeaponProficiencyService.h"
 #include "Services/Core/SpectateService/SpectateService.h"
@@ -99,6 +101,10 @@ void ServiceRegister::registerServices()
     registerService<AudioService>();
     registerService<CameraService>();
     registerService<GameTextService>();
+    // Экранные попапы через textdraw (замена неуправляемого native GameText в
+    // этом сетапе, см. Docs/ScreenNotice.md). Регистрация ПОСЛЕ TextDrawService
+    // и TimerService (сервис их использует через initialize в ScreenNoticeSystem).
+    registerService<ScreenNoticeService>();
     registerService<SpectateService>();
     registerService<MovingObjectService>();
     registerService<PlayerSkinService>();
@@ -133,6 +139,11 @@ void ServiceRegister::registerServices()
     // семей. Логически после Family/Personal (порядок регистрации на доступность не
     // влияет — все сервисы до фазы initialize).
     registerService<ParkedVehicleService>();
+    // Замок дверей личного транспорта (бизнес-фича, не Core): источник правды о том,
+    // какие живые машины закрыты владельцем ПРЯМО СЕЙЧАС (сессионно, не персистится).
+    // Зависит от VehicleService/PersonalVehicleService/ParkedVehicleService/FamilyService
+    // (bind в конструкторе VehicleLockSystem) — регистрация после них.
+    registerService<VehicleLockService>();
     // Выбор точки спавна игрока (/setspawn): источник правды о выборе (вокзал/
     // дом) + write-through в БД (player_spawn). Без зависимостей; загрузку
     // по сессии, команду/диалог и резолв точки делает SpawnChoiceSystem.

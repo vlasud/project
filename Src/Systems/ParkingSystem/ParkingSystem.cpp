@@ -113,10 +113,9 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
     {
         const PersonalVehicleService::OwnedVehicle &entry = owned[i];
         const int mode = m_parkedService.parkedMode(entry.dbId);
-        const char *status = mode == FamilyService::NO_FAMILY ? "у дома"
-                             : mode != -1                     ? "в семье"
-                             : entry.vehicleId == -1          ? "в гараже"
-                                                              : "вызвана";
+        const char *status = mode == ParkedVehicleService::NOT_PARKED
+                                 ? (entry.vehicleId == -1 ? "в гараже" : "вызвана")
+                                 : (mode == FamilyService::NO_FAMILY ? "у дома" : "в семье");
         body += fmt::format("{}. {}  —  {}\n", i + 1, VehicleModelNames::displayName(entry.model), status);
     }
 

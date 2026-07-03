@@ -152,16 +152,30 @@ void ParkedVehicleSystem::onUnsanctionedDeath(IVehicle &vehicle, bool returnsInP
 void ParkedVehicleSystem::onVehicleRespawned(IVehicle &vehicle)
 {
     const int vehicleId = vehicle.getID();
-    const auto it = m_pendingFuelRestore.find(vehicleId);
-    if (it == m_pendingFuelRestore.end())
-        return; // не наш снимок (обычный респавн/чужая запись) — полный бак остаётся
-    const float fuel = it->second;
-    m_pendingFuelRestore.erase(it);
-    // Запись Parked могла исчезнуть между смертью и возвратом (unpark в редком окне) —
-    // тогда снимок применить некуда, оставляем дефолтный полный бак от VehicleService.
     const ParkedVehicleService::Parked *parked = m_parkedService.byVehicleId(vehicleId);
     if (!parked)
-        return;
+        return; // не Parked-машина (обычная сессионная/чужая) — не наш путь
+
+    const auto it = m_pendingFuelRestore.find(vehicleId);
+    float fuel;
+    if (it != m_pendingFuelRestore.end())
+    {
+        // Снимок несанкционированной смерти (onUnsanctionedDeath) — приоритетный,
+        // взят СРАЗУ после детонации, точнее записи (запись обновляется только тут).
+        fuel = it->second;
+        m_pendingFuelRestore.erase(it);
+    }
+    else
+    {
+        // Явный «Респавн» из /car: ParkedVehicleService::respawnHome снимает fuel
+        // ПРЯМО В ЗАПИСЬ (Parked::fuel) ДО вызова VehicleService::respawn — снимка в
+        // m_pendingFuelRestore для этого пути нет (onUnsanctionedDeath его не видел),
+        // но запись уже держит верный остаток. Тот же путь без дублирования кода
+        // восстановления (несанкционированная смерть, ЛЮБАЯ волна, снимок в
+        // m_pendingFuelRestore ставит onUnsanctionedDeath ДО respawnIfDead/ядрового
+        // death-таймера — эта ветка для неё не используется).
+        fuel = parked->fuel;
+    }
     m_parkedService.setFuel(parked->personalVehicleId, fuel); // снимок в память записи
     m_vehicleService.setFuel(vehicle, fuel);                  // и в живой экземпляр
     persistFuel(parked->personalVehicleId, fuel);

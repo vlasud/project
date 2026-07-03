@@ -18,8 +18,10 @@
 #include "Systems/ElectionSystem/ElectionSystem.h"
 #include "Systems/FactionSystem/FactionSystem.h"
 #include "Systems/FamilySystem/FamilySystem.h"
+#include "Systems/GreetingSystem/GreetingSystem.h"
 #include "Systems/HouseSystem/HouseSystem.h"
 #include "Systems/ParkedVehicleSystem/ParkedVehicleSystem.h"
+#include "Systems/VehicleLockSystem/VehicleLockSystem.h"
 #include "Systems/SpawnChoiceSystem/SpawnChoiceSystem.h"
 #include "Systems/Factions/ArmyAirForceSystem/ArmyAirForceSystem.h"
 #include "Systems/Factions/ArmyGroundSystem/ArmyGroundSystem.h"
@@ -63,6 +65,7 @@
 #include "Systems/Core/PlayerStateSystem/PlayerStateSystem.h"
 #include "Systems/Core/RoleplayChatSystem/RoleplayChatSystem.h"
 #include "Systems/Core/PlayerVelocitySystem/PlayerVelocitySystem.h"
+#include "Systems/Core/ScreenNoticeSystem/ScreenNoticeSystem.h"
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
 #include "Systems/Core/WeaponSkillSystem/WeaponSkillSystem.h"
 #include "Systems/WeaponProficiencySystem/WeaponProficiencySystem.h"
@@ -91,6 +94,12 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // сохранение у подписчиков) должен отстрелить на дисконнекте ДО того, как
     // чужие обработчики начнут чистить состояние игрока.
     m_systems.push_back(std::make_unique<PlayerSessionSystem>(core, serviceRegister));
+    // GreetingSystem (приветственный попап, бизнес-фича вне Core) сразу после
+    // PlayerSessionSystem: подписывается на subscribeStart (сессия уже активна —
+    // ник опознан). ScreenNoticeService (Core) зарегистрирован в ServiceRegister
+    // заранее — доступен сразу (фактически используется только когда компоненты
+    // textdraw/timer уже проинициализированы, к моменту первого логина).
+    m_systems.push_back(std::make_unique<GreetingSystem>(core, serviceRegister));
     // NicknameSystem максимально рано: невалидный ник отсекается на входящем
     // подключении, до того как остальные системы заведут на игрока состояние.
     m_systems.push_back(std::make_unique<NicknameSystem>(core, serviceRegister));
@@ -105,8 +114,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<VehicleSystem>(core, serviceRegister));
     // VehicleNameSystem (попап названия машины при посадке за руль, бизнес-фича
     // вне Core) сразу после VehicleSystem: bindOccupant уже проставил водителя
-    // на смене стейта, getVehicle(playerId) видит машину. GameTextService
-    // (Core) зарегистрирован в ServiceRegister заранее — доступен сразу.
+    // на смене стейта, getVehicle(playerId) видит машину. ScreenNoticeService
+    // (Core) зарегистрирован в ServiceRegister заранее — доступен сразу (фактически
+    // используется только во время игры, когда все системы уже сконструированы).
     m_systems.push_back(std::make_unique<VehicleNameSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<GridSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<StreamerSystem>(core, serviceRegister));
@@ -128,6 +138,13 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<AttachmentSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AudioSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<GameTextSystem>(core, serviceRegister));
+    // ScreenNoticeSystem (экранные попапы через textdraw, замена неуправляемого
+    // native GameText в этом сетапе) — держит зависимость на TextDrawService и
+    // TimerService, оба зарегистрированы в ServiceRegister заранее. Компонент
+    // textdraw сервис получает через TextDrawSystem::initialize() позже (фаза
+    // initializeSystems идёт отдельным проходом после конструирования всех
+    // систем) — на порядок конструирования это не влияет.
+    m_systems.push_back(std::make_unique<ScreenNoticeSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<CheckpointSystem>(core, serviceRegister));
     // m_systems.push_back(std::make_unique<GridDebugSystem>(core, serviceRegister));
@@ -177,12 +194,6 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // уже получили компоненты, и пикап/лейбл парковки создаются успешно). Спавн машины
     // на свободной точке + чекпоинт — холодный путь (по пикапу/диалогу), не per-tick.
     m_systems.push_back(std::make_unique<ParkingSystem>(core, serviceRegister));
-    // CarMenuSystem (/car — меню личного транспорта, бизнес-фича вне Core) после
-    // VehicleWaypointSystem (VehicleWaypointService связан с CheckpointService),
-    // PersonalVehicleSystem (владение резолвится) и Core-систем команд/диалога
-    // (PlayerCommandSystem/PlayerDialogSystem зарегистрированы раньше). Команда /car
-    // регистрируется в конструкторе; меню/под-диалог/указатель — холодный путь.
-    m_systems.push_back(std::make_unique<CarMenuSystem>(core, serviceRegister));
     // GangZoneSystem раньше редактора: сервис должен получить компонент до того,
     // как тулза начнёт создавать зоны.
     m_systems.push_back(std::make_unique<GangZoneSystem>(core, serviceRegister));
@@ -266,6 +277,20 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // загрузки create спавнит машины у домов успешно. Спавн на старте + гейт O(1),
     // не per-tick.
     m_systems.push_back(std::make_unique<ParkedVehicleSystem>(core, serviceRegister));
+    // VehicleLockSystem (замок дверей личного транспорта, бизнес-фича вне Core) сразу
+    // после ParkedVehicleSystem: bind дёргает ParkedVehicleService/PersonalVehicleService/
+    // FamilyService/VehicleService (все зарегистрированы/сконструированы раньше) и
+    // подписывается на ParkedVehicleService::subscribeReconcile (share/unshare меняет
+    // состав «свой» уже закрытой машины). ДО CarMenuSystem — он открывает/закрывает
+    // замок через VehicleLockService::toggle. Событийная, per-tick работы нет.
+    m_systems.push_back(std::make_unique<VehicleLockSystem>(core, serviceRegister));
+    // CarMenuSystem (/car — меню личного транспорта, бизнес-фича вне Core) после
+    // VehicleWaypointSystem (VehicleWaypointService связан с CheckpointService),
+    // PersonalVehicleSystem (владение резолвится), ParkedVehicleSystem (размещение/
+    // респавн у дома) и VehicleLockSystem (замок дверей «Текущая машина»). Core-системы
+    // команд/диалога зарегистрированы раньше. Команда /car регистрируется в
+    // конструкторе; меню/под-диалоги/указатель/замок — холодный путь.
+    m_systems.push_back(std::make_unique<CarMenuSystem>(core, serviceRegister));
     // SpawnChoiceSystem (/setspawn, бизнес-фича вне Core) после: PlayerSessionSystem
     // (подписки на старт/конец сессии), PlayerSpawnSystem (спавн-сервис),
     // FactionSystem + конкретные фракции (спавны орг уже зарегистрированы) и

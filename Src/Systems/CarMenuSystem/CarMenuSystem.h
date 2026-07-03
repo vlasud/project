@@ -7,65 +7,82 @@
 #include "Services/ParkedVehicleService/ParkedVehicleService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
+#include "Services/VehicleLockService/VehicleLockService.h"
 #include "Services/VehicleWaypointService/VehicleWaypointService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 #include <vector>
 
-// Меню личного транспорта (/car) — бизнес-фича (НЕ Core). Дистанционный близнец
-// пикапа парковки: тот же источник владения (PersonalVehicleService::owned), тот же
-// красный чекпоинт-указатель (через общий VehicleWaypointService), но вызывается
-// откуда угодно по карте.
+// Меню личного транспорта (/car) — бизнес-фича (НЕ Core). Корневое LIST-меню
+// («Текущая машина» / «Мои машины») — источник владения по-прежнему
+// PersonalVehicleService::owned, о машинах — VehicleService, красный чекпоинт-
+// указатель — общий VehicleWaypointService, замок дверей — VehicleLockService.
 //
-// Петля: /car -> LIST-диалог со списком ЛИЧНЫХ машин игрока -> выбор машины ->
-// ПОД-ДИАЛОГ действий по ней (LIST): припарковать у дома / убрать с парковки /
-// расшарить семье / показать на карте. Событийный (команда/диалог), per-tick нет.
+// РАЗДЕЛ «Текущая машина»: гейт при выборе — игрок сидит В СВОЕЙ машине (любое
+// сиденье): личная сессионная (Owner::Player, ownerId == playerId) ЛИБО
+// припаркованная ЕГО машина (владелец записи ParkedVehicleService по accountId
+// сессии). Расшаренная семье машина ЧУЖОГО владельца — НЕ своя (тумблеры/замок
+// доступны только владельцу). Под-диалог тумблеров (двигатель/фары/замок) с
+// динамическими лейблами; каждый клик ре-валидирует «свою машину» заново
+// (диалог мог висеть, пока игрок вышел из машины/она исчезла) и переоткрывает
+// то же под-меню с обновлёнными лейблами.
 //
-// Игрок видит и действует ТОЛЬКО над своими машинами (владение серверное по
-// playerId); индекс машины ре-валидируется против актуального owned на каждом шаге;
-// указатель раскрывает позицию только СВОЕЙ машины.
+// РАЗДЕЛ «Мои машины» — прежний корень (TABLIST_HEADERS: «Машина | Где
+// находится», статус — единый словарь placementStatus) -> под-диалог действий по
+// машине (LIST): Респавн / Показать на карте / Припарковать здесь / Убрать с
+// парковки / Передать-Вернуть от семьи. Пункты видны ВСЕГДА (правило видимости);
+// «Респавн» убирает вызванную машину в гараж (destroy) либо возвращает
+// припаркованную на точку у дома (VehicleService::respawn через
+// ParkedVehicleService::respawnHome, БЕЗ бесплатного топлива — снимок/восстановление
+// бака уже в ParkedVehicleSystem). Машину идентифицирует ЗАХВАЧЕННЫЙ carIndex с
+// ре-валидацией по актуальному owned() на каждом клике.
 //
-// Парковка/снятие — ре-тег машины НА МЕСТЕ (тот же vehicleId, без destroy/create):
-// игрок остаётся в машине, она стоит где стояла, меняется лишь РЕЖИМ (owner-тег +
-// запись parked). Три состояния размещения (ParkedVehicleService — источник правды):
-//  * ПРИПАРКОВАТЬ (гараж -> личная у дома): за рулём этой машины, ≤30 м от СВОЕГО
-//    дома, машина ещё не припаркована -> setOwner(Parked) + setSpawnPosition(spot) +
-//    park (INSERT) + detach из Personal (иначе reset на дисконнекте уничтожил бы её);
-//  * УБРАТЬ С ПАРКОВКИ (у дома -> гараж): владелец машины -> setOwner(Player) + attach
-//    в Personal + unparkKeepInstance (DELETE, экземпляр НЕ уничтожается);
-//  * РАСШАРИТЬ СЕМЬЕ (личная у дома -> семейный доступ): владелец семьи, машина
-//    припаркована лично -> shareToFamily (только UPDATE family_id, машина НЕ
-//    пересоздаётся). Собственность всегда остаётся у владельца.
-// Все предусловия серверные, ре-валидация в обработчике (пункты видны всегда).
+// Навигация: под-диалог действий -> «Мои машины» -> корень; «Текущая машина» ->
+// корень. Правая кнопка корня — «Закрыть» (родителя нет). Событийный
+// (команда/диалог), per-tick нет.
 class CarMenuSystem : public BaseSystem
 {
   public:
     CarMenuSystem(ICore &core, const ServiceRegister &serviceRegister);
 
   private:
-    // Пункты под-диалога машины (порядок зависит от состояния — диспетчер по вектору,
-    // не по магическим индексам, как FamilySystem).
+    // Пункты под-диалога действий «Мои машины» (порядок зависит от состояния —
+    // диспетчер по вектору, не по магическим индексам, как FamilySystem).
     enum class Action
     {
+        Respawn,
+        ShowOnMap,
         ParkHere,
         Unpark,
-        ShareToFamily,
-        ShowOnMap,
+        ShareToFamily, // лейбл динамический: «Передать семье» / «Вернуть от семьи»
     };
+
+    // --- корень /car ---
+    void showRoot(IPlayer &player);
+
+    // --- раздел «Текущая машина» ---
+    // Живая машина, в которой playerId сидит СЕЙЧАС, если она СВОЯ (личная его
+    // сессионная либо припаркованная ИМ) — иначе nullptr (гейт для показа/ре-валид.
+    // под-меню тумблеров). Клиенту не доверяем: сверка по серверным записям.
+    IVehicle *ownCurrentVehicle(int playerId) const;
+    void showCurrentVehicle(IPlayer &player);
+    void toggleEngine(IPlayer &player);
+    void toggleLights(IPlayer &player);
+    void toggleLock(IPlayer &player);
+
+    // --- раздел «Мои машины» ---
     // Собрать доступные игроку действия по машине carIndex в порядке показа.
     std::vector<Action> buildActions(int playerId, int carIndex) const;
-
-    // /car: нет машин -> сообщение; иначе LIST-диалог выбора машины.
-    void showCarList(IPlayer &player);
+    // Список личных машин («Мои машины»); пустой -> сообщение, в диалог не заходим.
+    void showMyCars(IPlayer &player);
     // Под-диалог действий по машине carIndex (валидный на момент показа).
     void showCarActions(IPlayer &player, int carIndex);
-    // Действие «Припарковать эту машину здесь» для машины carIndex (предусловия серверные).
+    // «Респавн»: вызванную (сессионную в мире) убирает в гараж (destroy); припаркованную
+    // (у дома/в семье) возвращает на точку через ParkedVehicleService::respawnHome.
+    void respawnAction(IPlayer &player, int carIndex);
     void parkHere(IPlayer &player, int carIndex);
-    // Действие «Убрать с парковки» для машины carIndex.
     void unpark(IPlayer &player, int carIndex);
-    // Действие «Расшарить семье» для машины carIndex (все предусловия серверные).
     void shareToFamily(IPlayer &player, int carIndex);
-    // Действие «Показать на карте» для машины carIndex.
     void showOnMap(IPlayer &player, int carIndex);
 
     // Live vehicleId владения: у припаркованной — из parked-записи (владение detached,
@@ -80,4 +97,5 @@ class CarMenuSystem : public BaseSystem
     ParkedVehicleService &m_parkedService;
     HouseService &m_houseService;
     PlayerSessionService &m_sessionService;
+    VehicleLockService &m_lockService;
 };

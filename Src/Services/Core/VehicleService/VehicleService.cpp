@@ -197,6 +197,11 @@ void VehicleService::subscribeFuelEmpty(FuelEmptyObserver observer)
     m_fuelEmptyObservers.push_back(std::move(observer));
 }
 
+void VehicleService::subscribeEngineBroken(EngineBrokenObserver observer)
+{
+    m_engineBrokenObservers.push_back(std::move(observer));
+}
+
 void VehicleService::subscribeMoved(VehicleMoveObserver observer)
 {
     m_movedObservers.push_back(std::move(observer));
@@ -205,6 +210,11 @@ void VehicleService::subscribeMoved(VehicleMoveObserver observer)
 void VehicleService::subscribeDriverGate(DriverGateObserver observer)
 {
     m_driverGateObservers.push_back(std::move(observer));
+}
+
+void VehicleService::subscribeStreamedInForPlayer(StreamedInForPlayerObserver observer)
+{
+    m_streamedInForPlayerObservers.push_back(std::move(observer));
 }
 
 void VehicleService::notifyMoved(IVehicle &vehicle, Vector3 acceptedPosition)
@@ -402,6 +412,13 @@ void VehicleService::stallIfCritical(IVehicle &vehicle, VehicleState &st, TimePo
         VehicleParams params = vehicle.getParams();
         params.engine = 0;
         vehicle.setParams(params);
+        // Факт поломки — только на переходе и только если за рулём есть водитель
+        // (без водителя оповещать некому). Текст решает бизнес-подписчик.
+        if (st.driverId >= 0)
+        {
+            for (auto &obs : m_engineBrokenObservers)
+                obs(vehicle.getID(), st.driverId);
+        }
     }
 }
 
@@ -636,6 +653,21 @@ void VehicleService::setLocked(IVehicle &vehicle, bool locked)
     vehicle.setParams(params);
 }
 
+void VehicleService::setLockedForPlayer(IVehicle &vehicle, IPlayer &player, bool locked)
+{
+    // setParamsForPlayer шлёт СВОЙ пакет параметров этому игроку — прочие поля
+    // (engine/lights/...) намеренно оставлены в дефолте (-1, «не менять»), у SDK
+    // отдельный пер-игроковый набор от общего getParams(). Трогаем только doors.
+    VehicleParams params;
+    params.doors = locked ? 1 : 0;
+    vehicle.setParamsForPlayer(player, params);
+}
+
+bool VehicleService::isStreamedInForPlayer(const IVehicle &vehicle, const IPlayer &player) const
+{
+    return vehicle.isStreamedInForPlayer(player);
+}
+
 void VehicleService::setSpawnPosition(IVehicle &vehicle, Vector3 position, float angle)
 {
     const int vehicleId = vehicle.getID();
@@ -652,6 +684,14 @@ void VehicleService::setSpawnPosition(IVehicle &vehicle, Vector3 position, float
     data.position = position;
     data.zRotation = angle;
     vehicle.setSpawnData(data);
+}
+
+void VehicleService::respawn(IVehicle &vehicle)
+{
+    const int vehicleId = vehicle.getID();
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicleState[vehicleId].exists)
+        return;
+    vehicle.respawn(); // ядро само телепортирует на spawnData.position и даёт полный бак/HP
 }
 
 void VehicleService::addComponent(IVehicle &vehicle, int component)
@@ -1220,6 +1260,12 @@ void VehicleService::setEditBypass(int vehicleId, bool enable)
         return;
     }
     m_vehicleState[vehicleId].editBypass = enable;
+}
+
+void VehicleService::onVehicleStreamIn(IVehicle &vehicle, IPlayer &player)
+{
+    for (auto &obs : m_streamedInForPlayerObservers)
+        obs(vehicle, player);
 }
 
 void VehicleService::onVehicleCreated(IVehicle &vehicle)

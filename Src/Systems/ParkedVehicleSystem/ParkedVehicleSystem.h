@@ -24,10 +24,12 @@
 //       строку про исход детонации — цела на месте либо эвакуирована к дому (резолв
 //       по записи Parked: vehicleId -> ownerAccountId -> playerByAccount). Заодно
 //       снимает остаток топлива в m_pendingFuelRestore ДО возврата машины;
-//     - subscribeRespawned: если для этого vehicleId есть снимок в
-//       m_pendingFuelRestore — восстанавливает его поверх дефолтного полного бака,
-//       которым VehicleService уже наполнил машину (закрывает «бесплатный
-//       эвакуатор с заправкой», см. Docs/GameDesign/Economy.md);
+//     - subscribeRespawned: восстанавливает персистентный остаток поверх дефолтного
+//       полного бака, которым VehicleService уже наполнил машину (закрывает
+//       «бесплатный эвакуатор с заправкой», см. Docs/GameDesign/Economy.md) —
+//       приоритетно из m_pendingFuelRestore (несанкционированная смерть), иначе из
+//       самой записи Parked::fuel (явный «Респавн» из /car —
+//       ParkedVehicleService::respawnHome снимает fuel в запись ДО respawn());
 //  * initialize: через FamilyService::subscribeLoaded (строго после загрузки семей —
 //    они нужны для гейта РАСШАРЕННЫХ; личные семей не требуют) грузит parked_vehicle
 //    (включая персистентный fuel). На старте спавнит ТОЛЬКО расшаренные семье
@@ -66,10 +68,13 @@ class ParkedVehicleSystem : public BaseSystem
     // остаток топлива в m_pendingFuelRestore ДО возврата (машина ещё валидна).
     void onUnsanctionedDeath(IVehicle &vehicle, bool returnsInPlace);
 
-    // Машина переспавнилась (VehicleService уже дал ПОЛНЫЙ бак по умолчанию): если в
-    // m_pendingFuelRestore есть снимок для этого vehicleId — восстанавливает его через
-    // ParkedVehicleService::setFuel + VehicleService::setFuel, снимает снимок. Иначе
-    // no-op (обычный респавн/чужая запись — полный бак не трогаем).
+    // Машина переспавнилась (VehicleService уже дал ПОЛНЫЙ бак по умолчанию). Не-Parked
+    // (не наша запись) — no-op, полный бак не трогаем. Иначе восстанавливает остаток:
+    // приоритетно из m_pendingFuelRestore (снимок несанкционированной смерти,
+    // onUnsanctionedDeath — точнее, взят СРАЗУ после детонации), иначе из самой записи
+    // Parked::fuel (явный «Респавн» из /car — ParkedVehicleService::respawnHome снимает
+    // fuel в запись ДО respawn(); либо ядровой death-таймер на повторной смерти) —
+    // ОДИН путь восстановления на все три источника вызова.
     void onVehicleRespawned(IVehicle &vehicle);
 
     // Загрузка parked_vehicle из БД (в success-колбэке subscribeLoaded): регистрация

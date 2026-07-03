@@ -102,6 +102,11 @@ void VehicleSystem::onVehicleSpawn(IVehicle &vehicle)
     m_vehicleService.onVehicleRespawn(vehicle);
 }
 
+void VehicleSystem::onVehicleStreamIn(IVehicle &vehicle, IPlayer &player)
+{
+    m_vehicleService.onVehicleStreamIn(vehicle, player);
+}
+
 void VehicleSystem::onVehicleDeath(IVehicle &vehicle, IPlayer &reporter)
 {
     // Сам репорт смерти нарушением не считается (честная клиентская детонация

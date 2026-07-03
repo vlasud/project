@@ -197,6 +197,15 @@ class VehicleService final : public IService
     using FuelEmptyObserver = std::function<void(int vehicleId, int driverId)>;
     void subscribeFuelEmpty(FuelEmptyObserver observer);
 
+    // Наблюдатель момента ПОЛОМКИ двигателя ПОД ВОДИТЕЛЕМ (HP добит до порога —
+    // машина заглохла, двигатель не заводится до repair) — только ФАКТ, без текста
+    // (Core бизнес-сообщений не решает). Зовётся ОДИН раз на ПЕРЕХОД в stalled
+    // (stallIfCritical, driverId >= 0 в этот момент); повторно не шлётся, пока не
+    // починят и снова не сломают. driverId — серверный водитель. Зов из
+    // verifyHealth/applyDamage — НЕ трогать пул машин из колбэка, только слать текст.
+    using EngineBrokenObserver = std::function<void(int vehicleId, int driverId)>;
+    void subscribeEngineBroken(EngineBrokenObserver observer);
+
     // Вето на посадку ЗА РУЛЬ — общая инфраструктура доступа к машине (Core лишь
     // предоставляет крючок; политику — членство/оплата/бан — решает бизнес). Зовётся
     // из bindOccupant в момент, когда игрок стал водителем (seat==0). Наблюдатель
@@ -217,6 +226,14 @@ class VehicleService final : public IService
     // Отклонённый читерский апдейт сюда не доходит. Главный поток.
     using VehicleMoveObserver = std::function<void(IVehicle &, Vector3 acceptedPosition)>;
     void subscribeMoved(VehicleMoveObserver observer);
+
+    // Машина застримлена конкретному игроку (VehicleEventHandler::onVehicleStreamIn,
+    // проброшено VehicleSystem). Ядро НЕ восстанавливает пер-игроковые params
+    // (setParamsForPlayer) при повторном стрим-ине — бизнес, владеющий пер-игроковым
+    // состоянием (напр. замок дверей VehicleLockService), обязан переприменить его
+    // здесь. Главный поток, событийно (per-tick нет — стрим-ин редок).
+    using StreamedInForPlayerObserver = std::function<void(IVehicle &, IPlayer &)>;
+    void subscribeStreamedInForPlayer(StreamedInForPlayerObserver observer);
 
     // --- источник правды ---
     IVehicle *getVehicle(int playerId) const; // машина игрока (по принятому стейту)
@@ -273,12 +290,30 @@ class VehicleService final : public IService
     void setEngine(IVehicle &vehicle, bool on); // заглохшую завести нельзя (сначала repair)
     void setLights(IVehicle &vehicle, bool on); // фары можно переключать всегда
     void setLocked(IVehicle &vehicle, bool locked);
+    // Пер-игроковый замок дверей (IVehicle::setParamsForPlayer, params.doors) — в
+    // отличие от setLocked (глобальный params, блокирует ВСЕХ включая владельца),
+    // этот вызов трогает состояние двери ТОЛЬКО для указанного player. Политику
+    // (кому заперто) решает бизнес (VehicleLockService); Core лишь даёт примитив.
+    // Ядро НЕ восстанавливает пер-игроковые params на повторном стрим-ине клиенту —
+    // бизнес обязан переприменять их через subscribeStreamedInForPlayer.
+    void setLockedForPlayer(IVehicle &vehicle, IPlayer &player, bool locked);
+    // Застримлена ли машина указанному игроку сейчас (обёртка isStreamedInForPlayer
+    // SDK) — бизнес не должен звать сырой SDK напрямую.
+    bool isStreamedInForPlayer(const IVehicle &vehicle, const IPlayer &player) const;
     // Сменить ТОЛЬКО spawn-позицию/угол существующей машины (для death-респавна на
     // её ТЕКУЩУЮ точку), сохранив прочие поля spawnData (модель/цвета/respawnDelay/
     // siren/interior). Через get/setSpawnData — БЕЗ пересоздания машины: ре-тег
     // парковки НА МЕСТЕ должен вернуть машину сюда, если ядро её переспавнит по смерти.
     // Мусорную (NaN/Inf) позицию/угол в spawnData не пускаем. No-op для несуществующей.
     void setSpawnPosition(IVehicle &vehicle, Vector3 position, float angle);
+
+    // Обёртка vehicle.respawn() для бизнес-политики «вернуть на spawn-точку по
+    // требованию» (напр. /car -> «Респавн» припаркованной у дома). respawn() ядра
+    // САМ ДАЁТ ПОЛНЫЙ БАК/HP (см. onVehicleRespawn) — вызывающий бизнес, которому
+    // нужно сохранить персистентный остаток топлива, обязан снять снимок ДО этого
+    // вызова и восстановить его через subscribeRespawned (см. ParkedVehicleSystem).
+    // No-op для несуществующей/нулевой машины.
+    void respawn(IVehicle &vehicle);
 
     // Байпас валидации unoccupied-синка для машины, которую легально двигает
     // сервер (редактор мира): телепорты машины — серверная правда, а
@@ -358,6 +393,10 @@ class VehicleService final : public IService
     // зоны / без выдержки на входе / выход без входа — нарушение без ремонта и
     // без грейса; выход вне зоны заодно закрывает сессию.
     Outcome onModShop(IPlayer &player, bool enter, TimePoint now);
+    // Машина застримлена игроку (VehicleSystem пробрасывает onVehicleStreamIn) —
+    // оповещает subscribeStreamedInForPlayer (бизнес переприменяет пер-игроковые
+    // params, ядро их сам не восстанавливает).
+    void onVehicleStreamIn(IVehicle &vehicle, IPlayer &player);
     void onVehicleCreated(IVehicle &vehicle);
     void onVehicleDestroyed(IVehicle &vehicle);
     void onVehicleRespawn(IVehicle &vehicle); // респаун — HP снова полное
@@ -502,6 +541,8 @@ class VehicleService final : public IService
     std::vector<DriverGateObserver> m_driverGateObservers;
     std::vector<UnsanctionedDeathObserver> m_unsanctionedDeathObservers;
     std::vector<FuelEmptyObserver> m_fuelEmptyObservers;
+    std::vector<EngineBrokenObserver> m_engineBrokenObservers;
+    std::vector<StreamedInForPlayerObserver> m_streamedInForPlayerObservers;
 
     std::array<VehicleState, VEHICLE_POOL_SIZE> m_vehicleState;
     std::array<Occupant, MAX_PLAYERS> m_occupants;

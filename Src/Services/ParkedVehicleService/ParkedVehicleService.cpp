@@ -232,6 +232,40 @@ ParkedVehicleService::Result ParkedVehicleService::unshareFromFamily(long long d
     return Result::Ok;
 }
 
+ParkedVehicleService::Result ParkedVehicleService::respawnHome(long long dbId)
+{
+    const auto it = m_byDbId.find(dbId);
+    if (it == m_byDbId.end())
+    {
+        return Result::NotParked;
+    }
+    const int vehicleId = it->second.vehicleId;
+    if (vehicleId == -1)
+    {
+        return Result::NoInstance; // «в гараже» — экземпляра сейчас нет
+    }
+    if (!m_vehicleService)
+    {
+        return Result::Invalid;
+    }
+    IVehicle *vehicle = m_vehicleService->get(vehicleId);
+    if (!vehicle)
+    {
+        return Result::NoInstance; // экземпляр пропал внешним destroy между кликами
+    }
+    if (m_vehicleService->getDriver(vehicleId) != -1)
+    {
+        return Result::Occupied; // за рулём водитель (владелец или член семьи) — не выдёргиваем
+    }
+    // Снимок ТЕКУЩЕГО остатка ДО respawn (тот сразу даёт полный бак) — то же поле
+    // Parked::fuel, что источник правды деспавненной машины; персист в БД делает
+    // ParkedVehicleSystem::onVehicleRespawned (переиспользует путь несанкционированной
+    // смерти, см. заголовок метода).
+    it->second.fuel = m_vehicleService->getFuel(vehicleId);
+    m_vehicleService->respawn(*vehicle);
+    return Result::Ok;
+}
+
 void ParkedVehicleService::setVehicleId(long long dbId, int vehicleId)
 {
     const auto it = m_byDbId.find(dbId);
@@ -282,7 +316,7 @@ bool ParkedVehicleService::isParked(long long dbId) const
 int ParkedVehicleService::parkedMode(long long dbId) const
 {
     const auto it = m_byDbId.find(dbId);
-    return it != m_byDbId.end() ? it->second.familyId : -1;
+    return it != m_byDbId.end() ? it->second.familyId : NOT_PARKED;
 }
 
 std::vector<long long> ParkedVehicleService::parkedByAccount(AccountId accountId) const

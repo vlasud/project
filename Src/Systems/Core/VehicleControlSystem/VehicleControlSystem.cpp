@@ -1,10 +1,15 @@
 #include "Systems/Core/VehicleControlSystem/VehicleControlSystem.h"
 
 #include "Utils/Encoding/Encoding.h"
+#include <chrono>
 
 namespace
 {
 const Colour ERROR_COLOUR{255, 90, 90};
+
+// «Двигатель сломан» — попап через ScreenNoticeService вместо чата.
+constexpr std::chrono::milliseconds ENGINE_BROKEN_TIME{3000};
+const Colour ENGINE_BROKEN_COLOUR{0xE0, 0x30, 0x30, 0xFF};
 
 std::string u(const std::string &text)
 {
@@ -14,13 +19,22 @@ std::string u(const std::string &text)
 
 VehicleControlSystem::VehicleControlSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_keyService(serviceRegister.getService<PlayerKeyService>()),
-      m_vehicleService(serviceRegister.getService<VehicleService>())
+      m_vehicleService(serviceRegister.getService<VehicleService>()),
+      m_screenNotice(serviceRegister.getService<ScreenNoticeService>())
 {
     // Подписки на фронт клавиш. Антиспам повторов уже внутри PlayerKeyService.
     // Двигатель — Action: в машине этот бит ставит левый Ctrl (а также ALT GR / NUM0).
-    m_keyService.onPress(PlayerKeyService::Key::Action, [this](IPlayer &player) { toggleEngine(player); });
+    m_keyService.onPress(PlayerKeyService::Key::Action,
+                         [this](IPlayer &player)
+                         {
+                             toggleEngine(player);
+                         });
     // Фары — Fire: в машине этот бит ставят ЛКМ и левый Alt (drive-by огонь).
-    m_keyService.onPress(PlayerKeyService::Key::Fire, [this](IPlayer &player) { toggleLights(player); });
+    m_keyService.onPress(PlayerKeyService::Key::Fire,
+                         [this](IPlayer &player)
+                         {
+                             toggleLights(player);
+                         });
 
     // Момент опустошения бака ПОД ВОДИТЕЛЕМ (secondTick VehicleService, не
     // per-tick) — Core оповещает фактом, текст шлём здесь. driverId — серверный
@@ -32,6 +46,17 @@ VehicleControlSystem::VehicleControlSystem(ICore &core, const ServiceRegister &s
             if (!player)
                 return; // водитель уже вышел — страховка от гонки колбэка/дисконнекта
             player->sendClientMessage(ERROR_COLOUR, u("Бак пуст — двигатель заглох"));
+        });
+
+    // Момент ПОЛОМКИ двигателя ПОД ВОДИТЕЛЕМ (HP добит, машина заглохла) — Core
+    // оповещает фактом, заметный попап шлём здесь (не чат). driverId серверный.
+    m_vehicleService.subscribeEngineBroken(
+        [this](int /*vehicleId*/, int driverId)
+        {
+            IPlayer *player = m_core.getPlayers().get(driverId);
+            if (!player)
+                return; // водитель уже вышел — страховка от гонки колбэка/дисконнекта
+            showEngineBroken(*player);
         });
 }
 
@@ -79,7 +104,7 @@ void VehicleControlSystem::toggleEngine(IPlayer &player)
     const int vehicleId = vehicle->getID();
     if (wantsStart && m_vehicleService.isStalled(vehicleId))
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Двигатель не заводится - машина слишком разбита"));
+        showEngineBroken(player); // попап вместо чата
         return;
     }
     if (wantsStart && m_vehicleService.isOutOfFuel(vehicleId))
@@ -103,4 +128,10 @@ void VehicleControlSystem::toggleLights(IPlayer &player)
     const int8_t lights = vehicle->getParams().lights;
     const bool on = lights == 1; // только явная 1 — включено; -1 и 0 — выключено
     m_vehicleService.setLights(*vehicle, !on);
+}
+
+void VehicleControlSystem::showEngineBroken(IPlayer &player)
+{
+    // Цвет задаётся параметром show() (тильда-коды ~r~ в textdraw не работают).
+    m_screenNotice.show(player, u("engine is broken"), ENGINE_BROKEN_TIME, ENGINE_BROKEN_COLOUR);
 }

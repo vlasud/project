@@ -1,13 +1,14 @@
 #pragma once
 
-#include "Services/Core/GameTextService/GameTextService.h"
+#include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 
-// Попап названия машины (SA-стиль 7, правый нижний угол) при посадке за руль.
-// Только водителю (PlayerState_Driver) — пассажирам не показываем. Косметика:
-// один GameText через GameTextService, серверная логика от него не зависит.
+// Попап названия машины (единый экранный textdraw ScreenNoticeService, белый
+// цвет) при посадке за руль. Только водителю (PlayerState_Driver) — пассажирам
+// не показываем. Косметика: свой textdraw-попап (не native GameText — см.
+// Docs/ScreenNotice.md), серверная логика от него не зависит.
 class VehicleNameSystem : public BaseSystem, public PlayerChangeEventHandler
 {
   public:
@@ -17,5 +18,5 @@ class VehicleNameSystem : public BaseSystem, public PlayerChangeEventHandler
 
   private:
     VehicleService &m_vehicleService;
-    GameTextService &m_gameText;
+    ScreenNoticeService &m_screenNotice;
 };

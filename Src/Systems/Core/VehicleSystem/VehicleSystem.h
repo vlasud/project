@@ -33,6 +33,7 @@ class VehicleSystem : public BaseSystem,
     bool onPlayerShotVehicle(IPlayer &player, IVehicle &target, const PlayerBulletData &bulletData) override;
 
     void onVehicleSpawn(IVehicle &vehicle) override;
+    void onVehicleStreamIn(IVehicle &vehicle, IPlayer &player) override;
     void onVehicleDeath(IVehicle &vehicle, IPlayer &player) override;
     void onPlayerEnterVehicle(IPlayer &player, IVehicle &vehicle, bool passenger) override;
     bool onVehicleMod(IPlayer &player, IVehicle &vehicle, int component) override;
