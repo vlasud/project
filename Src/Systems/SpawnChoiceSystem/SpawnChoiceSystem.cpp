@@ -12,11 +12,12 @@ namespace
 const Colour INFO_COLOUR{120, 220, 255};
 const Colour ERROR_COLOUR{255, 90, 90};
 
-// Фиксированная точка ЖД вокзала (Unity Station, Лос-Сантос) — дефолт И фолбэк.
-// Координаты совпадают с проектным дефолтом (PlayerSpawnService::SpawnPoint),
-// новой константы не плодим. angle 90° — лицом к привокзальной улице, не в стену.
-const Vector3 STATION_POSITION{1762.15f, -1896.25f, 13.56f};
-constexpr float STATION_ANGLE = 90.0f;
+// Фиксированная точка спавна в ПОРТУ (Лос-Сантос) — дефолт И фолбэк. Координаты
+// совпадают с проектным дефолтом (PlayerSpawnService::SpawnPoint), новой константы
+// не плодим. Имена STATION_*/Choice::Station оставлены как внутренний id
+// «дефолтный выбор» (enum и БД не трогаем); игроку эта точка называется «Порт».
+const Vector3 STATION_POSITION{2690.5237f, -2479.6560f, 13.6509f};
+constexpr float STATION_ANGLE = 89.2331f;
 
 // Тело LIST: первая ЖёЛТАЯ строка — невыбираемая подсказка (смысл «настройка, не
 // телепорт»), под ней три реальных пункта. Поэтому listItem смещён на единицу:
@@ -48,13 +49,13 @@ SpawnChoiceSystem::SpawnChoiceSystem(ICore &core, const ServiceRegister &service
     // завершился ВТОРЫМ, у него уже есть И членство, И выбор -> последний
     // applySpawn корректен, гонки нет. (2) Член с выбором Work, ВЫШЕДШИЙ из орга в
     // середине сессии, иначе остался бы со спавном в базе (возможно приватный
-    // vw/интерьер фракции) — перерезолв даёт фолбэк на вокзал. Игрока берём из
+    // vw/интерьер фракции) — перерезолв даёт фолбэк на порт (дефолт). Игрока берём из
     // аргумента (он гарантированно валиден в момент события).
     m_factionService.subscribeMemberChange([this](IPlayer &player, int, int) { applySpawn(player); });
 
     // Старт-гонка спавна «Дом»: на логине выбор Home применяется (applySpawn ->
     // resolveSpawn -> houseOf) ДО прихода house_owner из БД -> houseOf ещё не видит
-    // владение -> фолбэк на вокзал. По завершении загрузки владения перерезолвим
+    // владение -> фолбэк на порт (дефолт). По завершении загрузки владения перерезолвим
     // спавн уже-онлайн игрокам с выбором Home (зеркало FamilySystem::loadAll).
     // One-shot: подписка отрабатывает один раз; новые логины после загрузки уже
     // видят владение, повторно дёргать не нужно.
@@ -130,7 +131,7 @@ void SpawnChoiceSystem::showDialog(IPlayer &player)
     // Первая жёлтая строка — подсказка о смысле (настройка будущих спавнов, не
     // телепорт), далее три пункта. Индексы смещены на HINT_ROWS в колбэке.
     dialog.body = u("{FFB400}Где вы будете появляться при входе в игру и после смерти\n"
-                    "ЖД вокзал\n"
+                    "Порт\n"
                     "Дом\n"
                     "Место работы");
     dialog.leftButton = u("Выбрать");
@@ -153,10 +154,10 @@ void SpawnChoiceSystem::showDialog(IPlayer &player)
             const int item = listItem - HINT_ROWS;
             switch (item)
             {
-            case 0: // ЖД вокзал — доступен всегда
+            case 0: // Порт (дефолт) — доступен всегда
                 m_choiceService.setChoice(*player, session->accountId, SpawnChoiceService::Choice::Station);
                 applySpawn(*player);
-                player->sendClientMessage(INFO_COLOUR, u("Теперь вы появляетесь на ЖД вокзале"));
+                player->sendClientMessage(INFO_COLOUR, u("Теперь вы появляетесь в порту"));
                 break;
             case 1: // Дом — требует владения домом (серверная проверка)
             {
@@ -205,7 +206,7 @@ SpawnPoint SpawnChoiceSystem::resolveSpawn(IPlayer &player) const
 {
     const int playerId = player.getID();
 
-    // Вокзал — дефолт и фолбэк для пропавших источников.
+    // Порт — дефолт и фолбэк для пропавших источников.
     SpawnPoint station;
     station.position = STATION_POSITION;
     station.angle = STATION_ANGLE;
@@ -221,8 +222,8 @@ SpawnPoint SpawnChoiceSystem::resolveSpawn(IPlayer &player) const
         // точка замораживается в class-данных клиента до следующего applySpawn.
         // Если дом пропал в середине сессии (дев удалил дом), игрок с выбором Home
         // будет появляться у входа БЫВШЕГО дома (публичная точка, vw 0) до
-        // следующего applySpawn — фолбэк на вокзал срабатывает на следующем
-        // resolveSpawn. Нет сессии -> фолбэк на вокзал.
+        // следующего applySpawn — фолбэк на порт (дефолт) срабатывает на следующем
+        // resolveSpawn. Нет сессии -> фолбэк на порт (дефолт).
         const PlayerSessionService::Session *session = m_sessionService.get(playerId);
         if (!session || session->accountId == PlayerSessionService::NO_ACCOUNT)
             return station;
@@ -239,8 +240,8 @@ SpawnPoint SpawnChoiceSystem::resolveSpawn(IPlayer &player) const
     case SpawnChoiceService::Choice::Work:
     {
         // База фракции игрока (серверные факты: членство + точка спавна орга).
-        // Не член / у фракции нет точки -> фолбэк на вокзал. Так экс-член,
-        // вышедший из орга, перерезолвится на вокзал (см. подписку на member-change),
+        // Не член / у фракции нет точки -> фолбэк на порт (дефолт). Так экс-член,
+        // вышедший из орга, перерезолвится на порт (дефолт) (см. подписку на member-change),
         // а не останется в приватном vw/интерьере базы.
         const FactionService::Faction *faction = m_factionService.getFaction(m_factionService.getMemberFaction(playerId));
         if (!faction || !faction->spawn.defined)

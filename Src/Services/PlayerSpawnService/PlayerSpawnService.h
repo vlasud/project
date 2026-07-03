@@ -15,8 +15,8 @@ class PlayerSkinService;
 // источник правды PlayerSkinService (спавн берёт текущее значение оттуда).
 struct SpawnPoint
 {
-    Vector3 position{1762.15f, -1896.25f, 13.56f};
-    float angle = 0.0f;
+    Vector3 position{2690.5237f, -2479.6560f, 13.6509f}; // дефолт — порт (совпадает со STATION в SpawnChoiceSystem)
+    float angle = 89.2331f;
     unsigned interior = 0;
     int virtualWorld = 0;
 };

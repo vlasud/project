@@ -79,6 +79,7 @@
 #include "Systems/VehicleWaypointSystem/VehicleWaypointSystem.h"
 #include "Systems/Core/WeaponDebugSystem/WeaponDebugSystem.h"
 #include "Systems/Core/VehicleSystem/VehicleSystem.h"
+#include "Systems/VehicleNameSystem/VehicleNameSystem.h"
 #include "Systems/Core/WorldSystem/WorldSystem.h"
 
 void SystemRegister::registerSystems(ICore &core, const ServiceRegister &serviceRegister)
@@ -102,6 +103,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // VehicleSystem раньше GridSystem: на смене стейта привязка пассажира уже
     // сделана, грид читает машину игрока из источника правды.
     m_systems.push_back(std::make_unique<VehicleSystem>(core, serviceRegister));
+    // VehicleNameSystem (попап названия машины при посадке за руль, бизнес-фича
+    // вне Core) сразу после VehicleSystem: bindOccupant уже проставил водителя
+    // на смене стейта, getVehicle(playerId) видит машину. GameTextService
+    // (Core) зарегистрирован в ServiceRegister заранее — доступен сразу.
+    m_systems.push_back(std::make_unique<VehicleNameSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<GridSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<StreamerSystem>(core, serviceRegister));
     // PickupSystem после StreamerSystem: маршрутизация подбора опирается на
