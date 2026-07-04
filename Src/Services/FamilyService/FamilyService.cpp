@@ -82,21 +82,9 @@ std::string FamilyService::sanitizeName(std::string_view rawUtf8)
 
 namespace
 {
-// Число utf-8 символов (codepoint'ов) в уже санитизированной строке: длину
-// валидируем по символам, а не байтам (кириллица — 2 байта).
-std::size_t utf8Length(std::string_view s)
-{
-    std::size_t count = 0;
-    for (const char c : s)
-    {
-        if ((static_cast<unsigned char>(c) & 0xC0) != 0x80)
-            ++count; // ведущий байт символа
-    }
-    return count;
-}
-
-// Регистронезависимое сравнение ASCII (кириллица сравнивается побайтно — для
-// неё точное совпадение и так срабатывает; цель — не плодить «Корлеоне»/«корлеоне»).
+// Регистронезависимое сравнение ASCII. Имена — строго латиница (validateName),
+// поэтому свёртка регистра покрывает ВСЕ допустимые имена: «vlasud» занял имя —
+// «Vlasud»/«vlaSuD» не пройдут.
 bool equalsIgnoreCaseAscii(std::string_view a, std::string_view b)
 {
     if (a.size() != b.size())
@@ -114,8 +102,19 @@ bool equalsIgnoreCaseAscii(std::string_view a, std::string_view b)
 
 bool FamilyService::validateName(std::string_view utf8Name) const
 {
-    const std::size_t length = utf8Length(utf8Name);
-    return length >= NAME_MIN && length <= NAME_MAX;
+    // Одно слово ЛАТИНИЦЕЙ: только буквы A-Z/a-z, без цифр, пробелов, символов и
+    // кириллицы. Байты == символы (ASCII). Побочный бонус: ASCII-регистронезависимая
+    // уникальность (nameTaken) теперь покрывает ВСЕ допустимые имена —
+    // кириллической дыры регистра больше не существует.
+    if (utf8Name.size() < NAME_MIN || utf8Name.size() > NAME_MAX)
+        return false;
+    for (const char c : utf8Name)
+    {
+        const bool latin = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+        if (!latin)
+            return false;
+    }
+    return true;
 }
 
 bool FamilyService::nameTaken(std::string_view utf8Name, int exceptId) const
@@ -249,9 +248,12 @@ bool FamilyService::leaveFamily(IPlayer &player, AccountId accountId)
         return false;
 
     const int playerId = player.getID();
-    const bool wasOwner = family->ownerAccountId == accountId;
 
-    // Последний член (владелец один в семье) — роспуск семьи целиком.
+    // Последний член семьи (в т.ч. владелец-одиночка) — роспуск целиком. Владелец
+    // с оставшимися членами сюда не попадает (UI ведёт его в disbandFamily) —
+    // наследование власти убрано; при прямом вызове для такого владельца просто
+    // исключаем его как рядового (семья остаётся БЕЗ владельца — не наш случай,
+    // владелец из UI всегда идёт через disbandFamily).
     if (family->members.size() <= 1)
     {
         destroyFamily(familyId);
@@ -264,38 +266,61 @@ bool FamilyService::leaveFamily(IPlayer &player, AccountId accountId)
     if (playerId >= 0 && playerId < MAX_PLAYERS)
         m_playerFamily[playerId] = NO_FAMILY;
 
-    AccountId newOwner = family->ownerAccountId;
-    if (wasOwner)
-    {
-        // Владение переходит старейшему по joinedAt среди оставшихся: members
-        // упорядочены по joinedAt (create/join добавляют в хвост, load сортирует),
-        // erase порядок сохраняет — старейший всегда front.
-        newOwner = family->members.front().accountId;
-        family->ownerAccountId = newOwner;
-    }
-
+    // DELETE квалифицирован ОБЕИМИ колонками: воркер-пул не гарантирует порядок
+    // async-запросов, и «вышел -> тут же вступил в другую семью» мог бы удалить
+    // строку уже НОВОЙ семьи, будь фильтр только по account_id.
     DatabaseManager::throwQuery(
-        [familyId, accountId, wasOwner, newOwner](mysqlx::Schema schema)
+        [accountId, familyId](mysqlx::Schema schema)
         {
             schema.getTable("family_member")
                 .remove()
-                .where("account_id = :account")
+                .where("account_id = :account AND family_id = :family")
                 .bind("account", accountId)
+                .bind("family", familyId)
                 .execute();
-            if (wasOwner)
-            {
-                schema.getTable("family")
-                    .update()
-                    .set("owner_account_id", newOwner)
-                    .where("id = :id")
-                    .bind("id", familyId)
-                    .execute();
-            }
         },
         [](const std::string &error)
         { LogManager::log(Error, "FamilyService: leave family failed: " + error); });
 
     return false;
+}
+
+FamilyService::Result FamilyService::kickMember(int ownerPlayerId, AccountId targetAccountId)
+{
+    if (!isOwner(ownerPlayerId)) // владелец сверяется по аккаунту слота
+        return Result::NotOwner;
+    const int familyId = m_playerFamily[ownerPlayerId];
+    Family *family = findFamily(familyId);
+    if (!family)
+        return Result::NotFound;
+    if (targetAccountId == family->ownerAccountId)
+        return Result::CannotKickSelf;
+
+    const bool isMember = std::any_of(family->members.begin(), family->members.end(),
+                                      [targetAccountId](const Mem &m) { return m.accountId == targetAccountId; });
+    if (!isMember)
+        return Result::TargetNotFound;
+
+    std::erase_if(family->members, [targetAccountId](const Mem &m) { return m.accountId == targetAccountId; });
+    m_accountFamily.erase(targetAccountId);
+    clearOnlineMember(targetAccountId); // если цель сейчас в сети — снять слот немедленно
+
+    // Оба фильтра — как в leaveFamily: без family_id гонка порядка async-запросов
+    // («кикнут -> сразу вступил в другую») могла бы стереть строку новой семьи.
+    DatabaseManager::throwQuery(
+        [targetAccountId, familyId](mysqlx::Schema schema)
+        {
+            schema.getTable("family_member")
+                .remove()
+                .where("account_id = :account AND family_id = :family")
+                .bind("account", targetAccountId)
+                .bind("family", familyId)
+                .execute();
+        },
+        [](const std::string &error)
+        { LogManager::log(Error, "FamilyService: kick member failed: " + error); });
+
+    return Result::Ok;
 }
 
 bool FamilyService::disbandFamily(int ownerPlayerId)
@@ -352,6 +377,21 @@ void FamilyService::clearOnlineMembers(int familyId)
     {
         if (slot == familyId)
             slot = NO_FAMILY;
+    }
+}
+
+void FamilyService::clearOnlineMember(AccountId accountId)
+{
+    // Линейный поиск слота по аккаунту (нет обратного индекса online-аккаунтов
+    // тут — им владеет PlayerSessionService) — холодный путь (кик — редкое
+    // действие), MAX_PLAYERS итераций не бьют по перфу.
+    for (int playerId = 0; playerId < MAX_PLAYERS; ++playerId)
+    {
+        if (m_playerAccount[playerId] == accountId)
+        {
+            m_playerFamily[playerId] = NO_FAMILY;
+            break;
+        }
     }
 }
 

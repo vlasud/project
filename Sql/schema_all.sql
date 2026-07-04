@@ -200,16 +200,17 @@ CREATE TABLE IF NOT EXISTS `election_vote` (
 
 -- id семьи генерирует сервер (единственный писатель), не AUTO_INCREMENT:
 -- m_nextId = max(id)+1 на загрузке, INSERT с явным id. name уникально по
--- серверу. owner_account_id — старейшина (владение наследует старейший по
--- joined_at при его уходе). created_at/joined_at — unix-время.
--- Коллация name — utf8mb4_bin (байт-точная): БД-UNIQUE совпадает с in-memory
--- проверкой уникальности (ASCII-регистронезависимой). Дефолтная ai_ci свернула
--- бы регистр по всему Юникоду — кириллические варианты ('Корлеоне'/'корлеоне')
--- in-memory считаются разными и прошли бы, а INSERT упал бы на UNIQUE
--- (рассинхрон). bin строже не делает: ASCII-fold идёт первым и отвергает раньше.
+-- серверу БЕЗ УЧЁТА РЕГИСТРА ('vlasud' занял — 'Vlasud'/'vlaSuD' невозможны).
+-- owner_account_id — лидер. created_at/joined_at — unix-время.
+-- Название — одно слово ЛАТИНИЦЕЙ (валидация в FamilyService::validateName),
+-- поэтому коллация name — utf8mb4_general_ci: БД-UNIQUE сворачивает регистр так
+-- же, как in-memory проверка (equalsIgnoreCaseAscii) — страховочная сетка БД
+-- совпадает с правилом. Прежняя bin-коллация была байт-точной и пропустила бы
+-- регистровый дубль мимо памяти. Существующей БД нужен одноразовый ALTER:
+--   ALTER TABLE family MODIFY name VARCHAR(64) NOT NULL COLLATE utf8mb4_general_ci;
 CREATE TABLE IF NOT EXISTS `family` (
     `id`               INT         NOT NULL,
-    `name`             VARCHAR(64) NOT NULL COLLATE utf8mb4_bin,
+    `name`             VARCHAR(64) NOT NULL COLLATE utf8mb4_general_ci,
     `owner_account_id` BIGINT      NOT NULL,
     `created_at`       BIGINT      NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),

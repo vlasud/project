@@ -1,6 +1,7 @@
 #include "Systems/ParkingSystem/ParkingSystem.h"
 
 #include "Services/Core/VehicleService/VehicleModelNames.h"
+#include "Services/ParkedVehicleService/ParkedVehicleRow.h"
 #include "Utils/Encoding/Encoding.h"
 #include "Utils/Geometry/Geometry.h"
 #include <fmt/format.h>
@@ -104,23 +105,17 @@ void ParkingSystem::onParkingPickup(IPlayer &player)
         return;
     }
 
-    // Диалог LIST: пункт — «{n}. {имя}  —  {статус}» (статус: «у дома»
-    // (припаркована лично), «в семье» (расшарена), «на парковке» (не в мире), «вызвана»
-    // (в мире) — единый словарь с /car по parkedMode). Имя машины — из каталога
-    // VehicleModelNames (displayName: пустое имя -> фолбэк «Модель {id}»).
+    // Диалог LIST: пункт — «{n}. {имя}  —  {статус}». Статус — ЕДИНЫЙ словарь
+    // размещения (ParkedVehicleRow::placementStatus, тот же, что списки /car и
+    // /family). Имя машины — из каталога VehicleModelNames (displayName: пустое
+    // имя -> фолбэк «Модель {id}»).
     std::string body;
     for (std::size_t i = 0; i < owned.size(); ++i)
     {
         const PersonalVehicleService::OwnedVehicle &entry = owned[i];
-        const int mode = m_parkedService.parkedMode(entry.dbId);
-        // Единый словарь с /car: «у дома» — только если реально стоит у точки,
-        // уехал и бросил — «брошена» (isAwayFromSpot).
-        const char *status =
-            mode == ParkedVehicleService::NOT_PARKED
-                ? (entry.vehicleId == -1 ? "на парковке" : "вызвана")
-                : (mode == FamilyService::NO_FAMILY
-                       ? (m_parkedService.isAwayFromSpot(entry.dbId) ? "брошена" : "у дома")
-                       : "в семье");
+        // Для припаркованных liveVehicleId в словаре не участвует (ветка parked),
+        // для сессионных entry.vehicleId и есть живой id — передаём его.
+        const char *status = ParkedVehicleRow::placementStatus(m_parkedService, entry.dbId, entry.vehicleId);
         body += fmt::format("{}. {}  —  {}\n", i + 1, VehicleModelNames::displayName(entry.model), status);
     }
 

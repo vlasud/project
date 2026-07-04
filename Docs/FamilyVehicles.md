@@ -8,7 +8,10 @@
 `Src/Services/ParkedVehicleService`, `Src/Systems/ParkedVehicleSystem`, тег
 `VehicleService::Owner::Parked`, таблица `parked_vehicle`.
 
-Список `/family` → «Машины семьи» (код — `FamilySystem::showFamilyVehicles`)
-показывает пункт `{n}. {имя}` — имя модели из общего справочника
-(`VehicleModelNames::displayName`, при пустом имени фолбэк `Модель {id}`; см.
-`Docs/Vehicles.md`, «Каталог имён моделей»). Тексты — `Docs/GameDesign/UI_Texts.md`.
+Список `/family` → «Транспорт семьи» (код — `FamilySystem::showVehicles`) —
+READ-ONLY TABLIST_HEADERS в ТОМ ЖЕ формате, что `/car` → «Мои машины» («Машина |
+Где находится | Топливо»): обе точки используют один и тот же построитель строки
+`ParkedVehicleRow::build` (`Src/Services/ParkedVehicleService/ParkedVehicleRow.h`),
+чтобы текст не расходился между входами. «Забрать» доступа семьи из `/family`
+УБРАНО — снять шеринг может ТОЛЬКО владелец машины через `/car` → «Вернуть от
+семьи» (см. `Docs/ParkedVehicles.md`). Тексты — `Docs/GameDesign/UI_Texts.md`.

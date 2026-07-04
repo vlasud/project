@@ -2,6 +2,7 @@
 
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/VehicleService/VehicleModelNames.h"
+#include "Services/ParkedVehicleService/ParkedVehicleRow.h"
 #include "Systems/Core/VehicleControlSystem/VehicleEngineNotice.h"
 #include "Utils/Encoding/Encoding.h"
 #include "glm/geometric.hpp"
@@ -22,21 +23,6 @@ constexpr float PARK_HOUSE_RADIUS = 30.0f;
 std::string u(const std::string &text)
 {
     return Encoding::utf8Tocp1251(text);
-}
-
-// Статус машины для списков /car (единый словарь с центральной парковкой):
-//  «у дома» — припаркована лично И реально стоит у своей точки; «брошена» —
-//  припаркована лично, но владелец уехал на ней и оставил дальше
-//  HOME_SPOT_RADIUS; «в семье» — припаркована и расшарена; иначе —
-//  «на парковке» (не в мире — взять на центральной парковке) / «вызвана» (в мире).
-const char *placementStatus(const ParkedVehicleService &parked, long long dbId, int liveVehicleId)
-{
-    const int mode = parked.parkedMode(dbId);
-    if (mode == ParkedVehicleService::NOT_PARKED)
-        return liveVehicleId == -1 ? "на парковке" : "вызвана";
-    if (mode == FamilyService::NO_FAMILY)
-        return parked.isAwayFromSpot(dbId) ? "брошена" : "у дома";
-    return "в семье";
 }
 
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
@@ -311,38 +297,15 @@ void CarMenuSystem::showMyCars(IPlayer &player)
     // TABLIST_HEADERS: колонки «Машина | Где находится» (образец —
     // WeaponProficiencySystem::showSkills). Первая строка — шапка колонок, НЕ пункт
     // списка (listItem индексирует строки данных с 0, см. FactionSystem::showMembersMenu).
+    // Строка каждой машины — общий builder (единый с /family «Транспорт семьи»).
     std::string body = "Машина\tГде находится\tТопливо\n";
     for (const PersonalVehicleService::OwnedVehicle &entry : owned)
     {
         const int liveId = liveVehicleId(entry.vehicleId, entry.dbId);
-        // За рулём кто-то сидит — вместо статуса размещения показываем КТО
-        // («Ник[id]»): владельцу важнее «кто сейчас в моей машине». Водитель —
-        // серверный (getDriver); ник строго латиница (NicknameService), без
-        // \t/\n/{} — для tablist-строки безопасен и u() его не меняет.
-        const int driverId = liveId != -1 ? m_vehicleService.getDriver(liveId) : -1;
-        IPlayer *driver = driverId != -1 ? m_core.getPlayers().get(driverId) : nullptr;
-        const std::string where = driver
-                                      ? fmt::format("{}[{}]", driver->getName().to_string(), driverId)
-                                      : std::string(placementStatus(m_parkedService, entry.dbId, liveId));
-        // Топливо — по источнику правды состояния: живой экземпляр -> getFuel;
-        // припаркованная без экземпляра -> персист-снимок записи; «на парковке» ->
-        // снимок владения (-1 — ещё не сохранялся, спавн даст полный бак).
-        float fuel;
-        if (liveId != -1)
-        {
-            fuel = m_vehicleService.getFuel(liveId);
-        }
-        else if (const ParkedVehicleService::Parked *rec =
-                     entry.dbId != -1 ? m_parkedService.byDbId(entry.dbId) : nullptr)
-        {
-            fuel = rec->fuel;
-        }
-        else
-        {
-            fuel = entry.fuel >= 0.0f ? entry.fuel : VehicleService::FUEL_CAPACITY;
-        }
-        body += fmt::format("{}\t{}\t{}/{}\n", VehicleModelNames::displayName(entry.model), where,
-                            static_cast<int>(fuel), static_cast<int>(VehicleService::FUEL_CAPACITY));
+        const float fallbackFuel = entry.fuel >= 0.0f ? entry.fuel : VehicleService::FUEL_CAPACITY;
+        body += ParkedVehicleRow::build(m_parkedService, m_vehicleService, m_core.getPlayers(), entry.dbId, liveId,
+                                        entry.model, fallbackFuel) +
+                "\n";
     }
     body.pop_back(); // убрать хвостовой '\n' — иначе пустая строка-фантом в tablist (как AdminSystem::cmdAdminHelp)
 
@@ -800,7 +763,7 @@ void CarMenuSystem::shareToFamily(IPlayer &player, int carIndex)
     // Владелец семьи — серверная проверка (isOwner по аккаунту слота, не по клиенту).
     if (!m_familyService.isOwner(playerId))
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Расшарить машину семье может только владелец семьи"));
+        player.sendClientMessage(ERROR_COLOUR, u("Расшарить машину семье может только лидер семьи"));
         return;
     }
     const FamilyService::Family *family = m_familyService.getFamily(familyId);

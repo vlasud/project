@@ -3,10 +3,11 @@
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
-#include "Services/Core/VehicleService/VehicleModelNames.h"
+#include "Services/ParkedVehicleService/ParkedVehicleRow.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <chrono>
+#include <ctime>
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
 #include <tuple>
@@ -19,9 +20,33 @@ const Colour INFO_COLOUR{120, 220, 255};
 const Colour ERROR_COLOUR{255, 90, 90};
 constexpr std::size_t MAX_FAMILY_BYTES = 180; // utf-8, ~90 кириллических
 
+// Клиентские цветокоды ячейки TABLIST «Статус» в «Члены семьи» — тот же зелёный,
+// что у HouseSystem (свободный дом, 90EE90), и hex ERROR_COLOUR (FF5A5A) для
+// оффлайна: единая палитра проекта, не новые оттенки.
+constexpr const char *ONLINE_TAG = "{90EE90}онлайн";
+constexpr const char *OFFLINE_TAG = "{FF5A5A}оффлайн";
+
+// Праздничный попап на создание семьи (ScreenNoticeService): зелёный — позитив
+// (тот же 90EE90, что и выше), 5с — как приветствие при входе (некритичный
+// текст, времени заметить достаточно).
+constexpr Milliseconds FAMILY_CREATED_POPUP_TIME{5000};
+const Colour FAMILY_CREATED_POPUP_COLOUR{0x90, 0xEE, 0x90, 0xFF};
+
 std::string u(const std::string &text)
 {
     return Encoding::utf8Tocp1251(text);
+}
+
+Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
+                  const std::string &rightButton)
+{
+    Dialog dialog;
+    dialog.style = style;
+    dialog.title = u(title);
+    dialog.body = u(body);
+    dialog.leftButton = u(leftButton);
+    dialog.rightButton = u(rightButton);
+    return dialog;
 }
 
 // Текст ошибки операции членства для клиента (utf-8).
@@ -30,9 +55,9 @@ const char *resultError(FamilyService::Result result)
     switch (result)
     {
     case FamilyService::Result::InvalidName:
-        return "Название должно быть от 3 до 24 символов без спецсимволов";
+        return "Название — одно слово латиницей (3-24 буквы), без цифр, пробелов и символов";
     case FamilyService::Result::NameTaken:
-        return "Семья с таким названием уже существует";
+        return "Семья с таким названием уже существует (регистр не различается)";
     case FamilyService::Result::AlreadyInFamily:
         return "Вы уже состоите в семье";
     case FamilyService::Result::FamilyFull:
@@ -43,10 +68,26 @@ const char *resultError(FamilyService::Result result)
         return "Вы ещё не авторизованы";
     case FamilyService::Result::NotLoaded:
         return "Семьи ещё загружаются, попробуйте через момент";
+    case FamilyService::Result::NotOwner:
+        return "Это может только лидер семьи";
+    case FamilyService::Result::TargetNotFound:
+        return "Этот игрок больше не в семье";
+    case FamilyService::Result::CannotKickSelf:
+        return "Себя выгнать нельзя — используйте «Покинуть семью»";
     case FamilyService::Result::Ok:
         return "";
     }
     return "";
+}
+
+// Дата "d.m.Y" из unix-времени (нет прецедента формата дат в проекте — берём
+// простой календарный формат). gmtime — без TZ-обвязки, для UI-даты достаточно.
+std::string formatDate(long long unixTime)
+{
+    const std::time_t time = static_cast<std::time_t>(unixTime);
+    if (const std::tm *tm = std::gmtime(&time))
+        return fmt::format("{:02}.{:02}.{}", tm->tm_mday, tm->tm_mon + 1, tm->tm_year + 1900);
+    return "?";
 }
 } // namespace
 
@@ -55,26 +96,38 @@ FamilySystem::FamilySystem(ICore &core, const ServiceRegister &serviceRegister)
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_chatService(serviceRegister.getService<PlayerChatService>()),
-      m_houseService(serviceRegister.getService<HouseService>()),
-      m_parkedService(serviceRegister.getService<ParkedVehicleService>())
+      m_parkedService(serviceRegister.getService<ParkedVehicleService>()),
+      m_vehicleService(serviceRegister.getService<VehicleService>()),
+      m_screenNotice(serviceRegister.getService<ScreenNoticeService>())
 {
     m_sessionService.subscribeStart(
         [this](IPlayer &player, const PlayerSessionService::Session &session)
-        { m_familyService.onSessionStart(player.getID(), session.accountId); });
+        {
+            m_familyService.onSessionStart(player.getID(), session.accountId);
+        });
     m_sessionService.subscribeEnd(
         [this](IPlayer &player, const PlayerSessionService::Session &)
-        { m_familyService.onSessionEnd(player.getID()); });
+        {
+            m_familyService.onSessionEnd(player.getID());
+        });
 
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 
-    commands.add("family", {},
-                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showMenu(player); },
-                 {}, "меню семьи: состав, приглашение, машины, выход", PlayerCommandService::HelpCategory::Misc);
+    commands.add(
+        "family", {},
+        [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
+        {
+            showMenu(player);
+        },
+        {}, "меню семьи: информация, состав, машины, приглашение, выход", PlayerCommandService::HelpCategory::Misc);
 
-    commands.add("f", {{PlayerCommandService::Param::String, "текст"}},
-                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
-                 { familyChat(player, args.getString(0)); },
-                 {}, "чат семьи: написать всем в своей семье", PlayerCommandService::HelpCategory::Misc);
+    commands.add(
+        "f", {{PlayerCommandService::Param::String, "текст"}},
+        [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+        {
+            familyChat(player, args.getString(0));
+        },
+        {}, "чат семьи: написать всем в своей семье", PlayerCommandService::HelpCategory::Misc);
 }
 
 void FamilySystem::initialize(IComponentList *components)
@@ -139,10 +192,14 @@ void FamilySystem::loadAll()
                     }
                 },
                 [](const std::string &error)
-                { LogManager::log(Error, "FamilySystem: failed to load family members: " + error); });
+                {
+                    LogManager::log(Error, "FamilySystem: failed to load family members: " + error);
+                });
         },
         [](const std::string &error)
-        { LogManager::log(Error, "FamilySystem: failed to load families: " + error); });
+        {
+            LogManager::log(Error, "FamilySystem: failed to load families: " + error);
+        });
 }
 
 // ------------------------------------------------------------------ чат /f
@@ -206,15 +263,13 @@ std::vector<FamilySystem::Action> FamilySystem::buildActions(int playerId) const
         actions.push_back(Action::Create);
         return actions;
     }
-    actions.push_back(Action::Roster);
-    // «Машины семьи» видит любой член (просмотр списка). Забрать машину может только
-    // владелец — гейт в обработчике, не в показе пункта. Приглашение — только владельцу.
+    // Правило видимости: ВСЕ 6 пунктов видны ВСЕГДА любому члену — недоступность
+    // (не владелец) объясняет обработчик сообщением при клике, не скрытием.
+    actions.push_back(Action::Info);
+    actions.push_back(Action::Members);
     actions.push_back(Action::Vehicles);
-    if (m_familyService.isOwner(playerId))
-        actions.push_back(Action::Invite);
+    actions.push_back(Action::Invite);
     actions.push_back(Action::Leave);
-    if (m_familyService.isOwner(playerId))
-        actions.push_back(Action::Disband);
     return actions;
 }
 
@@ -232,85 +287,79 @@ void FamilySystem::showMenu(IPlayer &player)
         case Action::Create:
             body += "Создать семью\n";
             break;
-        case Action::Roster:
-            body += "Состав семьи\n";
+        case Action::Info:
+            body += "Информация\n";
             break;
-        case Action::Invite:
-            body += "Пригласить игрока\n";
+        case Action::Members:
+            body += "Члены семьи\n";
             break;
         case Action::Vehicles:
-            body += "Машины семьи\n";
+            body += "Транспорт семьи\n";
+            break;
+        case Action::Invite:
+            body += "Пригласить в семью\n";
             break;
         case Action::Leave:
-            body += "Выйти из семьи\n";
-            break;
-        case Action::Disband:
-            body += "Распустить семью\n";
+            body += "Покинуть семью\n";
             break;
         }
     }
     if (!body.empty())
         body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(family ? fmt::format("Семья «{}»", family->name) : std::string("Семья"));
-    dialog.body = u(body);
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Закрыть");
+    Dialog dialog =
+        makeDialog(DialogStyle_LIST, family ? fmt::format("Семья «{}»", family->name) : std::string("Семья"), body,
+                   "Выбрать", "Закрыть");
 
-    m_dialogService.show(
-        player, dialog,
-        [this, playerId, actions](DialogResponse response, int listItem, StringView)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
-            if (!player || response != DialogResponse_Left)
-                return;
-            // Состояние могло измениться, пока диалог открыт — пересобираем
-            // ДОСТУПНЫЕ действия и сверяем выбранный пункт с актуальным набором.
-            const std::vector<Action> current = buildActions(playerId);
-            if (listItem < 0 || static_cast<std::size_t>(listItem) >= actions.size())
-                return;
-            const Action chosen = actions[listItem];
-            // Действие должно остаться доступным (напр. владельца сменили).
-            if (std::find(current.begin(), current.end(), chosen) == current.end())
-            {
-                showMenu(*player);
-                return;
-            }
-            switch (chosen)
-            {
-            case Action::Create:
-                showCreateInput(*player);
-                break;
-            case Action::Roster:
-                showRoster(*player);
-                break;
-            case Action::Invite:
-                showInviteInput(*player);
-                break;
-            case Action::Vehicles:
-                showFamilyVehicles(*player);
-                break;
-            case Action::Leave:
-                showLeaveConfirm(*player);
-                break;
-            case Action::Disband:
-                showDisbandConfirm(*player);
-                break;
-            }
-        });
+    m_dialogService.show(player, dialog,
+                         [this, playerId, actions](DialogResponse response, int listItem, StringView)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (!player || response != DialogResponse_Left)
+                                 return;
+                             // Состояние могло измениться, пока диалог открыт — пересобираем
+                             // ДОСТУПНЫЕ действия и сверяем выбранный пункт с актуальным набором.
+                             const std::vector<Action> current = buildActions(playerId);
+                             if (listItem < 0 || static_cast<std::size_t>(listItem) >= actions.size())
+                                 return;
+                             const Action chosen = actions[listItem];
+                             // Действие должно остаться доступным (напр. семью распустили).
+                             if (std::find(current.begin(), current.end(), chosen) == current.end())
+                             {
+                                 showMenu(*player);
+                                 return;
+                             }
+                             switch (chosen)
+                             {
+                             case Action::Create:
+                                 showCreateInput(*player);
+                                 break;
+                             case Action::Info:
+                                 showInfo(*player);
+                                 break;
+                             case Action::Members:
+                                 showMembers(*player);
+                                 break;
+                             case Action::Vehicles:
+                                 showVehicles(*player);
+                                 break;
+                             case Action::Invite:
+                                 showInviteInput(*player);
+                                 break;
+                             case Action::Leave:
+                                 showLeaveConfirm(*player);
+                                 break;
+                             }
+                         });
 }
 
 void FamilySystem::showCreateInput(IPlayer &player)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Создание семьи");
-    dialog.body = u(fmt::format("Введите название семьи ({}-{} символов).\nСоздание бесплатно.",
-                                FamilyService::NAME_MIN, FamilyService::NAME_MAX));
-    dialog.leftButton = u("Создать");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Создание семьи",
+                               fmt::format("Введите название семьи: одно слово латиницей, {}-{} букв\n"
+                                           "(без цифр, пробелов и символов). Создание бесплатно.",
+                                           FamilyService::NAME_MIN, FamilyService::NAME_MAX),
+                               "Создать", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -330,15 +379,6 @@ void FamilySystem::showCreateInput(IPlayer &player)
                 player->sendClientMessage(ERROR_COLOUR, u(resultError(FamilyService::Result::NoSession)));
                 return;
             }
-            // Гейт: создать семью можно только при наличии дома в собственности.
-            // Ключ владельца — серверный accountId, как формирует HouseSystem
-            // (std::to_string(accountId)); клиенту не доверяем.
-            if (!m_houseService.ownsHouse(std::to_string(session->accountId)))
-            {
-                player->sendClientMessage(
-                    ERROR_COLOUR, u("Чтобы создать семью, нужен свой дом. Займите свободный дом на карте"));
-                return;
-            }
             // Ввод клиента: cp1251 -> utf-8; чистку/валидацию делает сервис.
             const std::string name = Encoding::cp1251Toutf8(std::string(input.data(), input.size()));
             const FamilyService::Result result = m_familyService.createFamily(*player, session->accountId, name);
@@ -349,15 +389,19 @@ void FamilySystem::showCreateInput(IPlayer &player)
                     showCreateInput(*player); // повтор ввода
                 return;
             }
-            const FamilyService::Family *family =
-                m_familyService.getFamily(m_familyService.getFamilyId(playerId));
+            const FamilyService::Family *family = m_familyService.getFamily(m_familyService.getFamilyId(playerId));
             player->sendClientMessage(
-                INFO_COLOUR, u(fmt::format("Семья «{}» создана. Вы — старейшина. Чат семьи — команда /f",
+                INFO_COLOUR, u(fmt::format("Семья «{}» создана. Вы — лидер. Управление семьей — команда /family",
                                            family ? family->name : "")));
+            // Праздничный попап поверх чата: тексты попапов — английские (как
+            // engine is broken / no fuel), зелёный — позитив из палитры проекта.
+            m_screenNotice.show(*player, "congratulations!", FAMILY_CREATED_POPUP_TIME, FAMILY_CREATED_POPUP_COLOUR);
         });
 }
 
-void FamilySystem::showRoster(IPlayer &player)
+// ------------------------------------------------------------------ 1: информация
+
+void FamilySystem::showInfo(IPlayer &player)
 {
     const int playerId = player.getID();
     const FamilyService::Family *family = m_familyService.getFamily(m_familyService.getFamilyId(playerId));
@@ -367,70 +411,292 @@ void FamilySystem::showRoster(IPlayer &player)
         return;
     }
 
-    // Имя владельца берём из состава (он всегда член).
+    // Имя владельца — из состава (он всегда член); онлайн -> «Имя[id]» актуальным ником.
     std::string ownerName = "?";
     for (const FamilyService::Mem &member : family->members)
     {
         if (member.accountId == family->ownerAccountId)
         {
-            ownerName = member.name;
+            // Снимок из БД — оборонительная чистка цветокодов, как в «Члены семьи».
+            ownerName = Encoding::neutralizeColorCodes(member.name);
             break;
         }
     }
+    const int ownerPlayerId = m_sessionService.playerByAccount(family->ownerAccountId);
+    if (IPlayer *ownerPlayer = ownerPlayerId != -1 ? m_core.getPlayers().get(ownerPlayerId) : nullptr)
+        ownerName = fmt::format("{}[{}]", ownerPlayer->getName().to_string(), ownerPlayerId);
 
-    const PlayerSessionService::Session *mySession = m_sessionService.get(playerId);
-    const FamilyService::AccountId myAccount =
-        mySession ? mySession->accountId : PlayerSessionService::NO_ACCOUNT;
+    // TABLIST_HEADERS «Поле | Значение» (образец — HomeMenuSystem::showInfo).
+    // Раздел расширяемый — новые факты о семье добавляются новыми строками.
+    std::string body = "Поле\tЗначение\n";
+    body += fmt::format("Название\t{}\n", family->name);
+    body += fmt::format("Лидер\t{}\n", ownerName);
+    body += fmt::format("Членов\t{}/{}\n", family->members.size(), FamilyService::MAX_MEMBERS);
+    body += fmt::format("Создана\t{}", formatDate(family->createdAt));
 
-    std::string body = fmt::format("Семья: {}\nВладелец: {}\n\nСостав ({}/{}):\n", family->name, ownerName,
-                                   family->members.size(), FamilyService::MAX_MEMBERS);
-    // Порядок по стажу (members уже отсортированы по joinedAt). Онлайн/офлайн не
-    // показываем; владелец помечен «— старейшина», себя — «(вы)».
-    for (const FamilyService::Mem &member : family->members)
+    m_dialogService.show(player, makeDialog(DialogStyle_TABLIST_HEADERS, "Информация о семье", body, "Назад", ""),
+                         [this, playerId](DialogResponse, int, StringView)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (player)
+                                 showMenu(*player);
+                         });
+}
+
+// ------------------------------------------------------------------ 2: члены семьи
+
+void FamilySystem::showMembers(IPlayer &player)
+{
+    const int playerId = player.getID();
+    const FamilyService::Family *family = m_familyService.getFamily(m_familyService.getFamilyId(playerId));
+    if (!family)
     {
-        const char *ownerMark = member.accountId == family->ownerAccountId ? " — старейшина" : "";
-        const char *youMark = (myAccount != PlayerSessionService::NO_ACCOUNT && member.accountId == myAccount)
-                                  ? " (вы)"
-                                  : "";
-        body += fmt::format("{}{}{}\n", member.name, ownerMark, youMark);
+        showMenu(player);
+        return;
     }
 
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u(fmt::format("Семья «{}»", family->name));
-    dialog.body = u(body);
-    dialog.leftButton = u("Назад");
-    dialog.rightButton = u("Закрыть");
+    const PlayerSessionService::Session *mySession = m_sessionService.get(playerId);
+    const FamilyService::AccountId myAccount = mySession ? mySession->accountId : PlayerSessionService::NO_ACCOUNT;
 
-    m_dialogService.show(player, dialog,
-                         [this, playerId](DialogResponse response, int, StringView)
+    // Онлайн-сортировка: стабильный partition онлайн/оффлайн поверх members (уже
+    // отсортированы по joinedAt по возрастанию) — внутри каждой группы стаж
+    // сохраняется, т.к. partition стабилен.
+    std::vector<const FamilyService::Mem *> ordered;
+    ordered.reserve(family->members.size());
+    for (const FamilyService::Mem &member : family->members)
+        ordered.push_back(&member);
+    std::stable_partition(ordered.begin(), ordered.end(),
+                          [this](const FamilyService::Mem *m)
+                          {
+                              return m_sessionService.playerByAccount(m->accountId) != -1;
+                          });
+
+    std::string body = "Игрок\tСтатус\n";
+    // Снимок ПОРЯДКА на момент показа: listItem клика резолвится по нему, а не по
+    // живому составу — онлайн-сортировка могла перетасовать список, пока диалог
+    // висел (кто-то вошёл/вышел), и живой индекс указал бы на другого человека.
+    std::vector<FamilyService::AccountId> order;
+    order.reserve(ordered.size());
+    for (const FamilyService::Mem *member : ordered)
+    {
+        order.push_back(member->accountId);
+        const int memberPlayerId = m_sessionService.playerByAccount(member->accountId);
+        IPlayer *memberPlayer = memberPlayerId != -1 ? m_core.getPlayers().get(memberPlayerId) : nullptr;
+        // Онлайн — АКТУАЛЬНЫЙ ник (getName, игрок мог переименоваться); оффлайн —
+        // снимок Mem::name на момент вступления (utf-8 -> u() ниже вместе со всем телом).
+        // Снимок из БД чистится оборонительно: цветокоды {}/~ раскрашивает клиент, а
+        // инвариант «ник = латиница» для legacy/правленных вручную строк не гарантирован.
+        std::string nameField = memberPlayer
+                                    ? fmt::format("{}[{}]", memberPlayer->getName().to_string(), memberPlayerId)
+                                    : Encoding::neutralizeColorCodes(member->name);
+        // Один суффикс вместо двух подряд скобок — короче для tablist-ячейки.
+        const bool isOwnerRow = member->accountId == family->ownerAccountId;
+        const bool isSelf = myAccount != PlayerSessionService::NO_ACCOUNT && member->accountId == myAccount;
+        if (isOwnerRow && isSelf)
+            nameField += " (вы, лидер)";
+        else if (isOwnerRow)
+            nameField += " (лидер)";
+        else if (isSelf)
+            nameField += " (вы)";
+        body += fmt::format("{}\t{}\n", nameField, memberPlayer ? ONLINE_TAG : OFFLINE_TAG);
+    }
+    if (!body.empty())
+        body.pop_back();
+
+    m_dialogService.show(player, makeDialog(DialogStyle_TABLIST_HEADERS, "Члены семьи", body, "Выбрать", "Назад"),
+                         [this, playerId, order](DialogResponse response, int listItem, StringView)
                          {
                              IPlayer *player = m_core.getPlayers().get(playerId);
                              if (!player)
                                  return;
-                             if (response == DialogResponse_Left)
+                             if (response != DialogResponse_Left)
+                             {
+                                 showMenu(*player);
+                                 return;
+                             }
+                             if (listItem < 0 || static_cast<std::size_t>(listItem) >= order.size())
+                             {
+                                 showMembers(*player); // мусорный индекс — перепоказать
+                                 return;
+                             }
+                             showMemberActions(*player, order[listItem]);
+                         });
+}
+
+// Член семьи для подменю/карточки: актуальная запись состава по accountId (снимок
+// порядка мог устареть — членство ре-валидируется здесь на каждом входе).
+const FamilyService::Mem *FamilySystem::memberByAccount(int playerId, FamilyService::AccountId targetAccount) const
+{
+    const FamilyService::Family *family = m_familyService.getFamily(m_familyService.getFamilyId(playerId));
+    if (!family)
+        return nullptr;
+    for (const FamilyService::Mem &member : family->members)
+    {
+        if (member.accountId == targetAccount)
+            return &member;
+    }
+    return nullptr;
+}
+
+// Отображаемое имя члена: онлайн — актуальный «Ник[id]», оффлайн — чищенный снимок.
+std::string FamilySystem::memberDisplayName(FamilyService::AccountId targetAccount,
+                                            const FamilyService::Mem &member) const
+{
+    const int targetPlayerId = m_sessionService.playerByAccount(targetAccount);
+    if (IPlayer *target = targetPlayerId != -1 ? m_core.getPlayers().get(targetPlayerId) : nullptr)
+        return fmt::format("{}[{}]", target->getName().to_string(), targetPlayerId);
+    return Encoding::neutralizeColorCodes(member.name);
+}
+
+void FamilySystem::showMemberActions(IPlayer &player, FamilyService::AccountId targetAccount)
+{
+    const int playerId = player.getID();
+    const FamilyService::Mem *member = memberByAccount(playerId, targetAccount);
+    if (!member)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этот игрок больше не в семье"));
+        showMembers(player);
+        return;
+    }
+
+    // Оба пункта видны ВСЕМ (правило видимости): «Исключить» рядовому объяснит
+    // отказ обработчик, не скрытие.
+    m_dialogService.show(player,
+                         makeDialog(DialogStyle_LIST, memberDisplayName(targetAccount, *member),
+                                    "Информация\nИсключить", "Выбрать", "Назад"),
+                         [this, playerId, targetAccount](DialogResponse response, int listItem, StringView)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (!player)
+                                 return;
+                             if (response != DialogResponse_Left)
+                             {
+                                 showMembers(*player);
+                                 return;
+                             }
+                             // Ре-валидация членства цели на КАЖДОМ клике (могли кикнуть/выйти).
+                             const FamilyService::Mem *member = memberByAccount(playerId, targetAccount);
+                             if (!member)
+                             {
+                                 player->sendClientMessage(ERROR_COLOUR, u("Этот игрок больше не в семье"));
+                                 showMembers(*player);
+                                 return;
+                             }
+                             if (listItem == 0)
+                             {
+                                 showMemberInfo(*player, targetAccount);
+                             }
+                             else if (listItem == 1)
+                             {
+                                 // Гейты кика: лидер, не сам себя; снимок targetAccount уже в руках.
+                                 if (!m_familyService.isOwner(playerId))
+                                 {
+                                     player->sendClientMessage(ERROR_COLOUR, u("Это может только лидер семьи"));
+                                     showMemberActions(*player, targetAccount);
+                                     return;
+                                 }
+                                 const PlayerSessionService::Session *session = m_sessionService.get(playerId);
+                                 if (session && session->accountId == targetAccount)
+                                 {
+                                     player->sendClientMessage(ERROR_COLOUR,
+                                                               u(resultError(FamilyService::Result::CannotKickSelf)));
+                                     showMemberActions(*player, targetAccount);
+                                     return;
+                                 }
+                                 showKickConfirm(*player, targetAccount, memberDisplayName(targetAccount, *member));
+                             }
+                         });
+}
+
+void FamilySystem::showMemberInfo(IPlayer &player, FamilyService::AccountId targetAccount)
+{
+    const int playerId = player.getID();
+    const FamilyService::Mem *member = memberByAccount(playerId, targetAccount);
+    if (!member)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этот игрок больше не в семье"));
+        showMembers(player);
+        return;
+    }
+
+    // Базовая карточка (раздел расширяемый — новые факты добавляются строками).
+    const int targetPlayerId = m_sessionService.playerByAccount(targetAccount);
+    std::string body = "Поле\tЗначение\n";
+    body += fmt::format("Игрок\t{}\n", memberDisplayName(targetAccount, *member));
+    body += fmt::format("Статус\t{}\n", targetPlayerId != -1 ? ONLINE_TAG : OFFLINE_TAG);
+    body += fmt::format("В семье с\t{}", formatDate(member->joinedAt));
+
+    m_dialogService.show(player, makeDialog(DialogStyle_TABLIST_HEADERS, "Информация об игроке", body, "Назад", ""),
+                         [this, playerId, targetAccount](DialogResponse, int, StringView)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (player)
+                                 showMemberActions(*player, targetAccount);
+                         });
+}
+
+// ------------------------------------------------------------------ 3: транспорт семьи
+
+void FamilySystem::showVehicles(IPlayer &player)
+{
+    const int playerId = player.getID();
+    const int familyId = m_familyService.getFamilyId(playerId);
+    if (familyId == FamilyService::NO_FAMILY)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Вы не состоите в семье"));
+        return;
+    }
+
+    const std::vector<long long> dbIds = m_parkedService.parkedOfFamily(familyId);
+    if (dbIds.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("В семье пока нет расшаренных машин"));
+        return;
+    }
+
+    // Формат /car «Мои машины» (TABLIST_HEADERS «Машина | Где находится | Топливо»,
+    // общий builder — см. ParkedVehicleRow.h), но READ-ONLY: выбор строки ничего не
+    // делает. «Забрать» доступа семьи — только у владельца МАШИНЫ через /car ->
+    // «Вернуть от семьи» (см. Docs/ParkedVehicles.md).
+    std::string body = "Машина\tГде находится\tТопливо\n";
+    for (const long long dbId : dbIds)
+    {
+        const ParkedVehicleService::Parked *parked = m_parkedService.byDbId(dbId);
+        const int model = parked ? parked->model : 0;
+        const int liveId = parked ? parked->vehicleId : -1;
+        body +=
+            ParkedVehicleRow::build(m_parkedService, m_vehicleService, m_core.getPlayers(), dbId, liveId, model) + "\n";
+    }
+    if (!body.empty())
+        body.pop_back();
+
+    m_dialogService.show(player, makeDialog(DialogStyle_TABLIST_HEADERS, "Транспорт семьи", body, "Назад", ""),
+                         [this, playerId](DialogResponse, int, StringView)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (player)
                                  showMenu(*player);
                          });
 }
+
+// ------------------------------------------------------------------ 4: пригласить по нику
 
 void FamilySystem::showInviteInput(IPlayer &player)
 {
     if (!m_familyService.isOwner(player.getID()))
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Это может только владелец семьи"));
+        player.sendClientMessage(ERROR_COLOUR, u("Это может только лидер семьи"));
         return;
     }
 
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Приглашение в семью");
-    dialog.body = u("Введите id игрока для приглашения.\nИгрок должен быть в сети и не состоять в семье.");
-    dialog.leftButton = u("Пригласить");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Приглашение в семью",
+                               "Введите id игрока (посмотреть можно по TAB), которого хотите пригласить.\n"
+                               "Он должен быть в сети и не состоять в семье.",
+                               "Пригласить", "Назад");
 
     m_dialogService.showNumberInput(
         player, dialog,
-        [this, ownerId = player.getID()](DialogResponse response, std::int64_t targetIdRaw)
+        [this, ownerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *owner = m_core.getPlayers().get(ownerId);
             if (!owner)
@@ -442,7 +708,7 @@ void FamilySystem::showInviteInput(IPlayer &player)
             }
             if (!m_familyService.isOwner(ownerId))
             {
-                owner->sendClientMessage(ERROR_COLOUR, u("Это может только владелец семьи"));
+                owner->sendClientMessage(ERROR_COLOUR, u("Это может только лидер семьи"));
                 return;
             }
             const int familyId = m_familyService.getFamilyId(ownerId);
@@ -455,18 +721,30 @@ void FamilySystem::showInviteInput(IPlayer &player)
                 return;
             }
 
-            // id из клиентского ввода — bounds + онлайн + не сам приглашающий +
-            // не в семье + авторизован.
-            const int targetId = static_cast<int>(targetIdRaw);
+            // Приглашение по СЕРВЕРНОМУ id (как передача дома в /home): мусор/вне
+            // диапазона — ошибка ВВОДА, не «нет такого игрока» (разные тексты).
+            if (value < 0 || value >= MAX_PLAYERS)
+            {
+                owner->sendClientMessage(ERROR_COLOUR, u("Введите корректный id игрока"));
+                showInviteInput(*owner);
+                return;
+            }
+            IPlayer *target = m_core.getPlayers().get(static_cast<int>(value));
+            if (!target)
+            {
+                owner->sendClientMessage(ERROR_COLOUR, u("Такого игрока нет в сети"));
+                showInviteInput(*owner);
+                return;
+            }
+            const int targetId = target->getID();
             if (targetId == ownerId)
             {
                 owner->sendClientMessage(ERROR_COLOUR, u("Нельзя пригласить самого себя"));
                 showInviteInput(*owner);
                 return;
             }
-            IPlayer *target = m_core.getPlayers().get(targetId);
-            const PlayerSessionService::Session *targetSession = target ? m_sessionService.get(targetId) : nullptr;
-            if (!target || !targetSession)
+            const PlayerSessionService::Session *targetSession = m_sessionService.get(targetId);
+            if (!targetSession)
             {
                 owner->sendClientMessage(ERROR_COLOUR, u("Игрок не найден или не авторизован"));
                 showInviteInput(*owner);
@@ -478,8 +756,8 @@ void FamilySystem::showInviteInput(IPlayer &player)
                 return;
             }
 
-            owner->sendClientMessage(INFO_COLOUR, u(fmt::format("Приглашение отправлено игроку {}",
-                                                                target->getName().to_string())));
+            owner->sendClientMessage(INFO_COLOUR,
+                                     u(fmt::format("Приглашение отправлено игроку {}", target->getName().to_string())));
             // Приглашённому — диалог подтверждения. Принятие перепроверит всё на
             // момент клика (serial приглашающего ловит его пере-вход в слот).
             const PlayerSessionService::Session *ownerSession = m_sessionService.get(ownerId);
@@ -494,13 +772,10 @@ void FamilySystem::showInviteConfirm(IPlayer &invited, int inviterId, int family
     if (!family || !inviter)
         return;
 
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u("Приглашение в семью");
-    dialog.body = u(fmt::format("{} приглашает вас в семью «{}». Принять приглашение?",
-                                inviter->getName().to_string(), family->name));
-    dialog.leftButton = u("Принять");
-    dialog.rightButton = u("Отклонить");
+    Dialog dialog = makeDialog(DialogStyle_MSGBOX, "Приглашение в семью",
+                               fmt::format("{} приглашает вас в семью «{}». Принять приглашение?",
+                                           inviter->getName().to_string(), family->name),
+                               "Принять", "Отклонить");
 
     m_dialogService.show(
         invited, dialog,
@@ -538,11 +813,11 @@ void FamilySystem::showInviteConfirm(IPlayer &invited, int inviterId, int family
                 invited->sendClientMessage(ERROR_COLOUR, u(resultError(result)));
                 return;
             }
-            invited->sendClientMessage(INFO_COLOUR,
-                                       u(fmt::format("Вы вступили в семью «{}». Чат семьи — команда /f", family->name)));
+            invited->sendClientMessage(
+                INFO_COLOUR, u(fmt::format("Вы вступили в семью «{}». Чат семьи — команда /f", family->name)));
             // Уведомить онлайн-членов семьи о пополнении.
-            const std::string note = u(fmt::format("[{}] {} вступил(а) в семью", family->name,
-                                                   invited->getName().to_string()));
+            const std::string note =
+                u(fmt::format("[{}] {} вступил(а) в семью", family->name, invited->getName().to_string()));
             for (IPlayer *member : m_core.getPlayers().entries())
             {
                 if (member->getID() != invitedId && m_familyService.getFamilyId(member->getID()) == familyId)
@@ -550,6 +825,62 @@ void FamilySystem::showInviteConfirm(IPlayer &invited, int inviterId, int family
             }
         });
 }
+
+// -------------------------------------------------- исключение (из подменю члена)
+
+void FamilySystem::showKickConfirm(IPlayer &owner, FamilyService::AccountId targetAccount,
+                                   const std::string &targetName)
+{
+    Dialog dialog = makeDialog(DialogStyle_MSGBOX, "Исключение из семьи",
+                               fmt::format("Выгнать {} из семьи?", targetName), "Выгнать", "Назад");
+
+    // Снимок targetAccount (НЕ ник) захватывает колбэк — переименование/перелогин
+    // цели между показом и «Да» не уводит кик не туда (паттерн /home expectedAccount).
+    m_dialogService.show(
+        owner, dialog,
+        [this, ownerId = owner.getID(), targetAccount, targetName](DialogResponse response, int, StringView)
+        {
+            IPlayer *owner = m_core.getPlayers().get(ownerId);
+            if (!owner)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showMenu(*owner);
+                return;
+            }
+            const int familyId = m_familyService.getFamilyId(ownerId);
+            const FamilyService::Family *family = m_familyService.getFamily(familyId);
+            const std::string familyNameCopy = family ? family->name : std::string("?");
+
+            const FamilyService::Result result = m_familyService.kickMember(ownerId, targetAccount);
+            if (result != FamilyService::Result::Ok)
+            {
+                owner->sendClientMessage(ERROR_COLOUR, u(resultError(result)));
+                return;
+            }
+
+            // Расшаренные семье машины ВЫГНАННОГО (он мог быть владельцем машин) —
+            // снять шеринг тем же путём, что при обычном выходе владельца машин.
+            m_parkedService.onOwnerLeftFamily(targetAccount);
+
+            owner->sendClientMessage(INFO_COLOUR, u(fmt::format("{} исключён(а) из семьи", targetName)));
+
+            const int targetPlayerId = m_sessionService.playerByAccount(targetAccount);
+            if (IPlayer *targetPlayer = targetPlayerId != -1 ? m_core.getPlayers().get(targetPlayerId) : nullptr)
+                targetPlayer->sendClientMessage(INFO_COLOUR,
+                                                u(fmt::format("Вас исключили из семьи «{}»", familyNameCopy)));
+
+            const std::string note = u(fmt::format("[{}] {} исключён(а) из семьи", familyNameCopy, targetName));
+            for (IPlayer *member : m_core.getPlayers().entries())
+            {
+                if (member->getID() != ownerId && member->getID() != targetPlayerId &&
+                    m_familyService.getFamilyId(member->getID()) == familyId)
+                    member->sendClientMessage(INFO_COLOUR, note);
+            }
+        });
+}
+
+// ------------------------------------------------------------------ 6: покинуть семью
 
 void FamilySystem::showLeaveConfirm(IPlayer &player)
 {
@@ -560,273 +891,87 @@ void FamilySystem::showLeaveConfirm(IPlayer &player)
         showMenu(player);
         return;
     }
+    const bool owner = m_familyService.isOwner(playerId);
 
-    std::string body = fmt::format("Выйти из семьи «{}»?", family->name);
-    if (m_familyService.isOwner(playerId))
-        body += "\nВы старейшина: владение перейдёт к старейшему из оставшихся, а если вы последний — семья будет "
-                "распущена.";
+    // Семантика различается: рядовой — простой выход; владелец — «Покинуть» это
+    // ПОЛНЫЙ РОСПУСК (наследование власти из UI убрано, см. Docs/Family.md).
+    // Перенос строкой отделяет «что произойдёт» от «нельзя отменить» — вёрстка
+    // деструктивных подтверждений как у передачи дома (/home).
+    const std::string body =
+        owner ? fmt::format("Покинуть семью? Вы лидер — семья «{}» будет РАСПУЩЕНА полностью.\nЭто действие "
+                            "нельзя отменить.",
+                            family->name)
+              : fmt::format("Покинуть семью «{}»?", family->name);
 
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u("Выход из семьи");
-    dialog.body = u(body);
-    dialog.leftButton = u("Выйти");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_MSGBOX, "Покинуть семью", body, "Покинуть", "Назад");
 
-    m_dialogService.show(
-        player, dialog,
-        [this, playerId](DialogResponse response, int, StringView)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
-            if (!player)
-                return;
-            if (response != DialogResponse_Left)
-            {
-                showMenu(*player);
-                return;
-            }
-            const PlayerSessionService::Session *session = m_sessionService.get(playerId);
-            if (!session)
-                return;
-            const int familyId = m_familyService.getFamilyId(playerId);
-            const FamilyService::Family *family = m_familyService.getFamily(familyId);
-            if (!family)
-            {
-                showMenu(*player);
-                return;
-            }
-            const std::string familyName = family->name; // копия до возможного роспуска
-            // Захват до leaveFamily — после него слоты/владелец обнулятся.
-            const FamilyService::AccountId accountId = session->accountId;
-            const bool disbanded = m_familyService.leaveFamily(*player, session->accountId);
-            // Крайние случаи припаркованных машин: последний член ушёл (семья распущена)
-            // — снять шеринг у ВСЕХ её машин; иначе вышел владелец машин — снять шеринг у
-            // ЕГО расшаренных (для обычного члена без машин — no-op). В обоих случаях
-            // машины ОСТАЮТСЯ припаркованы ЛИЧНО у дома (экземпляры не уничтожаются).
-            if (disbanded)
-                m_parkedService.onFamilyDissolved(familyId);
-            else
-                m_parkedService.onOwnerLeftFamily(accountId);
-            player->sendClientMessage(INFO_COLOUR, u(fmt::format("Вы вышли из семьи «{}»", familyName)));
-            if (!disbanded)
-            {
-                // Семья жива — уведомить оставшихся онлайн-членов (новый владелец
-                // мог смениться; берём актуальное состояние).
-                const std::string note = u(fmt::format("[{}] Участник покинул семью", familyName));
-                for (IPlayer *member : m_core.getPlayers().entries())
-                {
-                    if (m_familyService.getFamilyId(member->getID()) == familyId)
-                        member->sendClientMessage(INFO_COLOUR, note);
-                }
-            }
-        });
-}
+    m_dialogService.show(player, dialog,
+                         [this, playerId](DialogResponse response, int, StringView)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (!player)
+                                 return;
+                             if (response != DialogResponse_Left)
+                             {
+                                 showMenu(*player);
+                                 return;
+                             }
+                             const PlayerSessionService::Session *session = m_sessionService.get(playerId);
+                             if (!session)
+                                 return;
+                             const int familyId = m_familyService.getFamilyId(playerId);
+                             const FamilyService::Family *family = m_familyService.getFamily(familyId);
+                             if (!family)
+                             {
+                                 showMenu(*player);
+                                 return;
+                             }
+                             // Ре-валидация владения на момент клика (диалог мог висеть, пока
+                             // владельца сменили/выгнали).
+                             if (m_familyService.isOwner(playerId))
+                             {
+                                 const std::string familyName = family->name;
+                                 std::vector<int> onlineMembers;
+                                 for (IPlayer *member : m_core.getPlayers().entries())
+                                 {
+                                     if (m_familyService.getFamilyId(member->getID()) == familyId)
+                                         onlineMembers.push_back(member->getID());
+                                 }
+                                 if (!m_familyService.disbandFamily(playerId))
+                                     return;
+                                 // Роспуск: снять шеринг у всех машин семьи. Машины остаются
+                                 // припаркованы ЛИЧНО у дома владельцев (экземпляры не уничтожаются).
+                                 m_parkedService.onFamilyDissolved(familyId);
+                                 const std::string note = u(fmt::format("Семья «{}» распущена", familyName));
+                                 for (const int memberId : onlineMembers)
+                                 {
+                                     if (IPlayer *member = m_core.getPlayers().get(memberId))
+                                         member->sendClientMessage(INFO_COLOUR, note);
+                                 }
+                                 return;
+                             }
 
-void FamilySystem::showDisbandConfirm(IPlayer &player)
-{
-    if (!m_familyService.isOwner(player.getID()))
-    {
-        player.sendClientMessage(ERROR_COLOUR, u("Это может только владелец семьи"));
-        return;
-    }
-    const FamilyService::Family *family = m_familyService.getFamily(m_familyService.getFamilyId(player.getID()));
-    if (!family)
-        return;
-
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u("Роспуск семьи");
-    dialog.body = u(fmt::format("Распустить семью «{}»? Это действие нельзя отменить.", family->name));
-    dialog.leftButton = u("Распустить");
-    dialog.rightButton = u("Назад");
-
-    m_dialogService.show(
-        player, dialog,
-        [this, playerId = player.getID()](DialogResponse response, int, StringView)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
-            if (!player)
-                return;
-            if (response != DialogResponse_Left)
-            {
-                showMenu(*player);
-                return;
-            }
-            // Перепроверка владельца на момент клика.
-            if (!m_familyService.isOwner(playerId))
-            {
-                player->sendClientMessage(ERROR_COLOUR, u("Это может только владелец семьи"));
-                return;
-            }
-            const int familyId = m_familyService.getFamilyId(playerId);
-            const FamilyService::Family *family = m_familyService.getFamily(familyId);
-            const std::string familyName = family ? family->name : "";
-            // Снимок онлайн-членов ДО роспуска — после него слоты обнулятся.
-            std::vector<int> onlineMembers;
-            for (IPlayer *member : m_core.getPlayers().entries())
-            {
-                if (m_familyService.getFamilyId(member->getID()) == familyId)
-                    onlineMembers.push_back(member->getID());
-            }
-
-            if (!m_familyService.disbandFamily(playerId))
-                return;
-
-            // Роспуск: снять шеринг у всех машин семьи (UPDATE family_id -> NO_FAMILY).
-            // Машины ОСТАЮТСЯ припаркованы ЛИЧНО у дома владельцев (не уничтожаются).
-            m_parkedService.onFamilyDissolved(familyId);
-
-            const std::string note = u(fmt::format("Семья «{}» распущена", familyName));
-            for (const int memberId : onlineMembers)
-            {
-                if (IPlayer *member = m_core.getPlayers().get(memberId))
-                    member->sendClientMessage(INFO_COLOUR, note);
-            }
-        });
-}
-
-// ------------------------------------------------------------------ семейные машины
-
-void FamilySystem::showFamilyVehicles(IPlayer &player)
-{
-    const int playerId = player.getID();
-    // Список открыт любому члену (только просмотр). Забрать машину — гейт владельца
-    // на клике, ниже. Без семьи «Машины семьи» в меню не показывается вовсе.
-    const int familyId = m_familyService.getFamilyId(playerId);
-    if (familyId == FamilyService::NO_FAMILY)
-    {
-        player.sendClientMessage(ERROR_COLOUR, u("Вы не состоите в семье"));
-        return;
-    }
-
-    // Список расшаренных семье машин. dbId идентифицирует машину — захватываем вектор
-    // dbId'ов (listItem -> dbId), а не доверяем listItem как id (ре-валидация на клике).
-    std::vector<long long> dbIds = m_parkedService.parkedOfFamily(familyId);
-    if (dbIds.empty())
-    {
-        player.sendClientMessage(ERROR_COLOUR, u("В семье пока нет расшаренных машин"));
-        return;
-    }
-
-    // Пункт — «{n}. {имя}» (без статуса: тут все «в семье» по определению). Имя — из
-    // каталога VehicleModelNames (displayName: пустое имя -> фолбэк «Модель {id}»).
-    std::string body;
-    for (std::size_t i = 0; i < dbIds.size(); ++i)
-    {
-        const ParkedVehicleService::Parked *parked = m_parkedService.byDbId(dbIds[i]);
-        const int model = parked ? parked->model : 0;
-        body += fmt::format("{}. {}\n", i + 1, VehicleModelNames::displayName(model));
-    }
-    if (!body.empty())
-        body.pop_back();
-
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u("Машины семьи");
-    dialog.body = u(body);
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Назад");
-
-    m_dialogService.show(
-        player, dialog,
-        [this, playerId, dbIds](DialogResponse response, int listItem, StringView)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
-            if (!player)
-                return;
-            if (response != DialogResponse_Left)
-            {
-                showMenu(*player); // «Назад» — в меню семьи
-                return;
-            }
-            // Рядовой член только смотрит: закрыть доступ может лишь владелец. Отказ — с
-            // путём: машиной он и так пользуется, тупика нет.
-            if (!m_familyService.isOwner(playerId))
-            {
-                player->sendClientMessage(
-                    ERROR_COLOUR,
-                    u("Закрыть доступ семьи может только владелец семьи. Эти машины доступны всей семье - просто "
-                      "садитесь за руль"));
-                return;
-            }
-            if (listItem < 0 || static_cast<std::size_t>(listItem) >= dbIds.size())
-            {
-                player->sendClientMessage(ERROR_COLOUR, u("Эта машина больше не расшарена семье"));
-                return;
-            }
-            const long long dbId = dbIds[listItem];
-            // Доступ мог быть снят (роспуск/выход) между показом и кликом. familyId —
-            // из СЕРВЕРНОГО состояния на момент клика (мог смениться, если владелец
-            // покинул/сменил семью, пока диалог открыт).
-            if (m_parkedService.parkedMode(dbId) != m_familyService.getFamilyId(playerId))
-            {
-                player->sendClientMessage(ERROR_COLOUR, u("Эта машина больше не расшарена семье"));
-                return;
-            }
-            showTakeVehicleConfirm(*player, dbId);
-        });
-}
-
-void FamilySystem::showTakeVehicleConfirm(IPlayer &player, long long dbId)
-{
-    const ParkedVehicleService::Parked *parked = m_parkedService.byDbId(dbId);
-    if (!parked)
-    {
-        player.sendClientMessage(ERROR_COLOUR, u("Эта машина больше не расшарена семье"));
-        return;
-    }
-    const int model = parked->model;
-
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u("Забрать машину");
-    dialog.body = u(fmt::format("Закрыть доступ семьи к машине (модель {})? Она останется припаркованной у вашего "
-                                "дома, но водить сможете только вы.",
-                                model));
-    dialog.leftButton = u("Забрать");
-    dialog.rightButton = u("Назад");
-
-    m_dialogService.show(
-        player, dialog,
-        [this, playerId = player.getID(), dbId](DialogResponse response, int, StringView)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
-            if (!player)
-                return;
-            if (response != DialogResponse_Left)
-            {
-                showFamilyVehicles(*player); // «Назад» — в список машин
-                return;
-            }
-            // Перепроверка на момент клика: владелец И машина ещё расшарена ЭТОЙ семье.
-            // familyId из СЕРВЕРНОГО состояния, dbId захвачен (не listItem).
-            if (!m_familyService.isOwner(playerId))
-            {
-                player->sendClientMessage(ERROR_COLOUR, u("Закрыть доступ семьи может только владелец семьи"));
-                return;
-            }
-            const int familyId = m_familyService.getFamilyId(playerId);
-            if (m_parkedService.parkedMode(dbId) != familyId)
-            {
-                player->sendClientMessage(ERROR_COLOUR, u("Эта машина больше не расшарена семье"));
-                return;
-            }
-            // unshareFromFamily — ТОЛЬКО UPDATE family_id -> NO_FAMILY: машина остаётся
-            // припаркованной ЛИЧНО у дома владельца (тот же экземпляр Owner::Parked, лишь
-            // гейт доступа сужается до владельца). НЕ уничтожает машину.
-            const std::string familyName = m_familyService.getFamily(familyId)
-                                               ? m_familyService.getFamily(familyId)->name
-                                               : std::string("?");
-            m_parkedService.unshareFromFamily(dbId);
-            player->sendClientMessage(INFO_COLOUR,
-                                      u("Доступ семьи закрыт. Машина осталась припаркованной у вашего дома"));
-
-            // Уведомить онлайн-членов семьи (исчезновение общей машины иначе — как баг).
-            const std::string note = u(fmt::format("[{}] Владелец закрыл доступ к семейной машине", familyName));
-            for (IPlayer *member : m_core.getPlayers().entries())
-            {
-                if (member->getID() != playerId && m_familyService.getFamilyId(member->getID()) == familyId)
-                    member->sendClientMessage(INFO_COLOUR, note);
-            }
-        });
+                             // Рядовой член: простой выход.
+                             const std::string familyName = family->name; // копия до возможного роспуска (страховка)
+                             const FamilyService::AccountId accountId = session->accountId;
+                             const bool disbanded = m_familyService.leaveFamily(*player, session->accountId);
+                             // Крайний случай: последний рядовой участник семьи БЕЗ владельца (не
+                             // должен встречаться из этой ветки — владелец уходит через disband
+                             // выше) — снять шеринг на всякий случай тем же путём, что и раньше.
+                             if (disbanded)
+                                 m_parkedService.onFamilyDissolved(familyId);
+                             else
+                                 m_parkedService.onOwnerLeftFamily(accountId);
+                             player->sendClientMessage(INFO_COLOUR,
+                                                       u(fmt::format("Вы вышли из семьи «{}»", familyName)));
+                             if (!disbanded)
+                             {
+                                 const std::string note = u(fmt::format("[{}] Участник покинул семью", familyName));
+                                 for (IPlayer *member : m_core.getPlayers().entries())
+                                 {
+                                     if (m_familyService.getFamilyId(member->getID()) == familyId)
+                                         member->sendClientMessage(INFO_COLOUR, note);
+                                 }
+                             }
+                         });
 }

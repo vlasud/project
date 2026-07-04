@@ -2,8 +2,9 @@
 
 #include "Services/Core/PlayerChatService/PlayerChatService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
+#include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
+#include "Services/Core/VehicleService/VehicleService.h"
 #include "Services/FamilyService/FamilyService.h"
-#include "Services/HouseService/HouseService.h"
 #include "Services/ParkedVehicleService/ParkedVehicleService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Systems/BaseSystem.h"
@@ -14,18 +15,22 @@
 // Привод бизнес-фичи «Семьи»:
 //  * на старте грузит ВСЕ семьи и их членов из БД в FamilyService;
 //  * по старту/концу сессии резолвит/чистит онлайн-членство игрока;
-//  * /family — одна команда, открывающая меню по состоянию игрока (создать /
-//    состав+пригласить+выйти+распустить);
+//  * /family — одна команда, открывающая меню по состоянию игрока: без семьи —
+//    «Создать семью»; в семье — 5 пунктов (Информация/Члены семьи/Транспорт
+//    семьи/Пригласить/Покинуть семью). Исключение — из подменю члена (список
+//    «Члены семьи» -> выбор -> «Исключить»), отдельного корневого пункта нет;
 //  * /f — семейный чат всем онлайн-членам своей семьи.
 //
-// Всё членство и владелец — серверная правда из FamilyService (клиенту/старому
-// диалогу не доверяем): пригласить может только владелец, согласие приглашённого
-// перепроверяет состояние на момент клика.
+// Всё членство и лидер — серверная правда из FamilyService (клиенту/старому
+// диалогу не доверяем): пригласить/исключить может только лидер, согласие
+// приглашённого перепроверяет состояние на момент клика.
 //
-// ГЕЙТ создания: создать семью можно ТОЛЬКО при наличии дома в собственности
-// (HouseService::ownsHouse по серверному accountId). Проверка серверная, перед
-// FamilyService::createFamily; ключ владельца формируется как в HouseSystem —
-// std::to_string(accountId).
+// Создание семьи свободное: гейта по дому НЕТ (убран решением владельца) — любой
+// авторизованный игрок без семьи создаёт её бесплатно.
+//
+// ПРАВИЛО ВИДИМОСТИ: все 5 пунктов меню «в семье» (и оба пункта подменю члена)
+// видны ВСЕГДА всем членам — недоступность (не лидер) объясняет сам обработчик
+// сообщением при клике, не скрытием пункта (как CarMenuSystem/HomeMenuSystem).
 class FamilySystem : public BaseSystem
 {
   public:
@@ -39,28 +44,46 @@ class FamilySystem : public BaseSystem
     // Семейный чат /f: рассылка всем онлайн-членам своей семьи.
     void familyChat(IPlayer &player, StringView rawText);
 
-    // Меню /family: динамический вектор действий по состоянию игрока.
+    // Меню /family: динамический вектор действий по состоянию игрока (без семьи —
+    // только создание; в семье — 5 пунктов, все видны всегда).
     void showMenu(IPlayer &player);
     void showCreateInput(IPlayer &player);
-    void showRoster(IPlayer &player);              // MSGBOX состава семьи
-    void showInviteInput(IPlayer &player);         // только владелец
-    void showInviteConfirm(IPlayer &invited, int inviterId, int familyId, std::uint32_t inviterSerial);
-    void showLeaveConfirm(IPlayer &player);
-    void showDisbandConfirm(IPlayer &player);      // только владелец
-    void showFamilyVehicles(IPlayer &player);      // только владелец: список расшаренных машин
-    // Под-диалог подтверждения «Забрать» машину dbId из общего пользования семьи.
-    void showTakeVehicleConfirm(IPlayer &player, long long dbId);
 
-    // Действия меню (порядок зависит от состояния — диспетчер ведём по вектору,
-    // не по магическим индексам).
+    // 1: карточка семьи (TABLIST_HEADERS «Поле | Значение»).
+    void showInfo(IPlayer &player);
+    // 2: состав семьи (TABLIST_HEADERS «Игрок | Статус», онлайн-сортировка).
+    // Выбор строки ведёт в подменю члена; listItem резолвится по СНИМКУ порядка
+    // на момент показа (онлайн-сортировка могла перетасовать список под диалогом).
+    void showMembers(IPlayer &player);
+    // Подменю выбранного члена: «Информация» / «Исключить» (оба видны всем —
+    // правило видимости; гейты кика в обработчике).
+    void showMemberActions(IPlayer &player, FamilyService::AccountId targetAccount);
+    // Карточка члена (TABLIST_HEADERS «Поле | Значение», расширяемая).
+    void showMemberInfo(IPlayer &player, FamilyService::AccountId targetAccount);
+    // Актуальная запись состава по accountId (nullptr — уже не член); ре-валидация
+    // на каждом входе подменю/карточки.
+    const FamilyService::Mem *memberByAccount(int playerId, FamilyService::AccountId targetAccount) const;
+    // Онлайн — актуальный «Ник[id]», оффлайн — чищенный снимок Mem::name.
+    std::string memberDisplayName(FamilyService::AccountId targetAccount, const FamilyService::Mem &member) const;
+    // 3: список расшаренных семье машин (формат /car «Мои машины», read-only).
+    void showVehicles(IPlayer &player);
+    // 4: приглашение по id — только лидер.
+    void showInviteInput(IPlayer &player);
+    void showInviteConfirm(IPlayer &invited, int inviterId, int familyId, std::uint32_t inviterSerial);
+    // Подтверждение исключения (только из подменю члена — снимок targetAccount).
+    void showKickConfirm(IPlayer &owner, FamilyService::AccountId targetAccount, const std::string &targetName);
+    // 5: «Покинуть семью» — для лидера это ПОЛНЫЙ РОСПУСК, для рядового — выход.
+    void showLeaveConfirm(IPlayer &player);
+
+    // Действия меню (порядок фиксирован — диспетчер по вектору, не по индексам).
     enum class Action
     {
         Create,
-        Roster,
-        Invite,
+        Info,
+        Members,
         Vehicles,
+        Invite,
         Leave,
-        Disband,
     };
     // Собрать доступные игроку действия в порядке показа.
     std::vector<Action> buildActions(int playerId) const;
@@ -69,6 +92,7 @@ class FamilySystem : public BaseSystem
     PlayerSessionService &m_sessionService;
     PlayerDialogService &m_dialogService;
     PlayerChatService &m_chatService;
-    HouseService &m_houseService; // гейт создания семьи: нужен дом в собственности
-    ParkedVehicleService &m_parkedService; // семейный парк (список расшаренных / забрать = снять шеринг)
+    ParkedVehicleService &m_parkedService; // семейный парк (просмотр списка, read-only)
+    VehicleService &m_vehicleService;      // для ParkedVehicleRow::build (топливо/водитель)
+    ScreenNoticeService &m_screenNotice;   // праздничный попап создания семьи
 };
