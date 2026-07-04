@@ -101,8 +101,12 @@ Milliseconds PlayerWeaponService::minShotInterval(std::uint8_t weaponId)
 
 PlayerWeaponService::Slot *PlayerWeaponService::findWeapon(State &st, std::uint8_t weaponId)
 {
-    const std::uint8_t slot = WeaponSlotData(weaponId).slot();
-    if (slot == INVALID_WEAPON_SLOT)
+    // slot() возвращает int8_t (-1 для бесслотового оружия: id 19/20/21 и id>=47).
+    // Держим ЗНАКОВЫЙ тип: через uint8_t -1 стал бы 255 и сравнение с int8_t(-1)
+    // всегда false, а st.slots[255] на массиве из MAX_WEAPON_SLOTS — OOB. Верхнюю
+    // границу проверяем явно — защита от будущего вызывающего с невалидным id.
+    const std::int8_t slot = WeaponSlotData(weaponId).slot();
+    if (slot < 0 || slot >= MAX_WEAPON_SLOTS)
         return nullptr;
     Slot &entry = st.slots[slot];
     return entry.id == weaponId ? &entry : nullptr;
@@ -110,8 +114,8 @@ PlayerWeaponService::Slot *PlayerWeaponService::findWeapon(State &st, std::uint8
 
 const PlayerWeaponService::Slot *PlayerWeaponService::findWeapon(const State &st, std::uint8_t weaponId) const
 {
-    const std::uint8_t slot = WeaponSlotData(weaponId).slot();
-    if (slot == INVALID_WEAPON_SLOT)
+    const std::int8_t slot = WeaponSlotData(weaponId).slot();
+    if (slot < 0 || slot >= MAX_WEAPON_SLOTS)
         return nullptr;
     const Slot &entry = st.slots[slot];
     return entry.id == weaponId ? &entry : nullptr;
@@ -143,8 +147,10 @@ std::uint8_t PlayerWeaponService::getArmedWeapon(int playerId) const
 
 void PlayerWeaponService::giveWeapon(IPlayer &player, std::uint8_t weaponId, std::uint32_t ammo)
 {
-    const std::uint8_t slotIndex = WeaponSlotData(weaponId).slot();
-    if (slotIndex == INVALID_WEAPON_SLOT)
+    // Знаковый тип обязателен: uint8_t превратил бы -1 в 255 и guard бы не сработал
+    // (см. findWeapon) — здесь это была бы OOB-ЗАПИСЬ в st.slots[255].
+    const std::int8_t slotIndex = WeaponSlotData(weaponId).slot();
+    if (slotIndex < 0 || slotIndex >= MAX_WEAPON_SLOTS)
         return;
 
     State &st = m_state[player.getID()];
