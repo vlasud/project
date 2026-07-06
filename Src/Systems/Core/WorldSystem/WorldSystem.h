@@ -11,6 +11,11 @@ class WorldSystem : public BaseSystem, public PlayerSpawnEventHandler, public Pl
   public:
     WorldSystem(ICore &core, const ServiceRegister &serviceRegister);
 
+    // Режимы, которым нужен ЖИВОЙ таймер, включаются здесь, а не в конструкторе:
+    // ITimersComponent приходит в TimerService только в TimerSystem::initialize
+    // (та же ловушка, что документирует AutosaveSystem).
+    void initialize(IComponentList *components) override;
+
     void onPlayerSpawn(IPlayer &player) override;
     void onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason) override;
 

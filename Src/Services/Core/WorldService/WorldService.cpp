@@ -2,6 +2,7 @@
 
 #include "core.hpp"
 #include <algorithm>
+#include <ctime>
 
 // ------------------------------------------------------------------ время
 
@@ -28,6 +29,10 @@ void WorldService::getTime(int &hour, int &minute) const
 void WorldService::setTimeFlowing(bool flowing, Milliseconds realPerGameMinute)
 {
     m_flowing = flowing;
+    if (flowing)
+    {
+        m_realTime = false; // взаимоисключение: один писатель времени
+    }
     m_perGameMinute = std::max(realPerGameMinute, Milliseconds(50));
     rescheduleClock();
 }
@@ -35,6 +40,21 @@ void WorldService::setTimeFlowing(bool flowing, Milliseconds realPerGameMinute)
 bool WorldService::isTimeFlowing() const
 {
     return m_flowing;
+}
+
+void WorldService::setRealTimeSync(bool enable)
+{
+    m_realTime = enable;
+    if (enable)
+    {
+        m_flowing = false; // взаимоисключение: один писатель времени
+    }
+    rescheduleClock();
+}
+
+bool WorldService::isRealTimeSynced() const
+{
+    return m_realTime;
 }
 
 // ------------------------------------------------------------------ погода
@@ -241,6 +261,44 @@ void WorldService::advanceMinute()
     broadcastTime();
 }
 
+void WorldService::applyRealTime()
+{
+    // Локальное время машины сервера; localtime — только главный поток (static-
+    // буфер), значения копируются сразу. Перевод системных часов/DST не требует
+    // обработки: следующий тик прочитает актуальное время и просто перескочит на
+    // него (скачок освещения на час при DST — приемлем).
+    int hour = m_hour;
+    int minute = m_minute;
+    int second = 0;
+    const std::time_t now = std::time(nullptr);
+    if (const std::tm *local = std::localtime(&now))
+    {
+        hour = std::clamp(local->tm_hour, 0, 23);
+        minute = std::clamp(local->tm_min, 0, 59);
+        second = local->tm_sec;
+    }
+
+    // Как advanceMinute: InitGame-час ядру — только при СМЕНЕ часа (setWorldTime
+    // сам рассылает свой RPC всем — каждую минуту он был бы дублем broadcastTime).
+    if (hour != m_hour && m_core)
+    {
+        m_core->setWorldTime(Hours(hour));
+    }
+    m_hour = hour;
+    m_minute = minute;
+    broadcastTime();
+
+    if (m_timers)
+    {
+        // Перепланируем себя на границу следующей реальной минуты (+250мс зазора,
+        // чтобы не проснуться на 59-й секунде той же минуты из-за огрубления
+        // таймера; leap second tm_sec==60 гасится клампом). Перезапись своего же
+        // хэндла из колбэка безопасна (контракт TimerService).
+        const int untilNextMinute = 60 - std::clamp(second, 0, 59);
+        m_clockTimer = m_timers->setTimeout(Milliseconds(untilNextMinute * 1000 + 250), [this] { applyRealTime(); });
+    }
+}
+
 void WorldService::rescheduleClock()
 {
     if (!m_timers)
@@ -248,7 +306,11 @@ void WorldService::rescheduleClock()
         return;
     }
     m_timers->cancel(m_clockTimer);
-    if (m_flowing)
+    if (m_realTime)
+    {
+        applyRealTime(); // применить сразу + самопланирование по границам минут
+    }
+    else if (m_flowing)
     {
         m_clockTimer = m_timers->setInterval(m_perGameMinute, [this] { advanceMinute(); });
     }

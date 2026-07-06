@@ -36,6 +36,14 @@ class WorldService final : public IService
     // Течение времени: одна игровая минута за realPerGameMinute (выкл по умолчанию).
     void setTimeFlowing(bool flowing, Milliseconds realPerGameMinute = Milliseconds(1000));
     bool isTimeFlowing() const;
+    // Синхронизация игрового времени с РЕАЛЬНЫМИ часами сервера (локальное время
+    // машины): игровое время выставляется в текущее серверное на границе каждой
+    // реальной минуты — полный цикл день/ночь за 24 реальных часа. ВЗАИМОИСКЛЮЧЕНИЕ
+    // с setTimeFlowing: включение одного режима выключает другой (два конкурирующих
+    // писателя времени). Ручной setTime при включённом синке перетрётся на
+    // следующей границе минуты — для ручного времени сначала выключи синк.
+    void setRealTimeSync(bool enable);
+    bool isRealTimeSynced() const;
 
     // --- погода ---
     void setWeather(int weatherId); // глобально (персональные оверрайды переживают смену)
@@ -75,6 +83,9 @@ class WorldService final : public IService
     void resetPlayer(int playerId);
 
     void advanceMinute(); // тик течения времени
+    // Применить реальное серверное время сейчас + перепланировать себя на границу
+    // следующей реальной минуты (self-rescheduling через m_clockTimer).
+    void applyRealTime();
     void rescheduleClock();
     void broadcastTime();
 
@@ -84,6 +95,7 @@ class WorldService final : public IService
     int m_hour = 12;
     int m_minute = 0;
     bool m_flowing = false;
+    bool m_realTime = false; // игровое время = реальные часы сервера
     Milliseconds m_perGameMinute{1000};
     TimerService::Handle m_clockTimer{};
 

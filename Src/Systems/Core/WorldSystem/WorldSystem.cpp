@@ -19,6 +19,17 @@ WorldSystem::WorldSystem(ICore &core, const ServiceRegister &serviceRegister)
     m_worldService.setInteriorEnterExits(false);
 }
 
+void WorldSystem::initialize(IComponentList * /*components*/)
+{
+    // Динамическая смена дня и ночи: игровое время = реальные часы машины
+    // сервера (полный цикл за 24 реальных часа), обновление на границе каждой
+    // реальной минуты. Именно в initialize: конструкторная фаза ещё без
+    // ITimersComponent — setTimeout дропнулся бы и время застыло на стартовом.
+    // HUD-часы при этом НЕ включаем: с ними клиент сам тикает время в игровом
+    // темпе (1 мин/сек) и между синками расходился бы с сервером.
+    m_worldService.setRealTimeSync(true);
+}
+
 void WorldSystem::onPlayerSpawn(IPlayer &player)
 {
     m_worldService.handleSpawn(player);
