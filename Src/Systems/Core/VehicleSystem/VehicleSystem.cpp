@@ -137,35 +137,30 @@ void VehicleSystem::onPlayerEnterVehicle(IPlayer &player, IVehicle &vehicle, boo
 
 bool VehicleSystem::onVehicleMod(IPlayer &player, IVehicle &vehicle, int component)
 {
+    // Клиентский мод-гараж больше НЕ источник тюнинга: ядро НИКОГДА не применяет
+    // клиентскую заявку. record не ложно-банит легитимного игрока — outcome.vehicleHack
+    // остаётся false (и detail пуст) для честного визита мод-шопа (см. validateMod);
+    // читерская заявка (не водитель/битый id/вне зоны) по-прежнему пишет нарушение.
     VehicleService::Outcome outcome = m_vehicleService.validateMod(player, vehicle, component, now());
-    if (outcome.vehicleHack)
-    {
-        record(player, outcome);
-        return false; // мод вне мод-шопа / не водителем ядро не применит
-    }
-    return true;
+    record(player, outcome);
+    return false;
 }
 
 bool VehicleSystem::onVehiclePaintJob(IPlayer &player, IVehicle &vehicle, int paintJob)
 {
+    // См. onVehicleMod — клиентский пейнтджоб тоже больше не источник.
     VehicleService::Outcome outcome = m_vehicleService.validatePaintJob(player, vehicle, paintJob, now());
-    if (outcome.vehicleHack)
-    {
-        record(player, outcome);
-        return false; // пейнтджоб вне мод-шопа / не водителем ядро не применит
-    }
-    return true;
+    record(player, outcome);
+    return false;
 }
 
 bool VehicleSystem::onVehicleRespray(IPlayer &player, IVehicle &vehicle, int colour1, int colour2)
 {
+    // См. onVehicleMod — клиентская перекраска тоже больше не источник (репейр
+    // Pay'n'Spray/мод-шопа validateRespray сохраняет отдельно от исхода цвета).
     VehicleService::Outcome outcome = m_vehicleService.validateRespray(player, vehicle, now());
-    if (outcome.vehicleHack)
-    {
-        record(player, outcome);
-        return false;
-    }
-    return true;
+    record(player, outcome);
+    return false;
 }
 
 void VehicleSystem::onEnterExitModShop(IPlayer &player, bool enterexit, int interiorID)

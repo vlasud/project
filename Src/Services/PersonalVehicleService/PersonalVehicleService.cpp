@@ -1,12 +1,79 @@
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 
 #include <cmath>
+#include <nlohmann/json.hpp>
 
 namespace
 {
 bool validPlayer(int playerId)
 {
     return playerId >= 0 && playerId < MAX_PLAYERS;
+}
+
+// Диапазон id компонентов SA-MP (VehicleComponent, тот же, что форсит
+// VehicleService::validateMod для клиентских SCM-заявок) — мусор из БД не должен
+// доехать до SDK addComponent.
+bool validComponent(int component)
+{
+    return component >= 1000 && component <= 1193;
+}
+
+// Валидный диапазон цвета машины SA (индекс палитры 0..255 либо -1 «не задано»).
+bool validColour(int colour)
+{
+    return colour >= 0 && colour <= 255;
+}
+
+// Валидный диапазон пейнтджоба SA (0..2 варианта на модель, как в
+// VehicleService::validatePaintJob) либо -1 «нет пейнтджоба».
+bool validPaintJob(int paintJob)
+{
+    return paintJob >= 0 && paintJob <= 2;
+}
+
+// Распарсить JSON-массив компонентов из БД: битый JSON/не-массив -> пустой набор
+// (не крашим сессию мусорной строкой); каждый элемент валидируется отдельно —
+// один мусорный id пропускается, остальные компоненты не теряются.
+std::vector<int> componentsFromJson(const std::string &json)
+{
+    std::vector<int> result;
+    if (json.empty())
+    {
+        return result;
+    }
+    nlohmann::json root;
+    try
+    {
+        root = nlohmann::json::parse(json);
+    }
+    catch (...)
+    {
+        return result; // битый JSON — пустой набор
+    }
+    if (!root.is_array())
+    {
+        return result;
+    }
+    for (const auto &item : root)
+    {
+        // Верхняя граница на ЧИСЛО компонентов: реальная машина держит максимум
+        // COMPONENT_SLOT_COUNT модов; крафтнутая/битая строка с огромным массивом
+        // не должна раздувать вектор и цикл addComponent (defense-in-depth).
+        if (result.size() >= static_cast<std::size_t>(VehicleService::COMPONENT_SLOT_COUNT))
+        {
+            break;
+        }
+        if (!item.is_number_integer())
+        {
+            continue;
+        }
+        const int component = item.get<int>();
+        if (validComponent(component))
+        {
+            result.push_back(component);
+        }
+    }
+    return result;
 }
 
 // Кламп персистентного fuel 0..CAP; мусор (NaN/Inf) -> дефолт «нет сохранённого».
@@ -117,28 +184,50 @@ PersonalVehicleService::SpawnResult PersonalVehicleService::spawn(int playerId, 
 
     OwnedVehicle &entry = owned[ownedIndex];
 
-    // Пере-спавн: экземпляр уже стоит — СНАЧАЛА снимаем его остаток топлива (иначе
-    // «убрать в гараж -> вызвать заново» доливало бы бак бесплатно, см. Docs/
-    // GameDesign/Economy.md «Задел на будущий сток»), ПОТОМ уничтожаем старый. destroy
-    // СИНХРОННО триггерит onWorldVehicleDestroyed по старому id, который обнулит
-    // entry.vehicleId (запись НЕ удаляется — индекс/ссылка entry стабильны), мы ниже
-    // пишем новый id.
+    // Пере-спавн: экземпляр уже стоит — СНАЧАЛА снимаем его остаток топлива и
+    // внешний вид (иначе «убрать в гараж -> вызвать заново» доливало бы бак бесплатно
+    // и сбрасывало бы вид, см. Docs/GameDesign/Economy.md «Задел на будущий сток» и
+    // Docs/PersonalVehicle.md «Персист внешнего вида»), ПОТОМ уничтожаем старый.
+    // destroy СИНХРОННО триггерит onWorldVehicleDestroyed по старому id, который
+    // обнулит entry.vehicleId (запись НЕ удаляется — индекс/ссылка entry стабильны),
+    // мы ниже пишем новый id.
     if (entry.vehicleId != -1)
     {
         entry.fuel = m_vehicleService->getFuel(entry.vehicleId);
+        const std::pair<int, int> colour = m_vehicleService->getColour(entry.vehicleId);
+        entry.colour1 = colour.first;
+        entry.colour2 = colour.second;
+        entry.paintJob = m_vehicleService->getPaintJob(entry.vehicleId);
+        m_vehicleService->getComponents(entry.vehicleId, entry.components);
         m_vehicleService->destroy(entry.vehicleId);
         entry.vehicleId = -1; // на случай, если наблюдатель не сработал (страховка)
     }
 
+    // Цвет — из сохранённого снимка (entry.colour1 >= 0), иначе аргументы вызывающего
+    // (обычно -1/-1 = рандом ядра, как сегодня передаёт ParkingSystem).
+    const int spawnColour1 = entry.colour1 >= 0 ? entry.colour1 : colour1;
+    const int spawnColour2 = entry.colour1 >= 0 ? entry.colour2 : colour2;
+
     // Машина — только через VehicleService::create (тег Owner::Player, ownerId =
     // playerId). nullptr — пул машин ядра исчерпан; старую (если был пере-спавн) уже
     // уничтожили, vehicleId остался -1, владение цело.
-    IVehicle *vehicle =
-        m_vehicleService->create(entry.model, position, angle, colour1, colour2, VehicleService::Owner::Player,
-                                 playerId);
+    IVehicle *vehicle = m_vehicleService->create(entry.model, position, angle, spawnColour1, spawnColour2,
+                                                 VehicleService::Owner::Player, playerId);
     if (!vehicle)
     {
         return SpawnResult::PoolFull;
+    }
+
+    // Пейнтджоб и компоненты — серверные вызовы (не клиентские SCM-заявки), анти-чит
+    // мод-шопа их не видит (см. VehicleService::addComponent). entry.paintJob < 0 —
+    // нет сохранённого, оставляем дефолт create (нет пейнтджоба).
+    if (entry.paintJob >= 0)
+    {
+        m_vehicleService->setPaintJob(*vehicle, entry.paintJob);
+    }
+    for (int component : entry.components)
+    {
+        m_vehicleService->addComponent(*vehicle, component);
     }
 
     // Применить персистентный остаток поверх дефолтного полного бака от create:
@@ -213,6 +302,67 @@ float PersonalVehicleService::fuelOf(int playerId, int ownedIndex) const
     return owned[ownedIndex].fuel;
 }
 
+void PersonalVehicleService::setAppearance(int playerId, int ownedIndex, int colour1, int colour2, int paintJob,
+                                           const std::vector<int> &components)
+{
+    if (!validPlayer(playerId))
+    {
+        return;
+    }
+    std::vector<OwnedVehicle> &owned = m_owned[playerId];
+    if (ownedIndex < 0 || ownedIndex >= static_cast<int>(owned.size()))
+    {
+        return;
+    }
+    OwnedVehicle &entry = owned[ownedIndex];
+    // Пара цвета неразделима: colour1 < 0 (либо любой вне диапазона) — «нет
+    // сохранённого», colour2 форсится вместе с ним (не бывает наполовину
+    // сохранённого цвета).
+    if (!validColour(colour1) || !validColour(colour2))
+    {
+        entry.colour1 = -1;
+        entry.colour2 = -1;
+    }
+    else
+    {
+        entry.colour1 = colour1;
+        entry.colour2 = colour2;
+    }
+    entry.paintJob = validPaintJob(paintJob) ? paintJob : -1;
+    entry.components.clear();
+    for (int component : components)
+    {
+        if (validComponent(component))
+        {
+            entry.components.push_back(component);
+        }
+    }
+}
+
+const PersonalVehicleService::OwnedVehicle *PersonalVehicleService::appearanceOf(int playerId, int ownedIndex) const
+{
+    if (!validPlayer(playerId))
+    {
+        return nullptr;
+    }
+    const std::vector<OwnedVehicle> &owned = m_owned[playerId];
+    if (ownedIndex < 0 || ownedIndex >= static_cast<int>(owned.size()))
+    {
+        return nullptr;
+    }
+    return &owned[ownedIndex];
+}
+
+std::string PersonalVehicleService::componentsToJson(const std::vector<int> &components)
+{
+    nlohmann::json array = nlohmann::json::array();
+    for (int component : components)
+    {
+        array.push_back(component);
+    }
+    return array.dump();
+}
+
 int PersonalVehicleService::count(int playerId) const
 {
     if (!validPlayer(playerId))
@@ -271,7 +421,8 @@ bool PersonalVehicleService::attach(long long dbId, int vehicleId)
     return false;
 }
 
-void PersonalVehicleService::load(int playerId, const std::vector<std::tuple<long long, int, double>> &rows)
+void PersonalVehicleService::load(
+    int playerId, const std::vector<std::tuple<long long, int, double, int, int, int, std::string>> &rows)
 {
     if (!validPlayer(playerId))
     {
@@ -281,19 +432,29 @@ void PersonalVehicleService::load(int playerId, const std::vector<std::tuple<lon
     // сессии). Кладём владения БЕЗ записи в БД (это загрузка, не покупка). Модель из
     // БД фильтруем тем же validModel — мусорная/устаревшая запись не даст спавнить.
     // dbId (id строки) сохраняем — по нему шеринг ссылается на конкретную машину.
-    // fuel клампится 0..CAP (мусор из БД — NaN/отрицательное/сверх капасити).
+    // fuel клампится 0..CAP; цвет/пейнтджоб/компоненты валидируются (мусор из БД —
+    // не сохранено/пропущен, не крашит и не уходит в SDK на spawn).
     std::vector<OwnedVehicle> &owned = m_owned[playerId];
     owned.clear();
-    for (const auto &[dbId, model, fuel] : rows)
+    for (const auto &[dbId, model, fuel, colour1, colour2, paintJob, componentsJson] : rows)
     {
         if (static_cast<int>(owned.size()) >= MAX_PERSONAL_VEHICLES)
         {
             break; // лимит мог уменьшиться в коде — лишние строки БД просто не грузим
         }
-        if (validModel(model))
+        if (!validModel(model))
         {
-            owned.push_back(OwnedVehicle{model, -1, dbId, clampFuel(fuel)});
+            continue;
         }
+        OwnedVehicle entry{model, -1, dbId, clampFuel(fuel)};
+        if (validColour(colour1) && validColour(colour2))
+        {
+            entry.colour1 = colour1;
+            entry.colour2 = colour2;
+        }
+        entry.paintJob = validPaintJob(paintJob) ? paintJob : -1;
+        entry.components = componentsFromJson(componentsJson);
+        owned.push_back(std::move(entry));
     }
     m_loaded[playerId] = true; // зеркало легло — покупка разблокирована
 }

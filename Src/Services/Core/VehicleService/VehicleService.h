@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 class GridService; // пространственный индекс машин — для anyVehicleNear (указатель-член)
@@ -227,6 +228,27 @@ class VehicleService final : public IService
     using VehicleMoveObserver = std::function<void(IVehicle &, Vector3 acceptedPosition)>;
     void subscribeMoved(VehicleMoveObserver observer);
 
+    // Наблюдатель ПРИМЕНЁННОГО СЕРВЕРОМ тюнинга (компонент/пейнтджоб/цвет) —
+    // зовётся ТОЛЬКО из notifyServerTuned, которую явно дёргает вызывающий бизнес
+    // ПОСЛЕ installComponent/setColour/setPaintJob (дев-команда, будущее игровое
+    // меню). Клиентский мод-гараж/Pay'n'Spray тюнинг больше НЕ подтверждают —
+    // validateMod/validatePaintJob/validateRespray их отклоняют всегда (см. ниже),
+    // сюда они не ведут. Только ФАКТ, без пула машин: бизнес, персистящий внешний
+    // вид (см. PersonalVehicleService), может снять снимок сразу, не дожидаясь
+    // деспавна — тюнинг переживёт краш до штатного уничтожения экземпляра. Главный
+    // поток, событийно (тюнинг — редкое действие, не per-tick).
+    using TunedObserver = std::function<void(IVehicle &)>;
+    void subscribeTuned(TunedObserver observer);
+    // Оповестить subscribeTuned о СЕРВЕРНО применённом тюнинге. В отличие от
+    // прежнего клиентского accept-пути (когда ядро применяло мод/пейнтджоб/цвет
+    // синхронно ПОСЛЕ возврата из event-хендлера), installComponent/setColour/
+    // setPaintJob — прямые вызовы: к моменту этого вызова состояние машины УЖЕ
+    // отражает изменение, наблюдатель может читать getComponentInSlot/getColour/
+    // getPaintJob хоть синхронно. Вызывающий сам решает, когда его звать — низкие
+    // addComponent/setPaintJob/setColour его НЕ зовут (см. их комментарий), иначе
+    // переприменение персиста на спавне дало бы ре-энтрантный снимок.
+    void notifyServerTuned(IVehicle &vehicle);
+
     // Машина застримлена конкретному игроку (VehicleEventHandler::onVehicleStreamIn,
     // проброшено VehicleSystem). Ядро НЕ восстанавливает пер-игроковые params
     // (setParamsForPlayer) при повторном стрим-ине — бизнес, владеющий пер-игроковым
@@ -322,11 +344,76 @@ class VehicleService final : public IService
     // уничтожении машины.
     void setEditBypass(int vehicleId, bool enable);
 
-    // Серверный тюнинг (бизнес-логика тюнинг-салонов, /nitro и т.п.).
-    // Клиентские заявки на моды валидируются в validateMod: вне мод-шопа — чит.
+    // Серверный тюнинг — ЕДИНСТВЕННЫЙ источник (бизнес-логика тюнинг-салонов,
+    // дев-команда, будущее игровое меню). Это ПРЯМЫЕ вызовы IVehicle-примитива
+    // (широковещательный RPC клиентам), НЕ клиентские SCM-заявки: клиентский
+    // нативный мод-гараж/Pay'n'Spray как ИСТОЧНИК тюнинга ОТКЛЮЧЕНЫ —
+    // validateMod/validatePaintJob/validateRespray теперь ВСЕГДА отклоняют
+    // событийный путь onVehicleMod/onVehiclePaintJob/onVehicleRespray (см. их
+    // комментарии), ядро не применяет клиентский мод/пейнтджоб/цвет ни в каком
+    // случае. Персист внешнего вида (см. PersonalVehicleService) применяет
+    // сохранённый тюнинг именно этими вызовами.
+    //
+    // Диапазон/валидность компонента (1000..1193 И подходит модели —
+    // isValidComponentForVehicleModel) и пейнтджоба (0..2) — мусор извне
+    // (дев-команда/персист/будущее UI) тихо отбрасывается, без краша.
     void addComponent(IVehicle &vehicle, int component);
     void removeComponent(IVehicle &vehicle, int component);
     void setPaintJob(IVehicle &vehicle, int paintjob);
+
+    // Установить компонент с ЯВНОЙ заменой слота: валидирует диапазон/модель,
+    // резолвит слот компонента (getVehicleComponentSlot) и явно СНИМАЕТ текущий
+    // компонент этого слота (если был и отличается) ПЕРЕД установкой нового —
+    // «один компонент на слот» с явным RemoveVehicleComponent-RPC старой детали
+    // клиентам, а не расчёт на неявную перезапись mods[slot] внутри ядрового
+    // addComponent. Мусорный/невалидный для модели компонент — no-op.
+    // Предпочтительный способ поставить тюнинг-компонент.
+    void installComponent(IVehicle &vehicle, int component);
+
+    // Число слотов компонентов машины (SDK MAX_VEHICLE_COMPONENT_SLOT — 16: 14
+    // стримятся в стандартном stream-in RPC + 2 доп. бампера отдельным SCM).
+    // Единый источник правды диапазона getComponentInSlot/снимка компонентов.
+    static constexpr int COMPONENT_SLOT_COUNT = MAX_VEHICLE_COMPONENT_SLOT;
+
+    // Цвет машины (обёртка IVehicle::getColour) — {-1,-1} для несуществующей.
+    // Для снятия снимка персистом внешнего вида (бизнес не зовёт сырой SDK).
+    std::pair<int, int> getColour(int vehicleId) const;
+    // Серверная смена цвета (обёртка IVehicle::setColour) — для дев-команды/
+    // будущего UI и применения сохранённого снимка (сейчас цвет также задаётся
+    // через create). Диапазон 0..255 на канал — вне диапазона no-op (иначе ядро
+    // молча маскирует & 0xFF, что вводит в заблуждение вызывающего).
+    void setColour(IVehicle &vehicle, int colour1, int colour2);
+
+    // Пейнтджоб машины (обёртка IVehicle::getPaintJob) — -1 для несуществующей
+    // машины ЛИБО отсутствия пейнтджоба (ядро само хранит -1 = «нет пейнтджоба»
+    // после -1 back-conversion в Vehicle::getPaintJob).
+    int getPaintJob(int vehicleId) const;
+
+    // Снимок установленных компонентов машины: обходит слоты 0..COMPONENT_SLOT_COUNT-1
+    // (getComponentInSlot), непустые (!=0) id складывает в out. out очищается перед
+    // заполнением. Для несуществующей машины out остаётся пустым. O(слотов) — холодный
+    // путь (снятие снимка на спавне/деспавне/событии мода, не per-tick).
+    void getComponents(int vehicleId, std::vector<int> &out) const;
+
+    // --- удобное API перечисления тюнинга (для меню без ручного ввода id) ---
+
+    // Слот компонента (обёртка Impl::getVehicleComponentSlot из SDK) — id вне
+    // диапазона 1000..1193 даёт VehicleComponent_None (-1), как и мусорный id
+    // внутри диапазона у самого SDK. Бизнес-слой строит по слоту меню/подпись.
+    int getComponentSlot(int component) const;
+
+    // Все компоненты диапазона 1000..1193, которые ОДНОВРЕМЕННО принадлежат
+    // указанному слоту (getVehicleComponentSlot) И валидны для модели
+    // (isValidComponentForVehicleModel) — ядро удобного API «какие детали слота
+    // подходят этой машине». out очищается перед заполнением; невалидный slot
+    // (вне 0..COMPONENT_SLOT_COUNT-1) оставляет out пустым. O(диапазона
+    // компонентов, максимум 194) — холодный путь построения меню, не per-tick.
+    void componentsForSlot(int model, int slot, std::vector<int> &out) const;
+
+    // Компонент, установленный в указанном слоте машины (getComponentInSlot):
+    // 0 — слот пуст, -1 — несуществующая машина или мусорный slot. Для показа
+    // «сейчас стоит» и определения, что снимать при установке новой детали.
+    int installedInSlot(int vehicleId, int slot) const;
 
     struct Outcome
     {
@@ -362,23 +449,34 @@ class VehicleService final : public IService
                                TimePoint now);
     Outcome validateTrailer(IPlayer &reporter, IVehicle &trailer, TimePoint now);
 
-    // Клиентская заявка на мод: легальна только от водителя ЭТОЙ машины с
-    // валидным id компонента, в серверно-подтверждённой сессии мод-шопа
-    // (Occupant::inModShop) и с машиной, НЕПРЕРЫВНО простоявшей в зоне шопа
-    // (RepairZones) не меньше ZONE_DWELL_MIN (см. verifyHealth). Иначе —
-    // отклонить + нарушение.
+    // Клиентская заявка на мод (AddComponent SCM) — ИСТОЧНИКОМ тюнинга больше не
+    // является: клиентский нативный мод-гараж отключён, тюнинг только серверный
+    // (installComponent/дев-команда/будущее меню). VehicleSystem::onVehicleMod
+    // ВСЕГДА возвращает false ядру (мод не применяется), но ЭТА функция различает
+    // ДВА мотива отказа:
+    //  * заявка НЕ прошла бы старый гейт (не водитель / битый id компонента / вне
+    //    серверно-подтверждённой сессии мод-шопа с dwell ZONE_DWELL_MIN) — это
+    //    чит-меню (нитро/гидравлика где угодно): vehicleHack=true, нарушение;
+    //  * заявка ПРОШЛА БЫ старый гейт (честный водитель, честно заехавший в
+    //    мод-гараж и выбравший деталь) — легитимный игрок, просто клиентский
+    //    путь тюнинга запрещён: vehicleHack=false, БЕЗ нарушения. sanctionRepair
+    //    здесь больше НЕ зовём (мод-шоп уже чинит на onModShop-enter).
     Outcome validateMod(IPlayer &player, IVehicle &vehicle, int component, TimePoint now);
     // Заявка на пейнтджоб (SetPaintjob SCM, ядро само его НЕ гейтит — дефолтная
-    // onVehiclePaintJob в SDK возвращает true): та же зона/сессия мод-шопа, что
-    // и validateMod (SA даёт пейнтджоб только в мод-шопе, не на Pay'n'Spray),
-    // плюс валидный диапазон id (0..2 — число вариантов на модель в SA). Мод-шоп
-    // и без пейнтджоба чинит машину при входе/AddComponent — санкцию здесь не
-    // повторяем (пейнтджоб её не даёт и на честном клиенте).
+    // onVehiclePaintJob в SDK возвращает true) — та же ЛОГИКА ДВУХ МОТИВОВ отказа,
+    // что и validateMod (та же зона/сессия/диапазон 0..2): вне зоны/не водитель —
+    // vehicleHack (чит), в зоне легально — reject без нарушения (клиентский
+    // пейнтджоб больше не источник). Санкцию ремонта здесь не зовём (её и раньше
+    // не повторяли — пейнтджоб её не даёт и на честном клиенте).
     Outcome validatePaintJob(IPlayer &player, IVehicle &vehicle, int paintJob, TimePoint now);
-    // Перекраска: легальна от водителя с машиной, НЕПРЕРЫВНО простоявшей у
-    // ремзоны (Pay'n'Spray либо мод-шоп в сессии) не меньше ZONE_DWELL_MIN;
-    // принятие даёт санкцию ремонта — Pay'n'Spray чинит машину на клиенте. Вне
-    // зоны / без выдержки — фейковый SCM: нарушение без санкции.
+    // Перекраска (SetColour SCM) — та же логика двух мотивов: вне ремзоны/не
+    // водитель — vehicleHack (чит), у ремзоны (Pay'n'Spray либо мод-шоп в сессии)
+    // с dwell ZONE_DWELL_MIN — легитимно, но ОТКЛОНЯЕМ (клиентский Pay'n'Spray/
+    // мод-шоп больше не источник цвета). sanctionRepair НА ЛЕГИТИМНОЙ ветке
+    // СОХРАНЁН: Pay'n'Spray чинит машину на клиенте НЕЗАВИСИМО от того, применит
+    // ли сервер SetColour (это встроенное поведение движка GTA:SA в зоне, не
+    // завязанное на исход SCM-пакета) — без sanctionRepair честный визит перестал
+    // бы чинить машину, а следующий driver-sync с полным HP словил бы repair-hack.
     Outcome validateRespray(IPlayer &player, IVehicle &vehicle, TimePoint now);
     // Вход/выход мод-шопа (клиентский SCM): вход принимается только с машиной,
     // НЕПРЕРЫВНО простоявшей у ворот известного шопа (RepairZones) не меньше
@@ -543,6 +641,7 @@ class VehicleService final : public IService
     std::vector<FuelEmptyObserver> m_fuelEmptyObservers;
     std::vector<EngineBrokenObserver> m_engineBrokenObservers;
     std::vector<StreamedInForPlayerObserver> m_streamedInForPlayerObservers;
+    std::vector<TunedObserver> m_tunedObservers;
 
     std::array<VehicleState, VEHICLE_POOL_SIZE> m_vehicleState;
     std::array<Occupant, MAX_PLAYERS> m_occupants;

@@ -23,6 +23,9 @@
 //  /vdev           — меню-диалог: создать машину владельца Work через единый
 //                    VehicleService::create + заправить машину, в которой сидишь +
 //                    взорвать текущую машину (форсированная смерть в обход стола).
+//  /vtune          — меню-диалог тюнинга СВОЕЙ машины (слоты компонентов/цвет/
+//                    пейнтджоб) без ручного ввода id; прототип будущего игрового
+//                    меню тюнинга поверх того же API VehicleService.
 class VehicleDebugSystem : public BaseSystem
 {
   public:
@@ -31,8 +34,29 @@ class VehicleDebugSystem : public BaseSystem
     void initialize(IComponentList *components) override;
 
   private:
-    IVehicle *currentVehicle(IPlayer &player); // машина игрока или сообщение об ошибке
+    IVehicle *currentVehicle(IPlayer &player); // машина игрока (любое сиденье) или сообщение об ошибке
+    // Машина, ТОЛЬКО если дев за рулём (seat==0) — для мутирующих команд тюнинга:
+    // getVehicle отдаёт машину для ЛЮБОГО занятого места, и без гейта дев-пассажир
+    // мог бы тюнить ЧУЖУЮ машину. Иначе сообщение + nullptr (как currentVehicle).
+    IVehicle *drivenVehicle(IPlayer &player);
     void showDevMenu(IPlayer &player);          // /vdev: тест create+owner+fuel+refuel
+
+    // --- /vtune: меню тюнинга без ручного ввода id ---
+
+    // Корень: по пункту на каждый слот компонентов + «Цвет» + «Пейнтджоб».
+    // vehicleId захватывается здесь и ре-валидируется на каждом клике под-меню
+    // (дев мог пересесть/машину могли уничтожить, пока диалог висел).
+    void showTuneRoot(IPlayer &player);
+    // Под-меню компонентов конкретного слота: «Снять» + валидные для МОДЕЛИ детали.
+    void showTuneSlot(IPlayer &player, int vehicleId, int slot);
+    void showTuneColour(IPlayer &player, int vehicleId);
+    void showTunePaintJob(IPlayer &player, int vehicleId);
+    // Мастер ручного ввода пары цветов (доп. пункт «Ввести код цвета»): два числовых
+    // диалога подряд (цвет1, затем цвет2), без парсинга свободного текста.
+    void showTuneColourInput(IPlayer &player, int vehicleId);
+    // Машина ещё под ЭТИМ девом за рулём (seat==0, тот же vehicleId) — иначе
+    // сообщение + nullptr; общая ре-валидация для всех кликов под-меню тюнинга.
+    IVehicle *tuneVehicle(IPlayer &player, int vehicleId);
 
     VehicleService &m_vehicleService;
     PlayerStateService &m_stateService;

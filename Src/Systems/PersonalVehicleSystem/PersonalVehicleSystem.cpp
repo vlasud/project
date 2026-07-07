@@ -26,15 +26,16 @@ std::string u(const std::string &text)
 PersonalVehicleSystem::PersonalVehicleSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_personalService(serviceRegister.getService<PersonalVehicleService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>()),
-      m_sessionService(serviceRegister.getService<PlayerSessionService>())
+      m_sessionService(serviceRegister.getService<PlayerSessionService>()),
+      m_timerService(serviceRegister.getService<TimerService>())
 {
     // Привязка зависимости сервиса (реестр создаёт его дефолтным ctor).
     m_personalService.bind(m_vehicleService);
 
     // Жизненный цикл владения — по сессии (account-data, по конвенции; не raw
-    // disconnect). Старт: грузим модели+fuel аккаунта из БД. Конец: СНАЧАЛА снять
-    // остаток топлива живых экземпляров (персист), ПОТОМ reset (уничтожить машины +
-    // очистить ПАМЯТЬ владения; право владения и fuel остаются в БД).
+    // disconnect). Старт: грузим модели+fuel+внешний вид аккаунта из БД. Конец:
+    // СНАЧАЛА снять снимок живых экземпляров (персист), ПОТОМ reset (уничтожить
+    // машины + очистить ПАМЯТЬ владения; право владения и снимок остаются в БД).
     m_sessionService.subscribeStart(
         [this](IPlayer &player, const PlayerSessionService::Session &session) { loadOwnership(player, session); });
     m_sessionService.subscribeEnd(
@@ -43,7 +44,7 @@ PersonalVehicleSystem::PersonalVehicleSystem(ICore &core, const ServiceRegister 
             const int playerId = player.getID();
             if (playerId < 0 || playerId >= MAX_PLAYERS)
                 return;
-            captureFuelBeforeReset(playerId); // fuel живых экземпляров -> память + БД
+            captureAllBeforeReset(playerId); // снимок живых экземпляров -> память + БД
             m_personalService.reset(playerId);
         });
 
@@ -82,6 +83,11 @@ PersonalVehicleSystem::PersonalVehicleSystem(ICore &core, const ServiceRegister 
     // снимок (onUnsanctionedDeath), восстанавливаем его поверх дефолта.
     m_vehicleService.subscribeRespawned([this](IVehicle &vehicle) { onVehicleRespawned(vehicle); });
 
+    // Принятый тюнинг (мод/пейнтджоб/респрей) личной машины: снимок сразу, не
+    // дожидаясь деспавна — переживает краш сервера (см. onVehicleTuned про
+    // отложенное чтение состояния).
+    m_vehicleService.subscribeTuned([this](IVehicle &vehicle) { onVehicleTuned(vehicle); });
+
     auto &commands = serviceRegister.getService<PlayerCommandService>();
     commands.add("pvbuy", {{PlayerCommandService::Param::Int, "id модели"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -92,23 +98,27 @@ PersonalVehicleSystem::PersonalVehicleSystem(ICore &core, const ServiceRegister 
 
 void PersonalVehicleSystem::loadOwnership(IPlayer &player, const PlayerSessionService::Session &session)
 {
-    // SELECT (id, model, fuel) владения аккаунта; запрос И вычитка — на воркере
-    // (возвращаем владеющий vector<tuple>, mysqlx-объект границу потока не
-    // пересекает). dbId (id строки) нужен шерингу — по нему он ссылается на
-    // конкретную машину. fuel — персистентный остаток бака (клампится в сервисе).
-    using OwnershipRow = std::tuple<long long, int, double>;
+    // SELECT (id, model, fuel, colour1, colour2, paintjob, components) владения
+    // аккаунта; запрос И вычитка — на воркере (возвращаем владеющий vector<tuple>,
+    // mysqlx-объект границу потока не пересекает). dbId (id строки) нужен шерингу —
+    // по нему он ссылается на конкретную машину. fuel/цвет/пейнтджоб/компоненты —
+    // персистентный снимок внешнего вида (валидируется/клампится в сервисе).
+    using OwnershipRow = std::tuple<long long, int, double, int, int, int, std::string>;
     DatabaseManager::selectQuery<std::vector<OwnershipRow>>(
         [accountId = session.accountId](mysqlx::Schema schema)
         {
             mysqlx::RowResult result = schema.getTable("personal_vehicle")
-                                           .select("id", "model", "fuel")
+                                           .select("id", "model", "fuel", "colour1", "colour2", "paintjob",
+                                                   "components")
                                            .where("account_id = :account")
                                            .bind("account", accountId)
                                            .execute();
             std::vector<OwnershipRow> rows;
             for (mysqlx::Row row = result.fetchOne(); row; row = result.fetchOne())
             {
-                rows.emplace_back(row.get(0).get<std::int64_t>(), row.get(1).get<int>(), row.get(2).get<double>());
+                rows.emplace_back(row.get(0).get<std::int64_t>(), row.get(1).get<int>(), row.get(2).get<double>(),
+                                  row.get(3).get<int>(), row.get(4).get<int>(), row.get(5).get<int>(),
+                                  row.get(6).get<std::string>());
             }
             return rows;
         },
@@ -136,34 +146,62 @@ void PersonalVehicleSystem::loadOwnership(IPlayer &player, const PlayerSessionSe
         });
 }
 
-void PersonalVehicleSystem::captureFuelBeforeReset(int playerId)
+void PersonalVehicleSystem::captureSnapshot(int playerId, int ownedIndex)
 {
-    if (playerId < 0 || playerId >= MAX_PLAYERS)
-        return;
-    // Снимаем fuel КАЖДОЙ заспавненной записи, пока экземпляры ещё живы (reset
-    // уничтожит их следом). Индекс стабилен — count() не меняется этим циклом.
-    const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(playerId);
-    for (int i = 0; i < static_cast<int>(owned.size()); ++i)
+    const int vehicleId = m_personalService.currentVehicle(playerId, ownedIndex);
+    if (vehicleId == -1)
+        return; // не заспавнена — снимать нечего, в памяти уже актуальный снимок
+
+    // Снимаем fuel + внешний вид с ЖИВОГО экземпляра (getColour/getPaintJob/
+    // getComponents несуществующей машины отдали бы сентинел, не мусор — но здесь
+    // vehicleId уже проверен currentVehicle) в память сервиса.
+    const float fuel = m_vehicleService.getFuel(vehicleId);
+    m_personalService.setFuel(playerId, ownedIndex, fuel);
+
+    const std::pair<int, int> colour = m_vehicleService.getColour(vehicleId);
+    const int paintJob = m_vehicleService.getPaintJob(vehicleId);
+    std::vector<int> components;
+    m_vehicleService.getComponents(vehicleId, components);
+    m_personalService.setAppearance(playerId, ownedIndex, colour.first, colour.second, paintJob, components);
+
+    // Один write-through UPDATE по dbId со всем снимком разом (fuel+вид) — не пять
+    // раздельных UPDATE одной строки.
+    const PersonalVehicleService::OwnedVehicle *entry = m_personalService.appearanceOf(playerId, ownedIndex);
+    if (entry)
     {
-        const int vehicleId = owned[i].vehicleId;
-        if (vehicleId == -1)
-            continue; // не заспавнена — снимать нечего, в памяти уже актуальный снимок
-        const float fuel = m_vehicleService.getFuel(vehicleId);
-        m_personalService.setFuel(playerId, i, fuel);
-        persistFuel(m_personalService.dbIdOf(playerId, i), fuel);
+        persistSnapshot(entry->dbId, *entry);
     }
 }
 
-void PersonalVehicleSystem::persistFuel(long long dbId, float fuel)
+void PersonalVehicleSystem::captureAllBeforeReset(int playerId)
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return;
+    // Снимаем КАЖДУЮ заспавненную запись, пока экземпляры ещё живы (reset уничтожит
+    // их следом). Индекс стабилен — count() не меняется этим циклом.
+    const int total = m_personalService.count(playerId);
+    for (int i = 0; i < total; ++i)
+    {
+        captureSnapshot(playerId, i);
+    }
+}
+
+void PersonalVehicleSystem::persistSnapshot(long long dbId, const PersonalVehicleService::OwnedVehicle &entry)
 {
     if (dbId < 0)
         return; // id ещё не присвоен (окно между покупкой и LAST_INSERT_ID) — снимок только в памяти
+    const std::string componentsJson = PersonalVehicleService::componentsToJson(entry.components);
     DatabaseManager::throwQuery(
-        [dbId, fuel](mysqlx::Schema schema)
+        [dbId, fuel = entry.fuel, colour1 = entry.colour1, colour2 = entry.colour2, paintJob = entry.paintJob,
+         componentsJson](mysqlx::Schema schema)
         {
             schema.getTable("personal_vehicle")
                 .update()
                 .set("fuel", static_cast<double>(fuel))
+                .set("colour1", colour1)
+                .set("colour2", colour2)
+                .set("paintjob", paintJob)
+                .set("components", componentsJson)
                 .where("id = :id")
                 .bind("id", dbId)
                 .execute();
@@ -171,9 +209,51 @@ void PersonalVehicleSystem::persistFuel(long long dbId, float fuel)
         [dbId](const std::string &error)
         {
             LogManager::log(Error,
-                            "PersonalVehicleSystem: failed to persist fuel (dbId " + std::to_string(dbId) +
+                            "PersonalVehicleSystem: failed to persist snapshot (dbId " + std::to_string(dbId) +
                                 "): " + error);
         });
+}
+
+void PersonalVehicleSystem::onVehicleTuned(IVehicle &vehicle)
+{
+    const int vehicleId = vehicle.getID();
+    // Только ЛИЧНАЯ машина — чужие owner-теги не наши (Faction/Work персистят
+    // тюнинг своей политикой, если понадобится).
+    if (m_vehicleService.getOwner(vehicleId) != VehicleService::Owner::Player)
+        return;
+    const int ownerId = m_vehicleService.getOwnerId(vehicleId);
+    if (ownerId < 0)
+        return;
+
+    // Найти ownedIndex по vehicleId (линейный проход по владению одного игрока —
+    // мало, холодный путь события тюнинга). Захватываем ownedIndex, НЕ vehicleId:
+    // captureSnapshot сверяется с currentVehicle заново в колбэке таймера.
+    const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(ownerId);
+    int ownedIndex = -1;
+    for (int i = 0; i < static_cast<int>(owned.size()); ++i)
+    {
+        if (owned[i].vehicleId == vehicleId)
+        {
+            ownedIndex = i;
+            break;
+        }
+    }
+    if (ownedIndex < 0)
+        return;
+
+    // Отложенно (0 мс, TimerService) — не для ожидания применения (installComponent/
+    // setColour/setPaintJob уже применили изменение СИНХРОННО до notifyServerTuned),
+    // а чтобы снимок не снимался прямо из чужого стека вызова тюнинга. Колбэк
+    // перепроверяет, что запись всё ещё существует и остаётся заспавненной ИМЕННО
+    // этим vehicleId (могла быть уничтожена/пере-спавнена за время задержки — тогда
+    // currentVehicle либо -1, либо уже другой id, снимать нечего/не то).
+    m_timerService.setTimeout(Milliseconds{0},
+                              [this, ownerId, ownedIndex, vehicleId]
+                              {
+                                  if (m_personalService.currentVehicle(ownerId, ownedIndex) != vehicleId)
+                                      return;
+                                  captureSnapshot(ownerId, ownedIndex);
+                              });
 }
 
 void PersonalVehicleSystem::onVehicleDied(IVehicle &vehicle)
@@ -183,9 +263,10 @@ void PersonalVehicleSystem::onVehicleDied(IVehicle &vehicle)
     // решают свою политику смерти сами. getOwner — серверный тег, O(1).
     if (m_vehicleService.getOwner(vehicleId) != VehicleService::Owner::Player)
         return;
-    // Снять остаток топлива ДО destroy (после уничтожения getFuel вернёт 0 для
-    // несуществующей машины) — persistFuel по dbId записи владения. ownerId тега —
-    // playerId (сессионный ключ), поиск ownedIndex по vehicleId — линейный (мало).
+    // Снять ПОЛНЫЙ снимок (fuel+вид) ДО destroy (после уничтожения геттеры отдадут
+    // сентинел для несуществующей машины) — persistSnapshot по dbId записи
+    // владения. ownerId тега — playerId (сессионный ключ), поиск ownedIndex по
+    // vehicleId — линейный (мало).
     const int ownerId = m_vehicleService.getOwnerId(vehicleId);
     if (ownerId >= 0)
     {
@@ -194,9 +275,7 @@ void PersonalVehicleSystem::onVehicleDied(IVehicle &vehicle)
         {
             if (owned[i].vehicleId == vehicleId)
             {
-                const float fuel = m_vehicleService.getFuel(vehicleId);
-                m_personalService.setFuel(ownerId, i, fuel);
-                persistFuel(owned[i].dbId, fuel);
+                captureSnapshot(ownerId, i);
                 break;
             }
         }
@@ -253,6 +332,37 @@ void PersonalVehicleSystem::onUnsanctionedDeath(IVehicle &vehicle, bool returnsI
 void PersonalVehicleSystem::onVehicleRespawned(IVehicle &vehicle)
 {
     const int vehicleId = vehicle.getID();
+
+    // Ядровой respawn() обнуляет компоненты (Vehicle::_respawn: mods.fill(0)) И
+    // сбрасывает bodyColour1/2 в -1, из-за чего getColour откатывается к цвету
+    // СОЗДАНИЯ (spawnData), теряя перекраску после спавна. Пейнтджоб респавн НЕ
+    // трогает. Поэтому на КАЖДОМ респавне личной машины восстанавливаем и
+    // компоненты, и сохранённый цвет (если он персистентный — colour1 >= 0); fuel —
+    // только если для этого vehicleId есть снимок несанкц. смерти (m_pendingFuelRestore).
+    if (m_vehicleService.getOwner(vehicleId) == VehicleService::Owner::Player)
+    {
+        const int ownerId = m_vehicleService.getOwnerId(vehicleId);
+        if (ownerId >= 0)
+        {
+            const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(ownerId);
+            for (const PersonalVehicleService::OwnedVehicle &entry : owned)
+            {
+                if (entry.vehicleId == vehicleId)
+                {
+                    if (entry.colour1 >= 0)
+                    {
+                        m_vehicleService.setColour(vehicle, entry.colour1, entry.colour2);
+                    }
+                    for (int component : entry.components)
+                    {
+                        m_vehicleService.addComponent(vehicle, component);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     const auto it = m_pendingFuelRestore.find(vehicleId);
     if (it == m_pendingFuelRestore.end())
         return; // не наш снимок (обычный респавн/чужой owner-тег) — полный бак остаётся

@@ -4,6 +4,7 @@
 #include "Services/Core/VehicleService/RepairZones.h" // серверный гейт SCM-санкций ремонта
 #include "Services/Core/VehicleService/VehicleModelNames.h"
 #include "glm/geometric.hpp"
+#include <Server/Components/Vehicles/vehicle_components.hpp> // Impl::isValidComponentForVehicleModel/getVehicleComponentSlot
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -94,6 +95,15 @@ bool nearAnyZone(std::span<const RepairZones::Zone> zones, Vector3 position)
             return true;
     }
     return false;
+}
+
+// Диапазон + валидность компонента ДЛЯ КОНКРЕТНОЙ МОДЕЛИ — единая проверка для
+// addComponent/installComponent (не дублируем формулу диапазона в двух местах).
+// 1000..1193 — валидные id компонентов SA-MP; isValidComponentForVehicleModel —
+// битовая таблица ядра «этот компонент существует у этой модели».
+bool isValidComponent(int model, int component)
+{
+    return component >= 1000 && component <= 1193 && Impl::isValidComponentForVehicleModel(model, component);
 }
 } // namespace
 
@@ -207,6 +217,11 @@ void VehicleService::subscribeMoved(VehicleMoveObserver observer)
     m_movedObservers.push_back(std::move(observer));
 }
 
+void VehicleService::subscribeTuned(TunedObserver observer)
+{
+    m_tunedObservers.push_back(std::move(observer));
+}
+
 void VehicleService::subscribeDriverGate(DriverGateObserver observer)
 {
     m_driverGateObservers.push_back(std::move(observer));
@@ -221,6 +236,12 @@ void VehicleService::notifyMoved(IVehicle &vehicle, Vector3 acceptedPosition)
 {
     for (auto &obs : m_movedObservers)
         obs(vehicle, acceptedPosition);
+}
+
+void VehicleService::notifyServerTuned(IVehicle &vehicle)
+{
+    for (auto &obs : m_tunedObservers)
+        obs(vehicle);
 }
 
 IVehicle *VehicleService::create(int model, Vector3 position, float angle, int colour1, int colour2, Owner owner,
@@ -696,17 +717,118 @@ void VehicleService::respawn(IVehicle &vehicle)
 
 void VehicleService::addComponent(IVehicle &vehicle, int component)
 {
+    if (!isValidComponent(vehicle.getModel(), component))
+        return; // мусор извне (дев-команда/персист/будущее UI) — no-op, не краш
     vehicle.addComponent(component);
 }
 
 void VehicleService::removeComponent(IVehicle &vehicle, int component)
 {
+    if (component < 1000 || component > 1193)
+        return;
     vehicle.removeComponent(component);
+}
+
+void VehicleService::installComponent(IVehicle &vehicle, int component)
+{
+    if (!isValidComponent(vehicle.getModel(), component))
+        return;
+    const int slot = Impl::getVehicleComponentSlot(component);
+    if (slot < 0 || slot >= COMPONENT_SLOT_COUNT)
+        return; // VehicleComponent_None/мусорный слот — защитный bounds
+
+    // Один компонент на слот: снимаем текущий (если есть и отличается) ПЕРЕД
+    // установкой нового — явный RemoveVehicleComponent-RPC старой детали клиентам
+    // перед AddComponent новой, а не расчёт на неявную перезапись mods[slot]
+    // внутри ядрового addComponent.
+    const int current = vehicle.getComponentInSlot(slot);
+    if (current != 0 && current != component)
+        removeComponent(vehicle, current);
+    addComponent(vehicle, component);
 }
 
 void VehicleService::setPaintJob(IVehicle &vehicle, int paintjob)
 {
+    if (paintjob < 0 || paintjob > 2) // валидный диапазон пейнтджобов SA (0..2 варианта на модель)
+        return;
     vehicle.setPaintJob(paintjob);
+}
+
+std::pair<int, int> VehicleService::getColour(int vehicleId) const
+{
+    if (!m_vehicles || vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicleState[vehicleId].exists)
+        return {-1, -1};
+    IVehicle *vehicle = m_vehicles->get(vehicleId);
+    if (!vehicle)
+        return {-1, -1};
+    const Pair<int, int> colour = vehicle->getColour();
+    return {colour.first, colour.second};
+}
+
+void VehicleService::setColour(IVehicle &vehicle, int colour1, int colour2)
+{
+    if (colour1 < 0 || colour1 > 255 || colour2 < 0 || colour2 > 255)
+        return; // вне диапазона — ядро молча маскирует & 0xFF, здесь явный no-op
+    vehicle.setColour(colour1, colour2);
+}
+
+int VehicleService::getPaintJob(int vehicleId) const
+{
+    if (!m_vehicles || vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicleState[vehicleId].exists)
+        return -1;
+    IVehicle *vehicle = m_vehicles->get(vehicleId);
+    if (!vehicle)
+        return -1;
+    return vehicle->getPaintJob();
+}
+
+void VehicleService::getComponents(int vehicleId, std::vector<int> &out) const
+{
+    out.clear();
+    if (!m_vehicles || vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE || !m_vehicleState[vehicleId].exists)
+        return;
+    IVehicle *vehicle = m_vehicles->get(vehicleId);
+    if (!vehicle)
+        return;
+    for (int slot = 0; slot < COMPONENT_SLOT_COUNT; ++slot)
+    {
+        const int component = vehicle->getComponentInSlot(slot);
+        if (component != 0) // 0 — слот пуст
+            out.push_back(component);
+    }
+}
+
+int VehicleService::getComponentSlot(int component) const
+{
+    if (component < 1000 || component > 1193)
+        return VehicleComponent_None; // диапазон валидных id компонентов SA-MP
+    return Impl::getVehicleComponentSlot(component);
+}
+
+void VehicleService::componentsForSlot(int model, int slot, std::vector<int> &out) const
+{
+    out.clear();
+    if (slot < 0 || slot >= COMPONENT_SLOT_COUNT)
+        return;
+    // Полный перебор диапазона (<=194 id) — холодный путь построения меню, не
+    // per-tick. isValidComponent (диапазон + isValidComponentForVehicleModel) —
+    // та же проверка, что и у addComponent/installComponent, не дублируем формулу.
+    for (int component = 1000; component <= 1193; ++component)
+    {
+        if (Impl::getVehicleComponentSlot(component) == slot && isValidComponent(model, component))
+            out.push_back(component);
+    }
+}
+
+int VehicleService::installedInSlot(int vehicleId, int slot) const
+{
+    if (!m_vehicles || slot < 0 || slot >= COMPONENT_SLOT_COUNT || vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE ||
+        !m_vehicleState[vehicleId].exists)
+        return -1;
+    IVehicle *vehicle = m_vehicles->get(vehicleId);
+    if (!vehicle)
+        return -1;
+    return vehicle->getComponentInSlot(slot); // 0 — слот пуст
 }
 
 void VehicleService::sanctionRepair(int vehicleId, TimePoint timeNow)
@@ -1063,8 +1185,13 @@ VehicleService::Outcome VehicleService::validateMod(IPlayer &player, IVehicle &v
             });
     }
 
-    // Принято: покупка детали чинит машину на клиенте — санкция ремонта.
-    sanctionRepair(vehicle.getID(), timeNow);
+    // Заявка ПРОШЛА БЫ старый гейт (честный водитель, честно заехавший в
+    // мод-гараж и выбравший деталь) — но клиентский мод-гараж больше НЕ источник
+    // тюнинга: отклоняем БЕЗ нарушения (vehicleHack остаётся false), ядро не
+    // применит мод (RemoveVehicleComponent RPC откатит визуал этому клиенту —
+    // см. vehicles_impl.hpp). sanctionRepair здесь больше не зовём: покупка
+    // детали дублировала ремонт с onModShop-enter, который уже чинит машину при
+    // въезде — легитимный визит по-прежнему легально чинит машину.
     return outcome;
 }
 
@@ -1113,6 +1240,11 @@ VehicleService::Outcome VehicleService::validatePaintJob(IPlayer &player, IVehic
             });
     }
 
+    // Легитимный визит — но клиентский пейнтджоб больше не источник тюнинга:
+    // отклоняем БЕЗ нарушения. Ядровая onVehiclePaintJob сама НЕ шлёт
+    // компенсирующий RPC при false (в отличие от AddComponent) — клиент, уже
+    // применивший пейнтджоб визуально до ответа сервера, увидит десинк до
+    // следующего полного стрим-ина (см. Docs/Vehicles.md).
     return outcome; // косметика — санкцию ремонта не повторяем (уже дана enter/AddComponent)
 }
 
@@ -1153,7 +1285,13 @@ VehicleService::Outcome VehicleService::validateRespray(IPlayer &player, IVehicl
         return outcome;
     }
 
-    // Pay'n'Spray и мод-шоп при перекраске чинят машину на клиенте.
+    // Pay'n'Spray и мод-шоп чинят машину на клиенте НЕЗАВИСИМО от исхода SCM-пакета
+    // (встроенное поведение движка GTA:SA в зоне) — sanctionRepair СОХРАНЯЕМ, иначе
+    // честный визит перестал бы чинить машину, а следующий driver-sync с полным HP
+    // словил бы repair-hack. Сама перекраска — клиентский Pay'n'Spray/мод-шоп больше
+    // не источник цвета: отклоняем БЕЗ нарушения (ядровая onVehicleRespray сама не
+    // шлёт компенсирующий RPC при false — клиент увидит десинк цвета до следующего
+    // полного стрим-ина, см. Docs/Vehicles.md).
     sanctionRepair(vehicle.getID(), timeNow);
     return outcome;
 }

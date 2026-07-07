@@ -6,6 +6,7 @@
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "types.hpp"
 #include <array>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -30,6 +31,13 @@ class PersonalVehicleSystem;
 // число машин и валидация модели форсятся ЗДЕСЬ (серверная политика), не на клиенте.
 // Per-player флаг loaded гейтит покупку до прихода зеркала из БД: иначе «купил до
 // загрузки» обошёл бы лимит (загрузка добавила бы вторую модель поверх купленной).
+//
+// Внешний вид (цвет/пейнтджоб/компоненты) персистится ТЕМ ЖЕ паттерном, что fuel:
+// OwnedVehicle хранит снимок, источник правды которого — либо память (машина не
+// заспавнена), либо живой экземпляр VehicleService (заспавнена). Снимается перед
+// каждым исчезновением экземпляра (пере-спавн/конец сессии/санкционированная
+// смерть) и на КАЖДОМ принятом тюнинге (см. PersonalVehicleSystem::onVehicleTuned)
+// — переживает краш до штатного деспавна. Применяется ОДИН РАЗ, в spawn().
 class PersonalVehicleService final : public IService
 {
     friend PersonalVehicleSystem;
@@ -50,12 +58,27 @@ class PersonalVehicleService final : public IService
     // источник правды, пока машина НЕ заспавнена (vehicleId == -1); пока заспавнена —
     // источник правды VehicleService::getFuel(vehicleId), это поле лишь снимок на
     // момент последнего сохранения (captureFuel перед уничтожением/сессией).
+    //
+    // colour1/colour2/paintJob/components — ПЕРСИСТЕНТНЫЙ снимок внешнего вида, та
+    // же модель, что fuel: источник правды, пока машина НЕ заспавнена; пока
+    // заспавнена — источник правды живой экземпляр VehicleService (getColour/
+    // getPaintJob/getComponents), поля лишь снимок на момент последнего сохранения.
+    // colour1 == -1 — «не сохранено» (только что куплена/не загружено из БД):
+    // spawn() трактует как «спавнить рандомным цветом» (colour2 в этом случае
+    // тоже -1 — пара неразделима). paintJob == -1 — «нет пейнтджоба» (совпадает с
+    // тем, что отдаёт голое SDK для машины без пейнтджоба — не нужен отдельный
+    // сентинел). components — набор id установленных компонентов (до
+    // VehicleService::COMPONENT_SLOT_COUNT штук, по одному на слот).
     struct OwnedVehicle
     {
         int model = 0;
         int vehicleId = -1;
         long long dbId = -1;
         float fuel = -1.0f; // -1 — не загружено из БД/не сохранено; spawn() трактует как полный бак
+        int colour1 = -1;   // -1 — не сохранено, спавнить рандомным цветом
+        int colour2 = -1;
+        int paintJob = -1; // -1 — нет пейнтджоба
+        std::vector<int> components;
     };
 
     // Привязать VehicleService (источник правды о машинах). Зовётся
@@ -102,12 +125,17 @@ class PersonalVehicleService final : public IService
     // от парковки). Если экземпляр уже заспавнен (vehicleId != -1) — ПЕРЕ-СПАВН:
     // старый уничтожается, но СНАЧАЛА его fuel (VehicleService::getFuel) снимается в
     // entry.fuel (переживает пере-спавн — иначе вызов машины заново доливал бы бак
-    // бесплатно), новый создаётся на точке. Машина — через VehicleService::create
-    // (Owner::Player, ownerId=playerId), затем ПРИМЕНЯЕТСЯ персистентный fuel записи
-    // (entry.fuel >= 0 — сохранённый остаток; -1 — ещё не сохранён/только куплена,
-    // create уже дал полный бак по дефолту, setFuel не зовём). При Ok записывает
-    // новый id в владение и отдаёт *out. Запись владения НЕ удаляется ни на одной
-    // ветке — индекс стабилен.
+    // бесплатно), новый создаётся на точке. Машина — через VehicleService::create,
+    // ЦВЕТ которой берётся из сохранённого снимка (entry.colour1 >= 0 — сохранённая
+    // пара colour1/colour2; иначе — переданные аргументы colour1/colour2, обычно
+    // -1/-1 = рандом ядра, как их сегодня передаёт ParkingSystem). Затем
+    // ПРИМЕНЯЮТСЯ пейнтджоб (entry.paintJob >= 0) и компоненты (entry.components,
+    // каждый addComponent) — серверные вызовы, не клиентские SCM-заявки, анти-чит
+    // мод-шопа их не видит (см. VehicleService::addComponent). Далее ПРИМЕНЯЕТСЯ
+    // персистентный fuel записи (entry.fuel >= 0 — сохранённый остаток; -1 — ещё не
+    // сохранён/только куплена, create уже дал полный бак по дефолту, setFuel не
+    // зовём). При Ok записывает новый id в владение и отдаёт *out. Запись владения
+    // НЕ удаляется ни на одной ветке — индекс стабилен.
     SpawnResult spawn(int playerId, int ownedIndex, Vector3 position, float angle, int colour1, int colour2,
                       IVehicle **out = nullptr);
 
@@ -130,6 +158,27 @@ class PersonalVehicleService final : public IService
     // записи — трактуется вызывающим как «нет сохранённого, дефолт полный бак»).
     float fuelOf(int playerId, int ownedIndex) const;
 
+    // Записать ПЕРСИСТЕНТНЫЙ снимок внешнего вида (цвет+пейнтджоб+компоненты) записи
+    // ownedIndex. Только ПАМЯТЬ — write-through делает вызывающая система. Компоненты
+    // копируются как есть (валидация диапазона id — на вызывающей стороне при
+    // загрузке из БД; снимок с живого экземпляра уже валиден по построению). colour1
+    // < 0 — трактуется как «нет сохранённого цвета» (colour2 форсится в -1 вместе с
+    // ним — пара неразделима, не бывает наполовину сохранённого цвета). Bounds-safe;
+    // no-op для несуществующей записи.
+    void setAppearance(int playerId, int ownedIndex, int colour1, int colour2, int paintJob,
+                       const std::vector<int> &components);
+    // Снимок внешнего вида записи (для write-through персиста вызывающей системой).
+    // Возвращает указатель на запись (nullptr для bounds-промаха) — читать сразу все
+    // поля без четырёх раздельных геттеров; вызывающий не должен хранить указатель
+    // дольше одного колбэка (владение может измениться).
+    const OwnedVehicle *appearanceOf(int playerId, int ownedIndex) const;
+
+    // Сериализовать набор компонентов в JSON-массив id (для write-through UPDATE
+    // одной строкой, personal_vehicle.components) — тот же формат, что парсит load()
+    // из БД. Общий хелпер, чтобы формат сериализации/десериализации не разъезжался
+    // между системой (пишет) и сервисом (читает).
+    static std::string componentsToJson(const std::vector<int> &components);
+
     // Число владений игрока (bounds-safe; 0 для невалидного id).
     int count(int playerId) const;
     // Достигнут ли лимит игроком (bounds-safe; false для невалидного id).
@@ -151,12 +200,17 @@ class PersonalVehicleService final : public IService
 
   private:
     // --- вызывается PersonalVehicleSystem ---
-    // Загрузка владения по старту сессии: кладёт строки (dbId, модель, fuel) из БД в
-    // память как OwnedVehicle{model, -1, dbId, fuel} (БЕЗ записи в БД — это зеркало, не
-    // покупка) и поднимает per-player флаг loaded (покупка разблокирована). fuel
-    // клампится 0..CAP (мусор из БД — NaN/отрицательное/сверх капасити). Память перед
-    // этим уже пуста (reset на коннекте/конце прошлой сессии). Bounds-safe.
-    void load(int playerId, const std::vector<std::tuple<long long, int, double>> &rows);
+    // Загрузка владения по старту сессии: кладёт строки (dbId, модель, fuel, colour1,
+    // colour2, paintJob, componentsJson) из БД в память как OwnedVehicle{...} (БЕЗ
+    // записи в БД — это зеркало, не покупка) и поднимает per-player флаг loaded
+    // (покупка разблокирована). fuel клампится 0..CAP (мусор из БД — NaN/
+    // отрицательное/сверх капасити). Цвет/пейнтджоб/компоненты валидируются перед
+    // укладкой в память (см. .cpp) — мусор из БД не должен доехать до SDK на spawn.
+    // componentsJson — JSON-массив id компонентов (nlohmann, парс в try/catch);
+    // невалидный JSON/элемент вне диапазона — пропускается. Память перед этим уже
+    // пуста (reset на коннекте/конце прошлой сессии). Bounds-safe.
+    void load(int playerId,
+             const std::vector<std::tuple<long long, int, double, int, int, int, std::string>> &rows);
 
     // Проставить dbId владению ownedIndex игрока (success-колбэк async-INSERT покупки).
     // Пишет только если запись существует и её dbId ещё -1 (не перетереть уже

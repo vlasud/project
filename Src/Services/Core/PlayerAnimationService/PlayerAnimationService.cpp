@@ -45,6 +45,16 @@ void PlayerAnimationService::play(IPlayer &player, const AnimationData &animatio
     player.applyAnimation(animation, PlayerAnimationSyncType_Sync);
 }
 
+void PlayerAnimationService::preloadLibrary(IPlayer &player, StringView lib)
+{
+    // Применяем несуществующую анимацию "null" из либы: ядро open.mp валидирует
+    // ТОЛЬКО имя библиотеки (не имя анимации), клиент грузит IFP-блок либы и играет
+    // "null" = ничего видимого. NoSync шлёт RPC только самому игроку (без броадкаста).
+    // m_state не трогаем — это предзагрузка ассета, а не серверная анимация.
+    player.applyAnimation(AnimationData(4.1f, false, false, false, false, 0, lib, "null"),
+                          PlayerAnimationSyncType_NoSync);
+}
+
 void PlayerAnimationService::stop(IPlayer &player)
 {
     State &state = m_state[player.getID()];

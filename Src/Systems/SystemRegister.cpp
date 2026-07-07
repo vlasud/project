@@ -45,6 +45,7 @@
 #include "Systems/MenuSystem/MenuSystem.h"
 #include "Systems/PersonalVehicleSystem/PersonalVehicleSystem.h"
 #include "Systems/ParkingSystem/ParkingSystem.h"
+#include "Systems/PortJobSystem/PortJobSystem.h"
 #include "Systems/Core/MovingObjectSystem/MovingObjectSystem.h"
 #include "Systems/Core/NicknameSystem/NicknameSystem.h"
 #include "Systems/Core/ObjectEditSystem/ObjectEditSystem.h"
@@ -211,6 +212,13 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<WeaponProficiencySystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerHealthSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerMoneySystem>(core, serviceRegister));
+    // PortJobSystem (работа-грузчик в порту, бизнес-фича вне Core) после PickupSystem
+    // (initialize зовёт PickupService::add — компонент пикапов уже подключён),
+    // CheckpointSystem, PlayerAnimationSystem, AttachmentSystem, PlayerMoneySystem
+    // (выплата на увольнении), PlayerLocationSystem и PlayerSessionSystem (подписка
+    // на конец сессии — сброс работы/детач/освобождение слота распределения без
+    // выплаты). Цикл целиком событийный (пикап/чекпоинт/таймер), per-tick работы нет.
+    m_systems.push_back(std::make_unique<PortJobSystem>(core, serviceRegister));
     // SpawnSystem раньше AuthSystem: на спавне сперва применяются интерьер/мир
     // точки спавна, затем auth навешивает экипировку.
     m_systems.push_back(std::make_unique<ClassSelectionSystem>(core, serviceRegister));

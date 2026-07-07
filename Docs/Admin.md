@@ -65,7 +65,7 @@ INSERT в БД). Любому другому игроку команда отв�
 | `TextDrawEditorSystem` | `/td` |
 | `GangZoneEditorSystem` | `/gzone`, `/gzhere` |
 | `DebugCameraSystem` | `/camera`, `/cpoint`, `/cplay` |
-| `VehicleDebugSystem` | `/veh`, `/vput`, `/vdel`, `/vrespawn`, `/vinfo`, `/vhp`, `/vrepair`, `/vengine`, `/vlock`, `/vmod`, `/vhack` |
+| `VehicleDebugSystem` | `/veh`, `/vput`, `/vdel`, `/vrespawn`, `/vinfo`, `/vhp`, `/vrepair`, `/vengine`, `/vlock`, `/vtune`, `/vhack`, `/vdev` |
 | `LocationDebugSystem` | `/pos`, `/tp`, `/tpup`, `/vw`, `/int`, `/hackpos`, `/vel`, `/veldebug`, `/violations`, `/acclear` |
 | `GridDebugSystem` | `/gridtest`, `/gridclear`, `/gridcell`, `/streamdebug`, `/near` |
 | `SpectateSystem` | `/spec`, `/specoff` |

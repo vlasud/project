@@ -1,0 +1,99 @@
+#pragma once
+
+#include "Macro.h"
+#include "Services/Core/AttachmentService/AttachmentService.h"
+#include "Services/Core/CheckpointService/CheckpointService.h"
+#include "Services/Core/PickupService/PickupService.h"
+#include "Services/Core/PlayerAnimationService/PlayerAnimationService.h"
+#include "Services/Core/PlayerDialogService/PlayerDialogService.h"
+#include "Services/Core/PlayerHealthService/PlayerHealthService.h"
+#include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
+#include "Services/Core/PlayerStateService/PlayerStateService.h"
+#include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
+#include "Services/Core/TimerService/TimerService.h"
+#include "Services/PlayerSessionService/PlayerSessionService.h"
+#include "Services/PortJobService/PortJobService.h"
+#include "Systems/BaseSystem.h"
+#include "player.hpp"
+#include <array>
+
+// Работа-грузчик в порту (бизнес-фича, НЕ Core), привод PortJobService. Геймплей
+// целиком событийный (пикап/чекпоинт/таймер), per-tick работы нет:
+//  * пикап порта -> диалог «Начать/Завершить работу» + «Информация»;
+//  * «Начать работу» ставит ПЕРСОНАЛЬНЫЙ чекпоинт на источнике ящиков (корабль);
+//  * вход в чекпоинт источника -> анимация подъёма -> через таймер ящик
+//    прикрепляется в руку + анимация несения + балансировщик назначает точку
+//    сброса склада -> персональный чекпоинт на ней;
+//  * вход в чекпоинт сброса -> анимация «положить» -> через таймер ящик снят,
+//    +1 к счётчику отнесённых за смену -> снова чекпоинт источника (цикл);
+//  * «Завершить работу» выплачивает delivered*$100 разом и сбрасывает счётчик.
+//
+// Ровно ОДНА активная цель за раз (персональный чекпоинт держит только текущую),
+// нельзя нести два ящика одновременно. Деньги — только через PlayerMoneyService,
+// счётчик отнесённых — серверный (PortJobService), клиенту не доверяем.
+class PortJobSystem : public BaseSystem, public PlayerSpawnEventHandler
+{
+  public:
+    PortJobSystem(ICore &core, const ServiceRegister &serviceRegister);
+
+    void initialize(IComponentList *components) override;
+
+    // Респавн работающего игрока (единственный путь сюда в смене — через смерть,
+    // после которой onPlayerDeath уже откатил фазу к GoToSource): персональный
+    // чекпоинт CheckpointService сам НЕ перепоказывается после смерти-респавна —
+    // ставим чекпоинт источника заново. Вне смены (фаза NotWorking) — no-op.
+    void onPlayerSpawn(IPlayer &player) override;
+
+  private:
+    // --- пикап + диалог ---
+    void onPickup(IPlayer &player);
+    void onToggleWork(IPlayer &player);
+    void onStartWork(IPlayer &player);
+    void onFinishWork(IPlayer &player);
+    void showInfo(IPlayer &player);
+
+    // --- цикл: источник -> несение -> сброс -> источник ---
+    void onSourceEnter(IPlayer &player);
+    void onLiftFinished(IPlayer &player);
+    void onDropEnter(IPlayer &player);
+    void onPutdownFinished(IPlayer &player);
+
+    // Смерть в смене: уронить ящик (detach + PortJobService::dropCarry), снять
+    // анимацию/таймер/чекпоинт. Смена НЕ завершается — delivered сохраняется,
+    // чекпоинт источника вернёт onPlayerSpawn. Вне смены — no-op.
+    void onPlayerDeath(IPlayer &player);
+
+    // Снять ящик из руки (если прикреплён) и очистить учёт слота. Bounds-safe.
+    void detachBox(IPlayer &player);
+    // Полный сброс: снять ящик, остановить анимацию, снять чекпоинт, обнулить
+    // состояние сервиса БЕЗ выплаты. Общий teardown для конца сессии/дисконнекта.
+    void resetPlayer(IPlayer &player);
+
+    PortJobService &m_portJobService;
+    PickupService &m_pickupService;
+    CheckpointService &m_checkpointService;
+    PlayerAnimationService &m_animationService;
+    AttachmentService &m_attachmentService;
+    PlayerMoneyService &m_moneyService;
+    PlayerStateService &m_stateService;
+    PlayerHealthService &m_healthService;
+    PlayerDialogService &m_dialogService;
+    PlayerSessionService &m_sessionService;
+    TimerService &m_timers;
+    ScreenNoticeService &m_screenNoticeService; // попапы старта смены и сдачи ящика
+
+    int m_pickup = -1; // хэндл пикапа порта
+
+    // Слот AttachmentService текущего прикреплённого ящика (-1 — не прикреплён).
+    // Хранится отдельно от PortJobService (сервис — только фаза/балансировка, не
+    // клиентские детали attach) — снимается detachBox по playerId.
+    std::array<int, MAX_PLAYERS> m_boxSlot{};
+
+    // Хэндл текущего ожидающего таймера перехода (лифт/путдаун). Отменяется на
+    // «Завершить работу»/сбросе — иначе стале-таймер, дозвонившийся уже после
+    // рестарта смены, мог бы (по совпадению фазы) продвинуть НОВЫЙ цикл без
+    // реального входа в чекпоинт. Практически недостижимо (дистанции чекпоинт<->
+    // пикап велики для возврата за 1.2-1.5с, телепорт ловит PlayerLocationService),
+    // но отмена — дешёвая и однозначная защита.
+    std::array<TimerService::Handle, MAX_PLAYERS> m_pendingTimer{};
+};

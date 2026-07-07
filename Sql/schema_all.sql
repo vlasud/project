@@ -321,17 +321,44 @@ CREATE TABLE IF NOT EXISTS `player_weapon_skill` (
 -- владельца, санкционированная смерть) и восстанавливается при появлении — закрывает
 -- «докатал бак -> убрал в гараж/детонация -> бесплатный полный бак» (см.
 -- Docs/GameDesign/Economy.md «Задел на будущий сток: топливо и заправки»).
+--
+-- colour1/colour2 — ПЕРСИСТЕНТНЫЙ цвет машины (индекс палитры SA 0..255). DEFAULT -1
+-- = «не сохранено» (только что куплена/не загружено) — spawn() спавнит рандомным
+-- цветом ядра. Пара неразделима: сохраняется/сбрасывается ВМЕСТЕ (colour1 < 0 —
+-- colour2 тоже трактуется как «не задан»).
+-- paintjob — ПЕРСИСТЕНТНЫЙ пейнтджоб (0..2 варианта на модель SA). DEFAULT -1 = «нет
+-- пейнтджоба».
+-- components — ПЕРСИСТЕНТНЫЙ набор компонентов (JSON-массив id, напр. `[1010,1073]`).
+-- JSON-колонка (не дочерняя таблица): снимок читается/пишется ЦЕЛИКОМ одним
+-- write-through UPDATE вместе с fuel/цветом/пейнтджобом (см. Docs/PersonalVehicle.md
+-- «Персист внешнего вида») — нет нужды в join/multi-row транзакции ради набора из
+-- максимум 16 элементов. DEFAULT ('') (не NULL; TEXT-DEFAULT требует MySQL 8.0.13+,
+-- как и остальная схема) — пустой набор для старых строк без миграции, парсер
+-- (componentsFromJson) трактует пустую строку как пустой массив.
+--
+-- Снимок (fuel+цвет+пейнтджоб+компоненты) снимается с ЖИВОГО экземпляра ПЕРЕД каждым
+-- исчезновением заспавненной машины (пере-спавн, конец сессии, санкционированная
+-- смерть) И на КАЖДОМ ПРИНЯТОМ изменении тюнинга (мод-шоп/Pay'n'Spray) — переживает
+-- краш сервера до штатного деспавна. Применяется ОДИН РАЗ, в spawn().
 CREATE TABLE IF NOT EXISTS `personal_vehicle` (
     `id`         BIGINT NOT NULL AUTO_INCREMENT,
     `account_id` BIGINT NOT NULL,
     `model`      INT    NOT NULL,
     `fuel`       DOUBLE NOT NULL DEFAULT 100,
+    `colour1`    INT    NOT NULL DEFAULT -1,
+    `colour2`    INT    NOT NULL DEFAULT -1,
+    `paintjob`   INT    NOT NULL DEFAULT -1,
+    `components` TEXT   NOT NULL DEFAULT (''),
     PRIMARY KEY (`id`),
     INDEX `idx_account` (`account_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 -- Миграция для уже существующей таблицы (MySQL 8.0.29+, идемпотентно):
 -- ALTER TABLE `personal_vehicle` ADD COLUMN IF NOT EXISTS `fuel` DOUBLE NOT NULL DEFAULT 100;
+-- ALTER TABLE `personal_vehicle` ADD COLUMN IF NOT EXISTS `colour1` INT NOT NULL DEFAULT -1;
+-- ALTER TABLE `personal_vehicle` ADD COLUMN IF NOT EXISTS `colour2` INT NOT NULL DEFAULT -1;
+-- ALTER TABLE `personal_vehicle` ADD COLUMN IF NOT EXISTS `paintjob` INT NOT NULL DEFAULT -1;
+-- ALTER TABLE `personal_vehicle` ADD COLUMN IF NOT EXISTS `components` TEXT NOT NULL DEFAULT ('');
 
 
 -- ============ [10/11] parked_vehicle.sql ============

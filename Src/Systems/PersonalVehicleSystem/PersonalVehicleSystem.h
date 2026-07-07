@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Macro.h"
+#include "Services/Core/TimerService/TimerService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
@@ -27,10 +28,15 @@
 //  * /pvbuy <id модели> — ДЕБАГ-команда покупки (DEVELOPER_LEVEL, Hidden):
 //    регистрирует ВЛАДЕНИЕ (модель), машину НЕ спавнит — спавн через парковку;
 //  * жизненный цикл владения — через PlayerSessionService (account-data, по
-//    конвенции): на старте сессии грузит модели+fuel аккаунта из БД (async-select
-//    с serial-guard) в PersonalVehicleService, на конце сессии СНАЧАЛА снимает
-//    fuel живых экземпляров (персист UPDATE), ПОТОМ reset (уничтожить машины +
-//    очистить ПАМЯТЬ владения; право владения и fuel остаются в БД).
+//    конвенции): на старте сессии грузит модели+fuel+внешний вид аккаунта из БД
+//    (async-select с serial-guard) в PersonalVehicleService, на конце сессии
+//    СНАЧАЛА снимает fuel+внешний вид живых экземпляров (персист UPDATE), ПОТОМ
+//    reset (уничтожить машины + очистить ПАМЯТЬ владения; БД остаётся);
+//  * подписывается на subscribeTuned (VehicleService) — СЕРВЕРНО применённый
+//    тюнинг (компонент/пейнтджоб/цвет, notifyServerTuned; клиентский мод-гараж/
+//    Pay'n'Spray тюнинг больше не источник) личной машины: планирует отложенное
+//    (TimerService, 0 мс) снятие снимка внешнего вида — переживает краш сервера
+//    ДО штатного деспавна, не только конец сессии/пере-спавн/смерть.
 //
 // Лимит и валидация модели — серверная политика внутри PersonalVehicleService;
 // здесь только ввод команды, загрузка владения и сообщения игроку.
@@ -40,9 +46,9 @@ class PersonalVehicleSystem : public BaseSystem
     PersonalVehicleSystem(ICore &core, const ServiceRegister &serviceRegister);
 
   private:
-    // Старт сессии: SELECT моделей+fuel владения аккаунта из personal_vehicle ->
-    // serial-guard + живой игрок -> PersonalVehicleService::load. Машину НЕ спавним
-    // (игрок берёт на парковке).
+    // Старт сессии: SELECT моделей+fuel+внешнего вида владения аккаунта из
+    // personal_vehicle -> serial-guard + живой игрок -> PersonalVehicleService::load.
+    // Машину НЕ спавним (игрок берёт на парковке).
     void loadOwnership(IPlayer &player, const PlayerSessionService::Session &session);
 
     // ДЕБАГ-покупка: модель из аргумента, accountId из сессии. Регистрирует владение
@@ -54,15 +60,33 @@ class PersonalVehicleSystem : public BaseSystem
     // buy() (захвачен в момент запуска). Ошибка БД лишь логируется (память уже есть).
     void persistPurchase(int playerId, PlayerSessionService::AccountId accountId, int model, int ownedIndex);
 
-    // Снять остаток топлива ВСЕХ сессионных заспавненных машин игрока (getFuel из
-    // VehicleService, пока экземпляры ещё живы) в память (setFuel) + write-through
-    // UPDATE personal_vehicle.fuel по dbId. Зовётся ДО PersonalVehicleService::reset
-    // (тот уничтожает экземпляры) — иначе снимать было бы уже нечего.
-    void captureFuelBeforeReset(int playerId);
-    // Write-through UPDATE personal_vehicle.fuel по dbId. dbId < 0 (ещё не присвоен
-    // из async-INSERT покупки) — no-op, снимок останется только в памяти до
-    // следующего сохранения.
-    void persistFuel(long long dbId, float fuel);
+    // Снять ПОЛНЫЙ снимок записи ownedIndex игрока с живого экземпляра (fuel, цвет,
+    // пейнтджоб, компоненты — VehicleService, пока экземпляр ещё жив) в память
+    // (PersonalVehicleService::setFuel/setAppearance) + ОДИН write-through UPDATE по
+    // dbId (persistSnapshot) — единая точка снятия, чтобы код снимка не дублировался
+    // между captureAllBeforeReset/пере-спавном/санкционированной смертью/onVehicleTuned.
+    // No-op, если запись не заспавнена (vehicleId == -1) или bounds-промах.
+    void captureSnapshot(int playerId, int ownedIndex);
+    // Снять снимок КАЖДОЙ заспавненной записи владения игрока — зовётся ДО
+    // PersonalVehicleService::reset (тот уничтожает экземпляры), иначе снимать было
+    // бы уже нечего.
+    void captureAllBeforeReset(int playerId);
+    // Write-through UPDATE personal_vehicle (fuel+colour1+colour2+paintjob+components)
+    // ОДНОЙ строкой по dbId — нет гонки между отдельными UPDATE одного и того же
+    // dbId. dbId < 0 (ещё не присвоен из async-INSERT покупки) — no-op, снимок
+    // останется только в памяти до следующего сохранения.
+    void persistSnapshot(long long dbId, const PersonalVehicleService::OwnedVehicle &entry);
+
+    // СЕРВЕРНО применённый тюнинг личной машины (VehicleService::subscribeTuned,
+    // notifyServerTuned зовётся вызывающим бизнес-кодом ПОСЛЕ installComponent/
+    // setColour/setPaintJob — состояние машины уже актуально к этому моменту):
+    // если машина ЛИЧНАЯ (Owner::Player) — планирует captureSnapshot через
+    // TimerService с минимальной задержкой (0 мс — не критично для корректности,
+    // но держит единый путь снятия снимка вне чужого стека вызова). Переживает
+    // краш сервера ДО штатного деспавна. Колбэк таймера перепроверяет
+    // currentVehicle(ownerId, ownedIndex) == vehicleId — машина могла быть
+    // уничтожена/пере-спавнена за время задержки, тогда снятие не наше/устарело.
+    void onVehicleTuned(IVehicle &vehicle);
 
     // Машина умерла (серверно-санкционированная смерть, HP -> 0). Если ЛИЧНАЯ
     // (Owner::Player) — снимаем остаток топлива (персист) и уничтожаем её, чтобы
@@ -77,15 +101,20 @@ class PersonalVehicleSystem : public BaseSystem
     // ЕЩЁ не произошёл) — subscribeRespawned применит его поверх дефолтного бака.
     void onUnsanctionedDeath(IVehicle &vehicle, bool returnsInPlace);
 
-    // Машина переспавнилась (VehicleService уже дал ПОЛНЫЙ бак по умолчанию):
-    // если в m_pendingFuelRestore есть снимок для этого vehicleId (несанкционированная
-    // смерть личной машины) — восстановить его через setFuel поверх дефолта, снять
-    // снимок. Иначе no-op (обычный респавн/чужой owner-тег полный бак не трогаем).
+    // Машина переспавнилась (VehicleService уже дал ПОЛНЫЙ бак по умолчанию, но
+    // ядро ТАКЖЕ обнулило компоненты — Vehicle::_respawn делает mods.fill(0)):
+    // (1) если машина ЛИЧНАЯ — восстанавливает entry.components через addComponent
+    // на КАЖДОМ респавне (не только после несанкционированной смерти); (2) если в
+    // m_pendingFuelRestore есть снимок для этого vehicleId (несанкционированная
+    // смерть) — восстанавливает fuel через setFuel поверх дефолта, снимает снимок.
+    // Цвет/пейнтджоб респавн не трогает (spawnData.colour1/2/paintJob не сбрасывает
+    // ядро) — восстанавливать их здесь не нужно.
     void onVehicleRespawned(IVehicle &vehicle);
 
     PersonalVehicleService &m_personalService;
     VehicleService &m_vehicleService;
     PlayerSessionService &m_sessionService;
+    TimerService &m_timerService;
 
     // Снимок остатка топлива на момент НЕсанкционированной смерти (vehicleId ->
     // fuel), ждущий восстановления в subscribeRespawned. Редкое событие — мало
