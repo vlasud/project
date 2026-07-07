@@ -133,22 +133,20 @@ void PortJobService::dropCarry(int playerId)
     state.phase = Phase::GoToSource; // delivered сохраняется: смена продолжается
 }
 
-unsigned long long PortJobService::endWork(int playerId)
+void PortJobService::endWork(int playerId)
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)
     {
-        return 0;
+        return;
     }
     State &state = m_state[playerId];
     if (state.phase == Phase::NotWorking)
     {
-        return 0;
+        return;
     }
 
     releaseSpot(state); // увольнение застало в Carrying — освободить слот распределения
-    const unsigned long long pay = static_cast<unsigned long long>(state.delivered) * PAY_PER_BOX;
     state = State{};
-    return pay;
 }
 
 void PortJobService::resetPlayer(int playerId)

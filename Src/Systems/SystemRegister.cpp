@@ -3,6 +3,7 @@
 #include "Systems/AdminSystem/AdminSystem.h"
 #include "Systems/AutosaveSystem/AutosaveSystem.h"
 #include "Systems/Core/AntiCheatSystem/AntiCheatSystem.h"
+#include "Systems/Core/AttachmentEditorSystem/AttachmentEditorSystem.h"
 #include "Systems/Core/AttachmentSystem/AttachmentSystem.h"
 #include "Systems/Core/AudioSystem/AudioSystem.h"
 #include "Systems/Core/CameraSystem/CameraSystem.h"
@@ -138,6 +139,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // входе делает PlayerAuthSystem (у него логин-select).
     m_systems.push_back(std::make_unique<PlayerPersonalSkinSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AttachmentSystem>(core, serviceRegister));
+    // AttachmentEditorSystem (дев-тулинг /aedit) сразу после AttachmentSystem: тот
+    // подключает обработчик клиентской подгонки (гизмо) объектов к диспетчеру,
+    // которым пользуется команда редактора.
+    m_systems.push_back(std::make_unique<AttachmentEditorSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AudioSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<GameTextSystem>(core, serviceRegister));
     // ScreenNoticeSystem (экранные попапы через textdraw, замена неуправляемого
@@ -215,9 +220,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // PortJobSystem (работа-грузчик в порту, бизнес-фича вне Core) после PickupSystem
     // (initialize зовёт PickupService::add — компонент пикапов уже подключён),
     // CheckpointSystem, PlayerAnimationSystem, AttachmentSystem, PlayerMoneySystem
-    // (выплата на увольнении), PlayerLocationSystem и PlayerSessionSystem (подписка
-    // на конец сессии — сброс работы/детач/освобождение слота распределения без
-    // выплаты). Цикл целиком событийный (пикап/чекпоинт/таймер), per-tick работы нет.
+    // (выдача наличных на «Забрать деньги» — заработок за сдачу копится персистентно
+    // в PortWalletService, write-through), PlayerLocationSystem и PlayerSessionSystem
+    // (подписка на старт сессии — загрузка кошелька порта; на конец — сброс
+    // волатильного состояния смены и памяти кошелька, БД не трогает). Цикл целиком
+    // событийный (пикап/чекпоинт/таймер), per-tick работы нет.
     m_systems.push_back(std::make_unique<PortJobSystem>(core, serviceRegister));
     // SpawnSystem раньше AuthSystem: на спавне сперва применяются интерьер/мир
     // точки спавна, затем auth навешивает экипировку.

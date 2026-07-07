@@ -6,7 +6,7 @@
 
 namespace
 {
-constexpr int MAX_MODEL = 19999;
+// MAX_MODEL — публичная константа AttachmentService (единый владелец предела id).
 // Пределы подгонки: оффсет дальше — объект болтается в стороне от тела,
 // масштаб больше — закрывает экран окружающим (и то и другое видно всем).
 constexpr float MAX_OFFSET = 10.0f;
@@ -132,6 +132,21 @@ void AttachmentService::detachAll(IPlayer &player)
 bool AttachmentService::isAttached(int playerId, int slot) const
 {
     return slot >= 0 && slot < MAX_SLOTS && m_state[playerId].used[slot];
+}
+
+bool AttachmentService::slotData(int playerId, int slot, ObjectAttachmentSlotData &out) const
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS || slot < 0 || slot >= MAX_SLOTS)
+    {
+        return false;
+    }
+    const State &st = m_state[playerId];
+    if (!st.used[slot])
+    {
+        return false;
+    }
+    out = st.data[slot];
+    return true;
 }
 
 bool AttachmentService::beginEdit(IPlayer &player, int slot, EditHandler onDone)

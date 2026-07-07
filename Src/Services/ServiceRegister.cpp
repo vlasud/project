@@ -13,6 +13,7 @@
 #include "Services/InventoryService/InventoryService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/PortJobService/PortJobService.h"
+#include "Services/PortWalletService/PortWalletService.h"
 #include "Services/VehicleLockService/VehicleLockService.h"
 #include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/CameraService/CameraService.h"
@@ -152,8 +153,13 @@ void ServiceRegister::registerServices()
     registerService<ElectionService>();
     // Работа-грузчик в порту (бизнес-фича, не Core): источник правды о пер-player
     // фазе цикла и балансировщике занятости 6 точек сброса. Без зависимостей;
-    // пикап/чекпоинты/анимации/attach/выплату ведёт привод PortJobSystem.
+    // пикап/чекпоинты/анимации/attach ведёт привод PortJobSystem.
     registerService<PortJobService>();
+    // Персистентный кошелёк заработка в порту (write-through в БД, port_wallet):
+    // сдача коробки зачисляет деньги СРАЗУ, не сгорают при дисконнекте/смерти/
+    // незавершённой смене. Без зависимостей; загрузку по сессии/начисление/выдачу
+    // ведёт привод PortJobSystem.
+    registerService<PortWalletService>();
     // Базовая система вещей (источник правды о предметах игроков онлайн). Без
     // зависимостей; типы регистрируют системы-владельцы (MedkitSystem) в своих
     // конструкторах, persist по сессии делает InventorySystem.

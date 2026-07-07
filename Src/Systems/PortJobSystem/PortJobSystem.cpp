@@ -1,9 +1,12 @@
 #include "Systems/PortJobSystem/PortJobSystem.h"
 
+#include "Database/DatabaseManager.h"
+#include "Log/LogManager.h"
 #include "Utils/Encoding/Encoding.h"
 #include <cstdint>
 #include <fmt/format.h>
 #include <iterator>
+#include <mysqlx/xdevapi.h>
 #include <random>
 
 namespace
@@ -90,6 +93,7 @@ Dialog makeDialog(DialogStyle style, const std::string &title, const std::string
 PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister),
       m_portJobService(serviceRegister.getService<PortJobService>()),
+      m_portWalletService(serviceRegister.getService<PortWalletService>()),
       m_pickupService(serviceRegister.getService<PickupService>()),
       m_checkpointService(serviceRegister.getService<CheckpointService>()),
       m_animationService(serviceRegister.getService<PlayerAnimationService>()),
@@ -104,10 +108,16 @@ PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister
 {
     m_boxSlot.fill(-1);
 
+    // Загрузка персистентного кошелька порта по старту сессии (serial-guard) —
+    // накопленный заработок доступен к выдаче сразу после релога.
+    m_sessionService.subscribeStart([this](IPlayer &player, const PlayerSessionService::Session &session)
+                                    { loadWallet(player, session); });
+
     // Конец сессии (в т.ч. дисконнект) в ЛЮБОЙ фазе: снять ящик/анимацию/чекпоинт и
-    // обнулить состояние БЕЗ выплаты — деньги за незавершённую смену сгорают
-    // (выплата только через явное «Завершить работу»). Ре-используемый playerId не
-    // должен унаследовать чужую работу.
+    // обнулить ВОЛАТИЛЬНОЕ состояние смены. Кошелёк порта НЕ сгорает — он
+    // персистентен в БД (PortWalletService::reset чистит только память слота,
+    // баланс остаётся в БД до явного «Забрать деньги»). Ре-используемый playerId не
+    // должен унаследовать чужую работу/чужой закэшированный баланс.
     m_sessionService.subscribeEnd([this](IPlayer &player, const PlayerSessionService::Session &) { resetPlayer(player); });
 
     // Смерть в смене серверно-авторитетна (PlayerHealthService::subscribeDeath, не
@@ -137,7 +147,10 @@ void PortJobSystem::onPickup(IPlayer &player)
     }
 
     const bool working = m_portJobService.isWorking(playerId);
-    const std::string body = fmt::format("{}\nИнформация", working ? "Завершить работу" : "Начать работу");
+    // Пункт «Забрать деньги» — показывается ВСЕГДА (в смене и вне её), гейт на
+    // пустой баланс/сессию — внутри обработчика, не скрытием пункта.
+    const std::string body =
+        fmt::format("{}\nЗабрать деньги\nИнформация", working ? "Завершить работу" : "Начать работу");
 
     m_dialogService.show(
         player, makeDialog(DialogStyle_LIST, "Порт — работа грузчиком", body, "Выбрать", "Закрыть"),
@@ -153,6 +166,10 @@ void PortJobSystem::onPickup(IPlayer &player)
                 onToggleWork(*player);
             }
             else if (listItem == 1)
+            {
+                onWithdrawMoney(*player);
+            }
+            else if (listItem == 2)
             {
                 showInfo(*player);
             }
@@ -203,7 +220,7 @@ void PortJobSystem::onStartWork(IPlayer &player)
 
     m_checkpointService.setForPlayer(player, SOURCE_POS, CHECKPOINT_RADIUS, [this](IPlayer &p) { onSourceEnter(p); });
     player.sendClientMessage(INFO_COLOUR, u("Смена начата. Идите на отмеченный чекпоинт — там груз с корабля"));
-    m_screenNoticeService.show(player, "Port job started", START_WORK_POPUP_TIME, Colour::White());
+    m_screenNoticeService.show(player, "port job started", START_WORK_POPUP_TIME, Colour::White());
 }
 
 void PortJobSystem::onFinishWork(IPlayer &player)
@@ -230,14 +247,51 @@ void PortJobSystem::onFinishWork(IPlayer &player)
     m_stateService.clearSpecialAction(player); // мог увольняться прямо в несении (carry)
     m_checkpointService.clearForPlayer(player);
 
-    const unsigned long long pay = m_portJobService.endWork(playerId);
-    if (pay > 0)
+    // Деньги НЕ выплачиваются здесь — каждая сдача уже зачислена в кошелёк
+    // порта (write-through, PortWalletService::add). «Завершить работу» лишь
+    // завершает смену; заработок забирается отдельным пунктом «Забрать деньги».
+    m_portJobService.endWork(playerId);
+
+    const std::int64_t walletBalance = m_portWalletService.balanceOf(playerId);
+    player.sendClientMessage(
+        INFO_COLOUR,
+        u(fmt::format("Смена окончена. Ящиков отнесено: {}. В кошельке порта: ${} — заберите через «Забрать деньги»",
+                      delivered, walletBalance)));
+}
+
+void PortJobSystem::onWithdrawMoney(IPlayer &player)
+{
+    const int playerId = player.getID();
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
     {
-        m_moneyService.giveMoney(player, pay);
+        return;
     }
 
-    player.sendClientMessage(
-        INFO_COLOUR, u(fmt::format("Смена окончена. Ящиков отнесено: {}. Получено: ${}", delivered, pay)));
+    // Ре-валидация на клике (диалог мог провисеть, пока сессия сменилась):
+    // серверный accountId из сессии, не клиентское предположение о балансе.
+    const PlayerSessionService::Session *session = m_sessionService.get(playerId);
+    if (!session || session->accountId == PlayerSessionService::NO_ACCOUNT)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Авторизуйтесь, чтобы забрать деньги"));
+        return;
+    }
+
+    if (m_portWalletService.balanceOf(playerId) <= 0)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Забирать нечего — кошелёк порта пуст"));
+        return;
+    }
+
+    // withdraw обнуляет кэш СРАЗУ — повторный клик/второй колбэк того же диалога
+    // не выдаст деньги дважды.
+    const std::int64_t amount = m_portWalletService.withdraw(playerId, session->accountId);
+    if (amount <= 0)
+    {
+        return; // гонка кликов — уже забрано между проверкой баланса и withdraw
+    }
+
+    m_moneyService.giveMoney(player, static_cast<unsigned long long>(amount));
+    player.sendClientMessage(INFO_COLOUR, u(fmt::format("Вы забрали ${} из кошелька порта", amount)));
 }
 
 void PortJobSystem::showInfo(IPlayer &player)
@@ -249,8 +303,9 @@ void PortJobSystem::showInfo(IPlayer &player)
     std::string body = "Поле\tЗначение\n";
     body += "Суть работы\tНосить ящики с корабля на склад\n";
     body += fmt::format("Ставка\t${} за ящик\n", PortJobService::PAY_PER_BOX);
-    body += "Выплата\tна руки только по кнопке «Завершить работу» — недоставленное при выходе сгорает\n";
-    body += fmt::format("Отнесено за смену\t{}", m_portJobService.deliveredOf(playerId));
+    body += "Выплата\tзачисляется в кошелёк порта СРАЗУ при сдаче ящика; на руки — через «Забрать деньги»\n";
+    body += fmt::format("Отнесено за смену\t{}\n", m_portJobService.deliveredOf(playerId));
+    body += fmt::format("В кошельке порта\t${}", m_portWalletService.balanceOf(playerId));
 
     m_dialogService.show(player, makeDialog(DialogStyle_TABLIST_HEADERS, "Работа в порту", body, "Назад", ""),
                          [](DialogResponse, int, StringView) {});
@@ -354,18 +409,28 @@ void PortJobSystem::onPutdownFinished(IPlayer &player)
     m_animationService.stop(player);
     m_portJobService.completeDelivery(playerId);
 
+    // Начислить за сданную коробку СРАЗУ в персистентный кошелёк порта
+    // (write-through в БД) — краш/смерть/дисконнект после этой точки уже ничего
+    // не теряют. Session может отсутствовать только если сессия завершилась
+    // между чекпоинтом и таймером — тогда add() no-op по NO_ACCOUNT (сама смена
+    // в этот момент уже сброшена subscribeEnd, эта строка недостижима практически).
+    const PlayerSessionService::Session *session = m_sessionService.get(playerId);
+    const PlayerSessionService::AccountId accountId =
+        session ? session->accountId : PlayerSessionService::NO_ACCOUNT;
+    m_portWalletService.add(playerId, accountId, static_cast<std::int64_t>(PortJobService::PAY_PER_BOX));
+
     // Попап сдачи: ставка — ТОЛЬКО из PAY_PER_BOX (владелец может её сменить, попап
-    // обязан совпадать с реальной выплатой), итоги — серверный счётчик delivered.
-    // Деньги за смену выплачиваются разом на «Завершить работу» — здесь показываем
-    // НАКОПЛЕННОЕ к выплате, а не «выдано сейчас» (слово "payout", не "received"/
-    // "earned" — деньги на руки только на «Завершить работу»).
+    // обязан совпадать с реальной выплатой), итоги — серверный счётчик delivered и
+    // ТЕКУЩИЙ баланс кошелька порта (накопленное к выдаче через «Забрать деньги»,
+    // а не «выдано сейчас» — деньги на руки только по явному действию игрока).
     // Одна строка: макет попапа однострочный (перенос строки не нужен; литеральный
     // '\n' всё равно срезал бы TextDrawService::sanitizeText).
     const int delivered = m_portJobService.deliveredOf(playerId);
-    const unsigned long long payout = static_cast<unsigned long long>(delivered) * PortJobService::PAY_PER_BOX;
+    const std::int64_t walletBalance = m_portWalletService.balanceOf(playerId);
     m_screenNoticeService.show(
         player,
-        fmt::format("+1 box (+${}). Delivered: {} (payout ${})", PortJobService::PAY_PER_BOX, delivered, payout),
+        fmt::format("+1 box (+${}). Delivered: {} (in wallet: ${})", PortJobService::PAY_PER_BOX, delivered,
+                    walletBalance),
         DELIVERY_POPUP_TIME, DELIVERY_POPUP_COLOUR);
 
     // Снова к источнику — бесконечный цикл смены.
@@ -436,4 +501,37 @@ void PortJobSystem::resetPlayer(IPlayer &player)
     m_stateService.clearSpecialAction(player);  // снять carry, если несли на конце сессии
     m_checkpointService.clearForPlayer(player); // no-op, если персонального чекпоинта не было
     m_portJobService.resetPlayer(playerId);
+    m_portWalletService.reset(playerId); // teardown ТОЛЬКО памяти — баланс остаётся в БД
+}
+
+void PortJobSystem::loadWallet(IPlayer &player, const PlayerSessionService::Session &session)
+{
+    DatabaseManager::selectQuery<std::int64_t>(
+        [accountId = session.accountId](mysqlx::Schema schema) -> std::int64_t
+        {
+            mysqlx::RowResult result = schema.getTable("port_wallet")
+                                           .select("balance")
+                                           .where("account_id = :account")
+                                           .limit(1)
+                                           .bind("account", accountId)
+                                           .execute();
+            // Нет строки -> кошелёк пуст (ещё ни разу не сдавал ящик).
+            if (mysqlx::Row row = result.fetchOne())
+            {
+                return row.get(0).get<std::int64_t>();
+            }
+            return std::int64_t{0};
+        },
+        [this, playerId = player.getID(), serial = session.serial](std::int64_t balance)
+        {
+            // Serial-guard: в слоте мог оказаться другой игрок/другая сессия.
+            const PlayerSessionService::Session *current = m_sessionService.get(playerId);
+            if (!current || current->serial != serial)
+            {
+                return;
+            }
+            m_portWalletService.load(playerId, balance);
+        },
+        [](const std::string &error)
+        { LogManager::log(Error, "PortJobSystem: failed to load port wallet: " + error); });
 }

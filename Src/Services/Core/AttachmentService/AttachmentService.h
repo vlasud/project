@@ -31,6 +31,7 @@ class AttachmentService final : public IService
 
   public:
     static constexpr int MAX_SLOTS = MAX_ATTACHED_OBJECT_SLOTS; // 10
+    static constexpr int MAX_MODEL = 19999;                     // предел валидного id модели объекта
 
     // saved=false — игрок отменил подгонку (ESC), слот вернулся к прежнему виду.
     using EditHandler = std::function<void(IPlayer &, int slot, bool saved)>;
@@ -47,6 +48,10 @@ class AttachmentService final : public IService
     void detach(IPlayer &player, int slot);
     void detachAll(IPlayer &player);
     bool isAttached(int playerId, int slot) const;
+
+    // Прочитать актуальные данные слота (в т.ч. после правки гизмо клиента, которая
+    // кладётся напрямую в st.data). false — слот пуст, out не трогается.
+    bool slotData(int playerId, int slot, ObjectAttachmentSlotData &out) const;
 
     // Нативная подгонка слота игроком. false — слот пуст или нет расширения.
     bool beginEdit(IPlayer &player, int slot, EditHandler onDone = nullptr);

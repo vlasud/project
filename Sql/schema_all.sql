@@ -155,6 +155,16 @@ CREATE TABLE IF NOT EXISTS `bank_account` (
     PRIMARY KEY (`account_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
+-- Персистентный кошелёк заработка в порту (PortWalletService): каждая сданная
+-- коробка зачисляется сюда write-through сразу при сдаче; забирается на руки
+-- отдельным действием («Забрать деньги» на пикапе порта), не сгорает при
+-- дисконнекте/смерти/незавершённой смене.
+CREATE TABLE IF NOT EXISTS `port_wallet` (
+    `account_id` BIGINT NOT NULL,
+    `balance`    BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`account_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
 -- Выборы президента: партии, состояние выборов (одна строка id=1, срок —
 -- unix-время, переживает рестарт) и голоса текущих выборов (один на аккаунт).
 CREATE TABLE IF NOT EXISTS `party` (

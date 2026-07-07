@@ -30,7 +30,9 @@ class PortJobService final : public IService
     Phase phaseOf(int playerId) const;
     bool isWorking(int playerId) const;
     int assignedSpotOf(int playerId) const; // -1 — нет назначенной точки (не Carrying)
-    int deliveredOf(int playerId) const;    // ящиков отнесено за смену, ещё не выплачено
+    int deliveredOf(int playerId) const;    // ящиков отнесено за смену — ВОЛАТИЛЬНЫЙ счётчик
+                                             // для инфо/попапа; деньги начисляются в
+                                             // PortWalletService на каждой сдаче, не отсюда
 
   private:
     // --- вызывается ТОЛЬКО PortJobSystem (мутирующие переходы фазы) ---
@@ -55,16 +57,17 @@ class PortJobService final : public IService
     // Carrying. Привод сам заново поставит чекпоинт источника на респавне.
     void dropCarry(int playerId);
 
-    // Завершить смену («Завершить работу»): возвращает сумму к выплате
-    // (delivered*PAY_PER_BOX), счётчик отнесённых обнуляется, слот распределения
-    // освобождается (если был занят — застали в Carrying), фаза -> NotWorking.
-    // 0, если игрок не работал.
-    unsigned long long endWork(int playerId);
+    // Завершить смену («Завершить работу»): освобождает слот распределения
+    // (если был занят — застали в Carrying), обнуляет счётчик отнесённых, фаза ->
+    // NotWorking. Деньги НЕ трогает — заработок уже в PortWalletService
+    // (write-through на каждой сдаче), выдача — отдельным действием «Забрать
+    // деньги» в любое время. no-op вне смены / bounds-промах.
+    void endWork(int playerId);
 
     // Сброс на конце сессии/дисконнекте: освобождает слот распределения (если был
-    // занят) и обнуляет состояние БЕЗ выплаты — деньги за незавершённую смену
-    // сгорают (выплата только через endWork, «на руки при увольнении»).
-    // Идемпотентно; bounds-safe.
+    // занят) и обнуляет ВОЛАТИЛЬНОЕ состояние смены (фаза/счётчик). Кошелёк порта
+    // (PortWalletService) НЕ трогает — он персистентен в БД и сбрасывается
+    // отдельно (PortJobSystem::resetPlayer). Идемпотентно; bounds-safe.
     void resetPlayer(int playerId);
 
     struct State

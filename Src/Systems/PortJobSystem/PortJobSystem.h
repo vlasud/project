@@ -13,24 +13,31 @@
 #include "Services/Core/TimerService/TimerService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/PortJobService/PortJobService.h"
+#include "Services/PortWalletService/PortWalletService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 #include <array>
 
 // Работа-грузчик в порту (бизнес-фича, НЕ Core), привод PortJobService. Геймплей
 // целиком событийный (пикап/чекпоинт/таймер), per-tick работы нет:
-//  * пикап порта -> диалог «Начать/Завершить работу» + «Информация»;
+//  * пикап порта -> диалог «Начать/Завершить работу» + «Забрать деньги» + «Информация»;
 //  * «Начать работу» ставит ПЕРСОНАЛЬНЫЙ чекпоинт на источнике ящиков (корабль);
 //  * вход в чекпоинт источника -> анимация подъёма -> через таймер ящик
 //    прикрепляется в руку + анимация несения + балансировщик назначает точку
 //    сброса склада -> персональный чекпоинт на ней;
 //  * вход в чекпоинт сброса -> анимация «положить» -> через таймер ящик снят,
-//    +1 к счётчику отнесённых за смену -> снова чекпоинт источника (цикл);
-//  * «Завершить работу» выплачивает delivered*$100 разом и сбрасывает счётчик.
+//    +1 к счётчику отнесённых за смену -> $PAY_PER_BOX сразу в ПЕРСИСТЕНТНЫЙ
+//    кошелёк порта (PortWalletService, write-through в БД) -> снова чекпоинт
+//    источника (цикл);
+//  * «Завершить работу» деньги НЕ выплачивает — только завершает смену
+//    (сбрасывает волатильный счётчик отнесённых), заработок остаётся в кошельке;
+//  * «Забрать деньги» (пункт диалога пикапа, доступен всегда) выплачивает весь
+//    накопленный кошелёк на руки (PlayerMoneyService) и обнуляет его.
 //
 // Ровно ОДНА активная цель за раз (персональный чекпоинт держит только текущую),
-// нельзя нести два ящика одновременно. Деньги — только через PlayerMoneyService,
-// счётчик отнесённых — серверный (PortJobService), клиенту не доверяем.
+// нельзя нести два ящика одновременно. Наличные — только через PlayerMoneyService
+// (сессионные, НЕ персистятся); накопленный заработок — через PortWalletService
+// (персистентный, переживает дисконнект/смерть/краш); клиенту не доверяем.
 class PortJobSystem : public BaseSystem, public PlayerSpawnEventHandler
 {
   public:
@@ -50,7 +57,15 @@ class PortJobSystem : public BaseSystem, public PlayerSpawnEventHandler
     void onToggleWork(IPlayer &player);
     void onStartWork(IPlayer &player);
     void onFinishWork(IPlayer &player);
+    // «Забрать деньги»: ре-валидирует сессию/баланс на клике и выплачивает весь
+    // кошелёк порта на руки (PlayerMoneyService), обнуляя его. Доступно в любое
+    // время (в смене/вне неё, сразу после релога).
+    void onWithdrawMoney(IPlayer &player);
     void showInfo(IPlayer &player);
+
+    // Загрузка кошелька порта по старту сессии (serial-guard) — эталон
+    // SpawnChoiceSystem::loadChoice.
+    void loadWallet(IPlayer &player, const PlayerSessionService::Session &session);
 
     // --- цикл: источник -> несение -> сброс -> источник ---
     void onSourceEnter(IPlayer &player);
@@ -66,10 +81,13 @@ class PortJobSystem : public BaseSystem, public PlayerSpawnEventHandler
     // Снять ящик из руки (если прикреплён) и очистить учёт слота. Bounds-safe.
     void detachBox(IPlayer &player);
     // Полный сброс: снять ящик, остановить анимацию, снять чекпоинт, обнулить
-    // состояние сервиса БЕЗ выплаты. Общий teardown для конца сессии/дисконнекта.
+    // волатильное состояние смены И память кошелька порта (БД НЕ трогает —
+    // баланс остаётся до явного «Забрать деньги»). Общий teardown для конца
+    // сессии/дисконнекта.
     void resetPlayer(IPlayer &player);
 
     PortJobService &m_portJobService;
+    PortWalletService &m_portWalletService;
     PickupService &m_pickupService;
     CheckpointService &m_checkpointService;
     PlayerAnimationService &m_animationService;
