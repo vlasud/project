@@ -64,11 +64,6 @@ constexpr std::chrono::milliseconds EXIT_GRACE{1500};
 // прямо на нём (основной гард, грейс — вторичный).
 constexpr float EXIT_PICKUP_OFFSET = 2.0f;
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
 {

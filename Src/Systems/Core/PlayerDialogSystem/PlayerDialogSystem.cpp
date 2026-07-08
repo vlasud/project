@@ -1,4 +1,5 @@
 #include "Systems/Core/PlayerDialogSystem/PlayerDialogSystem.h"
+#include "Log/LogManager.h"
 #include "Server/Components/Dialogs/dialogs.hpp"
 
 PlayerDialogSystem::PlayerDialogSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -10,6 +11,11 @@ PlayerDialogSystem::PlayerDialogSystem(ICore &core, const ServiceRegister &servi
 void PlayerDialogSystem::initialize(IComponentList *components)
 {
     IDialogsComponent *dialogComponent = components->queryComponent<IDialogsComponent>();
+    if (!dialogComponent)
+    {
+        LogManager::log(Error, "PlayerDialogSystem: IDialogsComponent is missing, dialogs are disabled");
+        return;
+    }
     dialogComponent->getEventDispatcher().addEventHandler(this);
 }
 

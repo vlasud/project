@@ -15,11 +15,6 @@ constexpr std::chrono::milliseconds CMD_FLOOD_WINDOW{1500};  // макс. инт
 constexpr std::chrono::milliseconds CMD_FLOOD_BLOCK{3000};   // длительность блока всех команд
 constexpr std::chrono::milliseconds CMD_FLOOD_NOTICE_COOLDOWN{1000}; // мин. интервал показа сообщения о блоке
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 // ASCII-нижний регистр: без локали и без UB на отрицательных char. Имён команд
 // в кириллице мы не ждём, поэтому ASCII достаточно.
 inline char asciiLower(char c)

@@ -18,11 +18,6 @@ const Colour INFO_COLOUR{120, 220, 255};
 constexpr std::size_t REPORT_MAX_BYTES = 180; // utf-8, ~90 кириллических; как /a/an
 constexpr std::size_t REPORT_MIN_CHARS = 3;   // минимум видимых символов после чистки
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 // Число utf-8 кодпойнтов (видимых символов): считаем не-продолжающие байты
 // (старшие биты != 10xxxxxx). Текст уже прошёл sanitizeUserText — корректный utf-8.
 std::size_t visibleLength(std::string_view utf8)

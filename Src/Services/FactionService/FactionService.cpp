@@ -273,10 +273,21 @@ bool FactionService::setMember(IPlayer &player, int factionId, std::int64_t rank
         [accountId = member.accountId, factionId, rankId, leader, salary, skin = member.skin](mysqlx::Schema schema)
         {
             mysqlx::Table table = schema.getTable("faction_member");
-            table.remove().where("account_id = :account").bind("account", accountId).execute();
-            table.insert("account_id", "faction_id", "rank_id", "is_leader", "salary", "skin")
-                .values(accountId, factionId, rankId, leader ? 1 : 0, salary, skin)
-                .execute();
+            mysqlx::Session &dbSession = schema.getSession();
+            dbSession.startTransaction();
+            try
+            {
+                table.remove().where("account_id = :account").bind("account", accountId).execute();
+                table.insert("account_id", "faction_id", "rank_id", "is_leader", "salary", "skin")
+                    .values(accountId, factionId, rankId, leader ? 1 : 0, salary, skin)
+                    .execute();
+                dbSession.commit();
+            }
+            catch (...)
+            {
+                dbSession.rollback();
+                throw;
+            }
         });
 
     // Назначение лидером уже-члена фракцию не меняет — событие не о чем.
@@ -541,11 +552,22 @@ bool FactionService::appointLeaderByAccount(AccountId accountId, int factionId, 
         [accountId, factionId, rankId, salary, skin](mysqlx::Schema schema)
         {
             mysqlx::Table table = schema.getTable("faction_member");
-            table.update().set("is_leader", 0).where("faction_id = :faction").bind("faction", factionId).execute();
-            table.remove().where("account_id = :account").bind("account", accountId).execute();
-            table.insert("account_id", "faction_id", "rank_id", "is_leader", "salary", "skin")
-                .values(accountId, factionId, rankId, 1, salary, skin)
-                .execute();
+            mysqlx::Session &dbSession = schema.getSession();
+            dbSession.startTransaction();
+            try
+            {
+                table.update().set("is_leader", 0).where("faction_id = :faction").bind("faction", factionId).execute();
+                table.remove().where("account_id = :account").bind("account", accountId).execute();
+                table.insert("account_id", "faction_id", "rank_id", "is_leader", "salary", "skin")
+                    .values(accountId, factionId, rankId, 1, salary, skin)
+                    .execute();
+                dbSession.commit();
+            }
+            catch (...)
+            {
+                dbSession.rollback();
+                throw;
+            }
         });
 
     if (onlinePlayer)
@@ -755,15 +777,26 @@ bool FactionService::deleteRank(int factionId, std::int64_t rankId)
         {
             // Сначала перевод членов (в т.ч. оффлайн), затем удаление ранга
             // и его скоупа подопечных организаций.
-            schema.getTable("faction_member")
-                .update()
-                .set("rank_id", fallbackId)
-                .where("faction_id = :faction AND rank_id = :rank")
-                .bind("faction", factionId)
-                .bind("rank", rankId)
-                .execute();
-            schema.getTable("faction_rank_scope").remove().where("rank_id = :id").bind("id", rankId).execute();
-            schema.getTable("faction_rank").remove().where("id = :id").bind("id", rankId).execute();
+            mysqlx::Session &dbSession = schema.getSession();
+            dbSession.startTransaction();
+            try
+            {
+                schema.getTable("faction_member")
+                    .update()
+                    .set("rank_id", fallbackId)
+                    .where("faction_id = :faction AND rank_id = :rank")
+                    .bind("faction", factionId)
+                    .bind("rank", rankId)
+                    .execute();
+                schema.getTable("faction_rank_scope").remove().where("rank_id = :id").bind("id", rankId).execute();
+                schema.getTable("faction_rank").remove().where("id = :id").bind("id", rankId).execute();
+                dbSession.commit();
+            }
+            catch (...)
+            {
+                dbSession.rollback();
+                throw;
+            }
         });
     return true;
 }

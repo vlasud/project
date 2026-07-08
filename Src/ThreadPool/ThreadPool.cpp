@@ -48,9 +48,28 @@ void ThreadPool::shutdown()
     }
     m_threads.clear();
 
-    // Воркеры дорабатывают очередь до конца (важно для записей в БД) —
-    // выполняем колбэки доделанных задач на потоке, вызвавшем shutdown.
-    flush();
+    // Воркеры дорабатывают очередь до конца (важно для записей в БД), но их
+    // колбэк (напр. DatabaseManager::releaseAndPump) может тут же поставить
+    // в m_tasks следующую отложенную (backpressure) задачу — воркеров для неё
+    // уже нет. Дренируем до фикс-точки: синхронно выполняем всё, что появится
+    // в m_tasks (runQueuedTasksSync), раздаём колбэки (flush()), и повторяем,
+    // пока обе очереди не опустеют без новых добавлений.
+    // Завершимость: DatabaseManager::releaseAndPump выпускает из очереди
+    // backpressure не больше одной задачи на каждую завершённую — цепочка
+    // строго конечна (ограничена глубиной очереди на момент останова).
+    m_draining = true;
+    for (;;)
+    {
+        runQueuedTasksSync();
+        flush();
+
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_tasks.empty() && m_pendingCallbacks.load(std::memory_order_acquire) == 0)
+        {
+            break;
+        }
+    }
+    m_draining = false;
 }
 
 // Вызывается на главном потоке (onTick): исполняет колбэки завершённых задач.
@@ -115,6 +134,47 @@ void ThreadPool::flush()
     }
 
     m_pendingCallbacks.fetch_sub(executed, std::memory_order_relaxed);
+}
+
+// Используется только дренажом shutdown(): воркеров уже нет, поэтому забирает
+// задачи из m_tasks и выполняет run() на вызывающем потоке напрямую, без
+// ожидания на condition_variable. call()/fail() по-прежнему делает flush().
+void ThreadPool::runQueuedTasksSync()
+{
+    for (;;)
+    {
+        std::unique_ptr<ITask> task;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_tasks.empty())
+            {
+                return;
+            }
+            task = std::move(m_tasks.front());
+            m_tasks.pop();
+        }
+
+        // Тот же контракт, что и у воркера: исключение из run() не должно
+        // уронить процесс, текст уйдёт в fail()/лог через flush().
+        try
+        {
+            task->run();
+        }
+        catch (const std::exception &e)
+        {
+            task->error = e.what();
+        }
+        catch (...)
+        {
+            task->error = "unknown exception";
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(m_callbackMutex);
+            m_completedTasks.push(std::move(task));
+        }
+        m_pendingCallbacks.fetch_add(1, std::memory_order_release);
+    }
 }
 
 void ThreadPool::workerThread()

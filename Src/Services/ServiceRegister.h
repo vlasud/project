@@ -1,8 +1,10 @@
 #pragma once
 
+#include "Log/LogManager.h"
 #include "Services/IService.h"
 #include <assert.h>
 #include <cassert>
+#include <cstdlib>
 #include <memory>
 #include <typeindex>
 #include <unordered_map>
@@ -22,9 +24,10 @@ class ServiceRegister final
             return *static_cast<T *>(it->second.get());
         }
 
+        // Сервис не зарегистрирован — ошибка инициализации, продолжать нельзя ни в debug, ни в release.
         assert(false && "Service not found");
-        return *static_cast<T *>(
-            nullptr); // This line will never be reached, but it prevents compiler warnings about no return value.
+        LogManager::log(LogLevel::Error, std::string("ServiceRegister: service not found: ") + typeid(T).name());
+        std::abort(); // безусловное падение — assert в release compiles out, разыменование nullptr ниже было бы UB
     }
 
   private:

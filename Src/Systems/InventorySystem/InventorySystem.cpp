@@ -20,12 +20,6 @@ const Colour ERROR_COLOUR{255, 90, 90};
 // Разумный предел разового ввода количества в дев-меню. add всё равно клампит к
 // maxStack предмета — это лишь отсечка абсурдного клиентского ввода до него.
 constexpr int MAX_DEV_GRANT = 10000;
-
-// cp1251 для вывода игроку (локальный хелпер, как в остальных системах).
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 InventorySystem::InventorySystem(ICore &core, const ServiceRegister &serviceRegister)

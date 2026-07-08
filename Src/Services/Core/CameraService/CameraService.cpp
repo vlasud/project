@@ -3,11 +3,13 @@
 #include "Log/LogManager.h"
 #include "Services/Core/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
 #include "ThreadPool/ThreadPool.h"
+#include "Utils/FileNameSanitizer.h"
 #include "core.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 
@@ -109,7 +111,11 @@ void CameraService::loadPathFromFile(const std::string &name, LoadHandler onLoad
         content << in.rdbuf();
         return content.str();
     };
-    task.callback = [this, name, onLoaded = std::move(onLoaded)](std::string content)
+    // Общий handler на оба колбэка: callback и errorCallback — взаимоисключающие продолжения
+    // одной задачи, но выполняются из разных лямбд, поэтому onLoaded нельзя move-нуть в одну
+    // из них (иначе вторая получит опустошённый std::function).
+    auto handler = std::make_shared<LoadHandler>(std::move(onLoaded));
+    task.callback = [this, name, handler](std::string content)
     {
         CameraPath parsed;
         const bool ok = parsePath(content, parsed);
@@ -121,17 +127,17 @@ void CameraService::loadPathFromFile(const std::string &name, LoadHandler onLoad
         {
             LogManager::log(Warning, "CameraService: no valid points in camerapaths/" + name + ".txt");
         }
-        if (onLoaded)
+        if (*handler)
         {
-            onLoaded(ok);
+            (*handler)(ok);
         }
     };
-    task.errorCallback = [name, onLoaded2 = onLoaded](const std::string &error)
+    task.errorCallback = [name, handler](const std::string &error)
     {
         LogManager::log(Warning, "CameraService: failed to load path '" + name + "': " + error);
-        if (onLoaded2)
+        if (*handler)
         {
-            onLoaded2(false);
+            (*handler)(false);
         }
     };
     ThreadPool::addTask(std::move(task));
@@ -306,6 +312,5 @@ CameraPath CameraService::sanitizePath(CameraPath path)
 
 bool CameraService::validFileName(const std::string &name)
 {
-    return !name.empty() && name.find('/') == std::string::npos && name.find('\\') == std::string::npos &&
-           name.find("..") == std::string::npos;
+    return Utils::isValidPresetName(name); // общий whitelist (закрывает и ':' ADS-gap)
 }

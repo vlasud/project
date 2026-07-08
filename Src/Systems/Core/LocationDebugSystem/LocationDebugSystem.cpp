@@ -13,11 +13,6 @@ constexpr std::chrono::milliseconds VEL_NOTIFY_INTERVAL{500};
 
 const Colour DEBUG_COLOUR{120, 220, 255};
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 const char *violationName(AntiCheatService::ViolationType type)
 {
     switch (type)

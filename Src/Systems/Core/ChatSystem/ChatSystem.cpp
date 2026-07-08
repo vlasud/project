@@ -35,11 +35,6 @@ Colour colourForDistance(float distSq)
     }
     return COLOUR_BANDS[3].colour;
 }
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 ChatSystemSystem::ChatSystemSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -53,7 +48,7 @@ ChatSystemSystem::ChatSystemSystem(ICore &core, const ServiceRegister &serviceRe
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     m_listeners.reserve(64);
 
-    // Временные команды модерации — до появления админ-системы с правами.
+    // Команды модерации чата — требуют админ-уровень (проверка через PermissionSpec::admin).
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 
     commands.add("mute", {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::Int, "секунды"}},
@@ -74,7 +69,7 @@ ChatSystemSystem::ChatSystemSystem(ICore &core, const ServiceRegister &serviceRe
                      target->sendClientMessage(Colour::White(),
                                                u(fmt::format("Вам выдан мут на {} сек", seconds)));
                  },
-                 {}, "замутить игрока в чате на N секунд", PlayerCommandService::HelpCategory::Hidden);
+                 PermissionSpec::admin(1), "замутить игрока в чате на N секунд", PlayerCommandService::HelpCategory::Hidden);
 
     commands.add("unmute", {{PlayerCommandService::Param::Int, "id игрока"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
@@ -89,7 +84,7 @@ ChatSystemSystem::ChatSystemSystem(ICore &core, const ServiceRegister &serviceRe
                      player.sendClientMessage(Colour::White(), u(fmt::format("Мут снят с {}", args.getInt(0))));
                      target->sendClientMessage(Colour::White(), u("Мут снят"));
                  },
-                 {}, "снять мут с игрока", PlayerCommandService::HelpCategory::Hidden);
+                 PermissionSpec::admin(1), "снять мут с игрока", PlayerCommandService::HelpCategory::Hidden);
 }
 
 bool ChatSystemSystem::onPlayerText(IPlayer &player, StringView message)

@@ -105,7 +105,7 @@ void PlayerLocationService::forceTo(IPlayer &player, const Vector3 &position, Ti
     st.position = position;
     st.pendingTeleport = true;
     st.teleportTarget = position;
-    st.teleportAt = now;
+    st.teleportIssuedAt = now;
     ++st.discontinuity;
     player.setPosition(position);
 }
@@ -302,11 +302,6 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
     // как правду нельзя — правда на время грейса в точке телепорта.
     if (st.pendingTeleport)
     {
-        if (resumedFromPause)
-        {
-            // Клиент грузил зону, а не игнорировал телепорт — продлеваем ожидание.
-            st.teleportAt = now;
-        }
         if (glm::distance(reported, st.teleportTarget) <= st.arriveRadius)
         {
             st.pendingTeleport = false;
@@ -314,11 +309,15 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
             ++st.discontinuity;
             return outcome;
         }
-        if (now - st.teleportAt >= TELEPORT_GRACE)
+        // Грейс истекает через TELEPORT_GRACE от РЕАЛЬНОЙ выдачи (teleportIssuedAt), а не от
+        // тактирования sync: клиент, шлющий sync паузным темпом (>= PAUSE_GAP), иначе
+        // бесконечно продлевал бы грейс и уходил от детекта. Загрузка дальней зоны выглядит
+        // как пауза, но грейс НЕ продлевает — честный клиент всё равно доедет и снимет флаг.
+        if (now - st.teleportIssuedAt >= TELEPORT_GRACE)
         {
             // Клиент игнорирует setPosition — переустанавливаем и фиксируем.
             player.setPosition(st.teleportTarget);
-            st.teleportAt = now;
+            st.teleportIssuedAt = now; // повторная выдача — новое окно прибытия
             outcome.teleportHack = true;
             outcome.detail = fmt::format("ignoring teleport to {:.0f} {:.0f} {:.0f}", st.teleportTarget.x,
                                          st.teleportTarget.y, st.teleportTarget.z);

@@ -3,6 +3,7 @@
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
+#include "Utils/FileNameSanitizer.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -60,11 +61,6 @@ std::string boneName(int bone)
     return "?";
 }
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
 {
@@ -77,22 +73,11 @@ Dialog makeDialog(DialogStyle style, const std::string &title, const std::string
     return dialog;
 }
 
-// Имя файла: только [A-Za-z0-9_-], непусто. Белый список сам исключает
-// '/', '\\', '..', ':' — иначе путь мог бы выйти из PRESETS_DIR (path traversal).
+// Общий whitelist-хелпер (Utils/FileNameSanitizer.h) — единая проверка для всех
+// редакторов пресетов.
 bool sanitizeFileName(const std::string &name)
 {
-    if (name.empty() || name.size() > 64)
-    {
-        return false;
-    }
-    for (char c : name)
-    {
-        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-')
-        {
-            return false;
-        }
-    }
-    return true;
+    return Utils::isValidPresetName(name);
 }
 
 // "x y z" (разделитель пробел/запятая) -> вектор. Меньше/больше трёх чисел

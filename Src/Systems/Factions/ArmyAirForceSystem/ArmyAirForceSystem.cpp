@@ -12,11 +12,6 @@ const Vector3 BASE_POS{400.0f, 2480.0f, 16.5f}; // аэродром Вердан
 constexpr float BASE_ANGLE = 0.0f;
 constexpr int MARKER_MODEL = 1239; // иконка «i»
 constexpr int MARKER_TYPE = 1;     // подбор по касанию, всегда виден
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 ArmyAirForceSystem::ArmyAirForceSystem(ICore &core, const ServiceRegister &serviceRegister)

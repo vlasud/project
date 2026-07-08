@@ -12,11 +12,6 @@ const Vector3 BASE_POS{291.0f, 1817.0f, 18.0f}; // Зона 69, Боун-Кау�
 constexpr float BASE_ANGLE = 0.0f;
 constexpr int MARKER_MODEL = 1239; // иконка «i»
 constexpr int MARKER_TYPE = 1;     // подбор по касанию, всегда виден
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 ArmyGroundSystem::ArmyGroundSystem(ICore &core, const ServiceRegister &serviceRegister)

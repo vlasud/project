@@ -3,6 +3,7 @@
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
+#include "Utils/FileNameSanitizer.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -34,11 +35,6 @@ constexpr float MIN_ZONE_SIZE = 5.0f;      // меньше клавишами н
 // Применять изменения (с пересборкой обрезки и перепоказом) не чаще, чем раз
 // в столько тиков: живой отклик без спама радара hide/show на каждый тик.
 constexpr int REBUILD_INTERVAL_TICKS = 5;
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
@@ -710,10 +706,9 @@ void GangZoneEditorSystem::showSaveNameInput(IPlayer &player)
             }
 
             const std::string name = text.to_string();
-            if (name.empty() || name.find('/') != std::string::npos || name.find('\\') != std::string::npos ||
-                name.find("..") != std::string::npos)
+            if (!Utils::isValidPresetName(name))
             {
-                player->sendClientMessage(Colour::White(), u("Недопустимое имя файла"));
+                player->sendClientMessage(Colour::White(), u("Недопустимое имя файла (разрешены A-Za-z0-9, _, -)"));
                 showSaveNameInput(*player);
                 return;
             }
@@ -842,7 +837,19 @@ void GangZoneEditorSystem::saveToFileAsync(IPlayer &player, const std::string &n
 
 void GangZoneEditorSystem::loadFromFileAsync(IPlayer &player, const std::string &name)
 {
+    // Ре-санитизация имени перед построением пути чтения (defense-in-depth: даже
+    // при выборе из листинга имя не должно вырваться из ZONES_DIR).
+    if (!Utils::isValidPresetName(name))
+    {
+        player.sendClientMessage(Colour::White(), u("Недопустимое имя файла"));
+        showMain(player);
+        return;
+    }
     const std::string path = ZONES_DIR + "/" + name + ".txt";
+
+    // Токен состояния набора зон на момент запроса: если за окно async-чтения зоны
+    // изменит любой админ, устаревшую загрузку в колбэке отменим (не затираем).
+    const int revisionAtSubmit = m_gangZoneService.getRevision();
 
     ThreadPool::Task<std::string> task;
     task.func = [path]()
@@ -856,13 +863,27 @@ void GangZoneEditorSystem::loadFromFileAsync(IPlayer &player, const std::string 
         content << in.rdbuf();
         return content.str();
     };
-    task.callback = [this, playerId = player.getID(), name](std::string content)
+    task.callback = [this, playerId = player.getID(), name, revisionAtSubmit](std::string content)
     {
+        IPlayer *player = onlinePlayer(playerId);
+
+        // Набор зон изменился за окно чтения — применение файла затёрло бы свежие
+        // правки. Отменяем устаревшую загрузку (зоны глобальные — токена per-player
+        // недостаточно, сверяем ревизию сервиса).
+        if (m_gangZoneService.getRevision() != revisionAtSubmit)
+        {
+            if (player)
+            {
+                player->sendClientMessage(Colour::White(), u("Зоны изменились, загрузка отменена"));
+                showMain(*player);
+            }
+            return;
+        }
+
         // Зоны глобальные — применяем независимо от инициатора; очистка старого
         // набора происходит только после успешного чтения файла.
         const std::size_t loaded = loadFromContent(content);
 
-        IPlayer *player = onlinePlayer(playerId);
         if (!player)
         {
             return;

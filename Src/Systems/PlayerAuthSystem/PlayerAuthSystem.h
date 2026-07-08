@@ -8,6 +8,8 @@
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/PlayerSkinService/PlayerSkinService.h"
+#include "Services/PlayerMoneyPersistService/PlayerMoneyPersistService.h"
+#include "Services/PlayerWeaponPersistService/PlayerWeaponPersistService.h"
 #include "Services/PlayerPersonalSkinService/PlayerPersonalSkinService.h"
 #include "Services/PlayerAuthService/PlayerAuthService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
@@ -70,6 +72,15 @@ class PlayerAuthSystem : public BaseSystem,
     // органный скин и захватит «гражданский» для возврата.
     void finalize(IPlayer &player, int personalSkin);
 
+    // Единственная точка ВЫДАЧИ ОРУЖИЯ на логин-спавне (наличные к этому моменту
+    // обычно уже применены на загрузке — см. PlayerMoneyPersistSystem — этот
+    // вызов лишь ресинхронит HUD). Если кэш PlayerMoneyPersistService/
+    // PlayerWeaponPersistService к этому моменту ещё не загружен (гонка с
+    // async-загрузкой) — взводит m_awaitingMoneyApply/m_awaitingWeaponsApply, и
+    // применение довершат наблюдатели subscribeMoneyLoaded/subscribeWeaponsLoaded
+    // из конструктора.
+    void applyPersistedEquipment(IPlayer &player);
+
     PlayerAuthService &m_authService;
     PlayerConnectionVersionService &m_connectionVersionService;
     PlayerDialogService &m_dialogService;
@@ -77,6 +88,8 @@ class PlayerAuthSystem : public BaseSystem,
     PlayerStateService &m_stateService;
     PlayerWeaponService &m_weaponService;
     PlayerMoneyService &m_moneyService;
+    PlayerMoneyPersistService &m_moneyPersistService;
+    PlayerWeaponPersistService &m_weaponPersistService;
     PlayerSpawnService &m_spawnService;
     PlayerSkinService &m_skinService;
     PlayerPersonalSkinService &m_personalSkinService;
@@ -89,4 +102,11 @@ class PlayerAuthSystem : public BaseSystem,
     // нельзя делать до его события спавна — сервисы на спавне сбрасывают
     // инвентарь и ожидание телепорта. Флаг переносит настройку в onPlayerSpawn.
     std::array<bool, MAX_PLAYERS> m_pendingSpawnSetup{};
+
+    // Спавн прошёл раньше async-загрузки персиста — apply довершит наблюдатель
+    // загрузки (см. applyPersistedEquipment). Сбрасываются в resetState на
+    // коннекте/дисконнекте, чтобы переиспользуемый слот не унаследовал чужое
+    // ожидание.
+    std::array<bool, MAX_PLAYERS> m_awaitingMoneyApply{};
+    std::array<bool, MAX_PLAYERS> m_awaitingWeaponsApply{};
 };

@@ -5,9 +5,7 @@
 #include "Utils/Encoding/Encoding.h"
 #include <cstdint>
 #include <fmt/format.h>
-#include <iterator>
 #include <mysqlx/xdevapi.h>
-#include <random>
 
 namespace
 {
@@ -28,36 +26,29 @@ const Vector3 SOURCE_POS{2809.5854f, -2436.2959f, 13.6283f};
 
 // 6 точек сброса склада — персональные (каждому назначается ровно одна текущая).
 const Vector3 DROP_POSITIONS[PortJobService::DROP_COUNT] = {
-    {2793.9033f, -2464.2310f, 13.6322f}, {2785.7219f, -2449.6755f, 13.6342f},
-    {2793.5857f, -2410.9824f, 13.6322f}, {2785.9136f, -2424.7654f, 13.6341f},
-    {2793.3564f, -2502.0574f, 13.6435f}, {2785.3872f, -2487.2617f, 13.6532f},
+    {2793.9033f, -2464.2310f, 13.6322f}, {2785.7219f, -2449.6755f, 13.6342f}, {2793.5857f, -2410.9824f, 13.6322f},
+    {2785.9136f, -2424.7654f, 13.6341f}, {2793.3564f, -2502.0574f, 13.6435f}, {2785.3872f, -2487.2617f, 13.6532f},
 };
 
 // Стандартный радиус персонального чекпоинта в проекте (см. CheckpointService.h).
 constexpr float CHECKPOINT_RADIUS = 3.0f;
 
-// Ящик в руке: модель случайно из пула (визуальное разнообразие), правая рука.
-// ВНИМАНИЕ: offset/rotation — стартовое приближение, требует проверки вживую на
-// клиенте (как читается ящик в руках) — verify-on-client, дизайнер/дев уточнят.
-constexpr int BOX_MODELS[] = {1220, 1221, 1230};
-const Vector3 BOX_OFFSET{0.0f, 0.0f, -0.02f};
-const Vector3 BOX_ROTATION{0.0f, 0.0f, 0.0f};
-// Дефолтный ящик в руке слишком крупный — уменьшаем до 2/3 (MIN_SCALE=0.01, не клампится).
-const Vector3 BOX_SCALE{2.0f / 3.0f, 2.0f / 3.0f, 2.0f / 3.0f};
+// Ящик в руке: единственная модель пресета /aedit, правая кисть.
+// offset/rotation/scale выверены вживую на клиенте через дев-редактор /aedit.
+constexpr int BOX_MODEL = 1220;
+const Vector3 BOX_OFFSET{-0.038f, 0.132f, -0.258f};
+const Vector3 BOX_ROTATION{-16.0f, 0.0f, 0.0f};
+const Vector3 BOX_SCALE{0.6f, 0.513f, 1.232f};
 
-int randomBoxModel()
-{
-    static thread_local std::mt19937 rng{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<int> dist(0, static_cast<int>(std::size(BOX_MODELS)) - 1);
-    return BOX_MODELS[dist(rng)];
-}
-
-// Удержание позы подъёма/укладки: анимация проигрывается ОДИН раз (freeze=1, time=0)
-// и застывает на финальном кадре, а по этому таймеру берётся/кладётся ящик и идёт
-// переход. time анимации НЕ равен этим значениям специально — раньше time>натуральной
-// длины заставлял клиента повторять анимацию 2-3 раза, пока не выйдет время.
-constexpr Milliseconds LIFT_DURATION{1100};
-constexpr Milliseconds PUTDOWN_DURATION{1000};
+// Удержание поз подъёма/укладки: анимация проигрывается ОДИН раз (freeze=1, time=0)
+// и застывает на финальном кадре, а по этому таймеру идёт переход. Ящик появляется
+// СРАЗУ на входе на чекпоинт источника (без задержки), но анимация подъёма играется;
+// несение (carry) включается по её завершении (LIFT_DURATION). На сбросе ящик
+// снимается через PUTDOWN_DURATION после входа на чекпоинт. time анимации НЕ равен
+// этим значениям специально — раньше time>натуральной длины заставлял клиента
+// повторять анимацию, пока не выйдет время.
+constexpr Milliseconds LIFT_DURATION{1000};
+constexpr Milliseconds PUTDOWN_DURATION{300};
 
 // Экранные попапы (ScreenNoticeService, поверх textdraw, не чат) — старт смены
 // и сдача ящика. Длительность заметна, но не залипает поверх геймплея. Цвет —
@@ -71,11 +62,6 @@ constexpr Milliseconds PUTDOWN_DURATION{1000};
 constexpr Milliseconds START_WORK_POPUP_TIME{3000};
 constexpr Milliseconds DELIVERY_POPUP_TIME{3000};
 const Colour DELIVERY_POPUP_COLOUR{0x90, 0xEE, 0x90, 0xFF};
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
@@ -91,8 +77,7 @@ Dialog makeDialog(DialogStyle style, const std::string &title, const std::string
 } // namespace
 
 PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister)
-    : BaseSystem(core, serviceRegister),
-      m_portJobService(serviceRegister.getService<PortJobService>()),
+    : BaseSystem(core, serviceRegister), m_portJobService(serviceRegister.getService<PortJobService>()),
       m_portWalletService(serviceRegister.getService<PortWalletService>()),
       m_pickupService(serviceRegister.getService<PickupService>()),
       m_checkpointService(serviceRegister.getService<CheckpointService>()),
@@ -110,20 +95,31 @@ PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister
 
     // Загрузка персистентного кошелька порта по старту сессии (serial-guard) —
     // накопленный заработок доступен к выдаче сразу после релога.
-    m_sessionService.subscribeStart([this](IPlayer &player, const PlayerSessionService::Session &session)
-                                    { loadWallet(player, session); });
+    m_sessionService.subscribeStart(
+        [this](IPlayer &player, const PlayerSessionService::Session &session)
+        {
+            loadWallet(player, session);
+        });
 
     // Конец сессии (в т.ч. дисконнект) в ЛЮБОЙ фазе: снять ящик/анимацию/чекпоинт и
     // обнулить ВОЛАТИЛЬНОЕ состояние смены. Кошелёк порта НЕ сгорает — он
     // персистентен в БД (PortWalletService::reset чистит только память слота,
     // баланс остаётся в БД до явного «Забрать деньги»). Ре-используемый playerId не
     // должен унаследовать чужую работу/чужой закэшированный баланс.
-    m_sessionService.subscribeEnd([this](IPlayer &player, const PlayerSessionService::Session &) { resetPlayer(player); });
+    m_sessionService.subscribeEnd(
+        [this](IPlayer &player, const PlayerSessionService::Session &)
+        {
+            resetPlayer(player);
+        });
 
     // Смерть в смене серверно-авторитетна (PlayerHealthService::subscribeDeath, не
     // клиентский onPlayerDeath, который чит может не прислать): роняем несомый ящик,
     // смена продолжается.
-    m_healthService.subscribeDeath([this](IPlayer &player) { onPlayerDeath(player); });
+    m_healthService.subscribeDeath(
+        [this](IPlayer &player)
+        {
+            onPlayerDeath(player);
+        });
 
     // Респавн: чекпоинт источника переставляем на onPlayerSpawn (персональный
     // чекпоинт CheckpointService после смерти-респавна сам не перепоказывается).
@@ -135,7 +131,12 @@ void PortJobSystem::initialize(IComponentList * /*components*/)
     // К моменту initialize PickupSystem уже получил компонент пикапов (порядок
     // реестра систем — PortJobSystem зарегистрирована после него).
     m_pickup = m_pickupService.add(
-        PORT_PICKUP_MODEL, PORT_PICKUP_TYPE, PORT_PICKUP_POS, [this](IPlayer &player) { onPickup(player); }, 0);
+        PORT_PICKUP_MODEL, PORT_PICKUP_TYPE, PORT_PICKUP_POS,
+        [this](IPlayer &player)
+        {
+            onPickup(player);
+        },
+        0);
 }
 
 void PortJobSystem::onPickup(IPlayer &player)
@@ -152,28 +153,27 @@ void PortJobSystem::onPickup(IPlayer &player)
     const std::string body =
         fmt::format("{}\nЗабрать деньги\nИнформация", working ? "Завершить работу" : "Начать работу");
 
-    m_dialogService.show(
-        player, makeDialog(DialogStyle_LIST, "Порт — работа грузчиком", body, "Выбрать", "Закрыть"),
-        [this, playerId](DialogResponse response, int listItem, StringView)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
-            if (!player || response != DialogResponse_Left)
-            {
-                return; // игрок вышел / закрыл — ничего не делаем
-            }
-            if (listItem == 0)
-            {
-                onToggleWork(*player);
-            }
-            else if (listItem == 1)
-            {
-                onWithdrawMoney(*player);
-            }
-            else if (listItem == 2)
-            {
-                showInfo(*player);
-            }
-        });
+    m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Порт — работа грузчиком", body, "Выбрать", "Закрыть"),
+                         [this, playerId](DialogResponse response, int listItem, StringView)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (!player || response != DialogResponse_Left)
+                             {
+                                 return; // игрок вышел / закрыл — ничего не делаем
+                             }
+                             if (listItem == 0)
+                             {
+                                 onToggleWork(*player);
+                             }
+                             else if (listItem == 1)
+                             {
+                                 onWithdrawMoney(*player);
+                             }
+                             else if (listItem == 2)
+                             {
+                                 showInfo(*player);
+                             }
+                         });
 }
 
 void PortJobSystem::onToggleWork(IPlayer &player)
@@ -215,10 +215,15 @@ void PortJobSystem::onStartWork(IPlayer &player)
     }
 
     // Предзагружаем либу CARRY сейчас (игрок ещё идёт к кораблю ~несколько секунд) —
-    // иначе ПЕРВЫЙ ApplyAnimation(LIFTUP05) на незагруженной либе не проигрывается.
+    // иначе ПЕРВЫЙ ApplyAnimation(PUTDWN05, укладка на сбросе) на незагруженной либе
+    // не проигрывается.
     m_animationService.preloadLibrary(player, "CARRY");
 
-    m_checkpointService.setForPlayer(player, SOURCE_POS, CHECKPOINT_RADIUS, [this](IPlayer &p) { onSourceEnter(p); });
+    m_checkpointService.setForPlayer(player, SOURCE_POS, CHECKPOINT_RADIUS,
+                                     [this](IPlayer &p)
+                                     {
+                                         onSourceEnter(p);
+                                     });
     player.sendClientMessage(INFO_COLOUR, u("Смена начата. Идите на отмеченный чекпоинт — там груз с корабля"));
     m_screenNoticeService.show(player, "port job started", START_WORK_POPUP_TIME, Colour::White());
 }
@@ -239,7 +244,7 @@ void PortJobSystem::onFinishWork(IPlayer &player)
     const int delivered = m_portJobService.deliveredOf(playerId); // endWork ниже обнулит счётчик
     // Застали в фазе несения — снять ящик/анимацию (чекпоинт снимается общим
     // clearForPlayer ниже, для обеих фаз одинаково). Отмена ожидающего таймера
-    // лифт/путдаун — иначе стале-колбэк мог бы продвинуть будущую смену (см.
+    // укладки — иначе стале-колбэк мог бы продвинуть будущую смену (см.
     // комментарий у m_pendingTimer).
     m_timers.cancel(m_pendingTimer[playerId]);
     detachBox(player);
@@ -308,7 +313,9 @@ void PortJobSystem::showInfo(IPlayer &player)
     body += fmt::format("В кошельке порта\t${}", m_portWalletService.balanceOf(playerId));
 
     m_dialogService.show(player, makeDialog(DialogStyle_TABLIST_HEADERS, "Работа в порту", body, "Назад", ""),
-                         [](DialogResponse, int, StringView) {});
+                         [](DialogResponse, int, StringView)
+                         {
+                         });
 }
 
 void PortJobSystem::onSourceEnter(IPlayer &player)
@@ -326,14 +333,31 @@ void PortJobSystem::onSourceEnter(IPlayer &player)
         return;
     }
 
-    m_checkpointService.clearForPlayer(player); // цель снята на время анимации — ровно одна активная цель
-    // freeze=1, time=0: сыграть один раз и застыть в финальной позе (НЕ повторять,
-    // чтобы заполнить time). Позу снимет onLiftFinished, когда возьмётся ящик.
+    m_checkpointService.clearForPlayer(player); // цель снята — ровно одна активная цель
+
+    const int spot = m_portJobService.assignDropSpot(playerId); // переводит фазу GoToSource -> Carrying
+    if (spot < 0 || spot >= PortJobService::DROP_COUNT)
+    {
+        return; // недостижимо после проверки фазы выше — защитный гейт
+    }
+
+    // Ящик появляется в руке СРАЗУ на входе (без задержки). Анимация подъёма
+    // LIFTUP05 играется поверх (freeze=1, time=0 — сыграть один раз и застыть);
+    // несение (SpecialAction_Carry) и чекпоинт сброса включаются по её завершении
+    // в onLiftFinished (по таймеру LIFT_DURATION).
+    m_boxSlot[playerId] =
+        m_attachmentService.attach(player, BOX_MODEL, PlayerBone_RightHand, BOX_OFFSET, BOX_ROTATION, BOX_SCALE);
+    // slot может быть -1 (все 10 слотов заняты другой фичей) — работу не проваливаем,
+    // цикл продолжается без видимого ящика; detachBox(-1) ниже безопасный no-op.
+
     const AnimationData liftAnim(4.1f, false, true, true, true, 0, "CARRY", "LIFTUP05");
     m_animationService.play(player, liftAnim, true);
 
-    m_pendingTimer[playerId] =
-        m_timers.setPlayerTimeout(player, LIFT_DURATION, [this](IPlayer &p) { onLiftFinished(p); });
+    m_pendingTimer[playerId] = m_timers.setPlayerTimeout(player, LIFT_DURATION,
+                                                         [this](IPlayer &p)
+                                                         {
+                                                             onLiftFinished(p);
+                                                         });
 }
 
 void PortJobSystem::onLiftFinished(IPlayer &player)
@@ -343,32 +367,28 @@ void PortJobSystem::onLiftFinished(IPlayer &player)
     {
         return;
     }
-    if (m_portJobService.phaseOf(playerId) != PortJobService::Phase::GoToSource)
+    // Мог завершить смену/умереть во время анимации подъёма (тогда фаза уже не
+    // Carrying, таймер отменён) — защитный гейт.
+    if (m_portJobService.phaseOf(playerId) != PortJobService::Phase::Carrying)
     {
-        return; // смена завершена/отменена, пока играла анимация подъёма
+        return;
     }
-
-    const int spot = m_portJobService.assignDropSpot(playerId);
+    const int spot = m_portJobService.assignedSpotOf(playerId);
     if (spot < 0 || spot >= PortJobService::DROP_COUNT)
     {
-        return; // недостижимо после проверки фазы выше — защитный гейт
+        return;
     }
 
-    m_animationService.stop(player); // снять застывшую позу подъёма перед несением
-    m_boxSlot[playerId] = m_attachmentService.attach(player, randomBoxModel(), PlayerBone_RightHand, BOX_OFFSET,
-                                                     BOX_ROTATION, BOX_SCALE);
-    // slot может быть -1 (все 10 слотов заняты другой фичей) — работу не проваливаем,
-    // цикл продолжается без видимого ящика; detachBox(-1) ниже безопасный no-op.
-
-    // Несение — нативный SpecialAction_Carry, а НЕ зацикленная анимация: он позволяет
-    // игроку ХОДИТЬ с ящиком (обычная ходьба/бег его не сбрасывают). Зацикленная
-    // full-body CRRY_PRTIAL держала игрока на месте — двигаться было нельзя.
-    // enforced=false: если игрок сам выйдет из carry (прыжок/сел в машину) — без
-    // санкции, доставка всё равно гейтится входом в чекпоинт сброса.
+    m_animationService.stop(player); // снять застывшую позу подъёма
+    // Несение — нативный SpecialAction_Carry (позволяет ХОДИТЬ с ящиком; обычная
+    // ходьба/бег его не сбрасывают). enforced=false: сам выйдет из carry (прыжок/
+    // машина) — без санкции, доставка всё равно гейтится входом в чекпоинт сброса.
     m_stateService.setSpecialAction(player, SpecialAction_Carry);
-
     m_checkpointService.setForPlayer(player, DROP_POSITIONS[spot], CHECKPOINT_RADIUS,
-                                     [this](IPlayer &p) { onDropEnter(p); });
+                                     [this](IPlayer &p)
+                                     {
+                                         onDropEnter(p);
+                                     });
 }
 
 void PortJobSystem::onDropEnter(IPlayer &player)
@@ -389,8 +409,11 @@ void PortJobSystem::onDropEnter(IPlayer &player)
     const AnimationData putdownAnim(4.1f, false, true, true, true, 0, "CARRY", "PUTDWN05");
     m_animationService.play(player, putdownAnim, true);
 
-    m_pendingTimer[playerId] =
-        m_timers.setPlayerTimeout(player, PUTDOWN_DURATION, [this](IPlayer &p) { onPutdownFinished(p); });
+    m_pendingTimer[playerId] = m_timers.setPlayerTimeout(player, PUTDOWN_DURATION,
+                                                         [this](IPlayer &p)
+                                                         {
+                                                             onPutdownFinished(p);
+                                                         });
 }
 
 void PortJobSystem::onPutdownFinished(IPlayer &player)
@@ -415,26 +438,25 @@ void PortJobSystem::onPutdownFinished(IPlayer &player)
     // между чекпоинтом и таймером — тогда add() no-op по NO_ACCOUNT (сама смена
     // в этот момент уже сброшена subscribeEnd, эта строка недостижима практически).
     const PlayerSessionService::Session *session = m_sessionService.get(playerId);
-    const PlayerSessionService::AccountId accountId =
-        session ? session->accountId : PlayerSessionService::NO_ACCOUNT;
+    const PlayerSessionService::AccountId accountId = session ? session->accountId : PlayerSessionService::NO_ACCOUNT;
     m_portWalletService.add(playerId, accountId, static_cast<std::int64_t>(PortJobService::PAY_PER_BOX));
 
-    // Попап сдачи: ставка — ТОЛЬКО из PAY_PER_BOX (владелец может её сменить, попап
-    // обязан совпадать с реальной выплатой), итоги — серверный счётчик delivered и
-    // ТЕКУЩИЙ баланс кошелька порта (накопленное к выдаче через «Забрать деньги»,
-    // а не «выдано сейчас» — деньги на руки только по явному действию игрока).
-    // Одна строка: макет попапа однострочный (перенос строки не нужен; литеральный
-    // '\n' всё равно срезал бы TextDrawService::sanitizeText).
-    const int delivered = m_portJobService.deliveredOf(playerId);
+    // Попап сдачи: короткий — ставка ТОЛЬКО из PAY_PER_BOX (владелец может её сменить,
+    // попап обязан совпадать с реальной выплатой) и ТЕКУЩИЙ баланс кошелька порта
+    // (накопленное к выдаче через «Забрать деньги», а не «выдано сейчас» — деньги на
+    // руки только по явному действию игрока). Одна строка: макет попапа однострочный
+    // (перенос строки не нужен; литеральный '\n' всё равно срезал бы
+    // TextDrawService::sanitizeText).
     const std::int64_t walletBalance = m_portWalletService.balanceOf(playerId);
-    m_screenNoticeService.show(
-        player,
-        fmt::format("+1 box (+${}). Delivered: {} (in wallet: ${})", PortJobService::PAY_PER_BOX, delivered,
-                    walletBalance),
-        DELIVERY_POPUP_TIME, DELIVERY_POPUP_COLOUR);
+    m_screenNoticeService.show(player, fmt::format("+${}, wallet ${}", PortJobService::PAY_PER_BOX, walletBalance),
+                               DELIVERY_POPUP_TIME, DELIVERY_POPUP_COLOUR);
 
     // Снова к источнику — бесконечный цикл смены.
-    m_checkpointService.setForPlayer(player, SOURCE_POS, CHECKPOINT_RADIUS, [this](IPlayer &p) { onSourceEnter(p); });
+    m_checkpointService.setForPlayer(player, SOURCE_POS, CHECKPOINT_RADIUS,
+                                     [this](IPlayer &p)
+                                     {
+                                         onSourceEnter(p);
+                                     });
 }
 
 void PortJobSystem::onPlayerDeath(IPlayer &player)
@@ -446,7 +468,7 @@ void PortJobSystem::onPlayerDeath(IPlayer &player)
     }
 
     // Смерть = уронил несомый груз, но смена НЕ прерывается (delivered сохраняется).
-    // Отменяем висящий таймер лифт/путдаун — после респавна он не должен продвинуть
+    // Отменяем висящий таймер укладки — после респавна он не должен продвинуть
     // цикл; снимаем ящик/анимацию; откатываем фазу к GoToSource (releaseSpot внутри
     // dropCarry). Чекпоинт снимаем сейчас, заново ставим на onPlayerSpawn — ставить
     // персональный чекпоинт мёртвому игроку смысла нет (он всё равно респавнится).
@@ -471,7 +493,11 @@ void PortJobSystem::onPlayerSpawn(IPlayer &player)
     {
         return;
     }
-    m_checkpointService.setForPlayer(player, SOURCE_POS, CHECKPOINT_RADIUS, [this](IPlayer &p) { onSourceEnter(p); });
+    m_checkpointService.setForPlayer(player, SOURCE_POS, CHECKPOINT_RADIUS,
+                                     [this](IPlayer &p)
+                                     {
+                                         onSourceEnter(p);
+                                     });
 }
 
 void PortJobSystem::detachBox(IPlayer &player)
@@ -497,7 +523,7 @@ void PortJobSystem::resetPlayer(IPlayer &player)
         m_timers.cancel(m_pendingTimer[playerId]);
     }
     detachBox(player);
-    m_animationService.stop(player); // no-op, если не играла
+    m_animationService.stop(player);            // no-op, если не играла
     m_stateService.clearSpecialAction(player);  // снять carry, если несли на конце сессии
     m_checkpointService.clearForPlayer(player); // no-op, если персонального чекпоинта не было
     m_portJobService.resetPlayer(playerId);
@@ -533,5 +559,7 @@ void PortJobSystem::loadWallet(IPlayer &player, const PlayerSessionService::Sess
             m_portWalletService.load(playerId, balance);
         },
         [](const std::string &error)
-        { LogManager::log(Error, "PortJobSystem: failed to load port wallet: " + error); });
+        {
+            LogManager::log(Error, "PortJobSystem: failed to load port wallet: " + error);
+        });
 }

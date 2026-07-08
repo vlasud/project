@@ -82,6 +82,11 @@ bool GangZoneService::isAvailable() const
     return m_gangZones != nullptr;
 }
 
+int GangZoneService::getRevision() const
+{
+    return m_revision;
+}
+
 int GangZoneService::addZone(Vector2 cornerA, Vector2 cornerB, Colour colour)
 {
     if (!m_gangZones)
@@ -96,6 +101,7 @@ int GangZoneService::addZone(Vector2 cornerA, Vector2 cornerB, Colour colour)
     zone.colour = colour;
     m_zones.push_back(std::move(zone));
 
+    ++m_revision;
     rebuild();
     return m_zones.back().id;
 }
@@ -108,6 +114,7 @@ void GangZoneService::removeZone(int zoneId)
         {
             releasePieces(*it);
             m_zones.erase(it);
+            ++m_revision;
             rebuild(); // младшие зоны могли освободиться из-под обрезки
             return;
         }
@@ -121,6 +128,7 @@ void GangZoneService::clearZones()
         releasePieces(zone);
     }
     m_zones.clear();
+    ++m_revision;
 }
 
 bool GangZoneService::setZoneRect(int zoneId, Vector2 cornerA, Vector2 cornerB)
@@ -131,6 +139,7 @@ bool GangZoneService::setZoneRect(int zoneId, Vector2 cornerA, Vector2 cornerB)
         return false;
     }
     zone->rect = normalizeRect(cornerA, cornerB);
+    ++m_revision;
     rebuild();
     return true;
 }
@@ -143,6 +152,7 @@ bool GangZoneService::setZoneColour(int zoneId, Colour colour)
         return false;
     }
     zone->colour = colour;
+    ++m_revision;
     showZoneToAll(*zone); // геометрия не менялась — достаточно перепоказать
     return true;
 }
@@ -167,6 +177,7 @@ bool GangZoneService::moveZonePriority(int zoneId, bool up)
         {
             return false; // уже на краю
         }
+        ++m_revision;
         rebuild();
         return true;
     }

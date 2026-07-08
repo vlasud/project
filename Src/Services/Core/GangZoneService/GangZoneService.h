@@ -40,6 +40,12 @@ class GangZoneService final : public IService
 
     bool isAvailable() const;
 
+    // Монотонный счётчик мутаций набора зон (add/remove/clear/setRect/setColour/
+    // приоритет). Редактор захватывает его при постановке async-load и сверяет в
+    // колбэке перед clearZones: если набор изменился за окно чтения — устаревшую
+    // загрузку отменяет, чтобы не затереть свежие правки другого админа.
+    int getRevision() const;
+
     // Создать зону по двум противоположным углам (порядок углов любой,
     // координаты клампятся к миру). Новая зона получает низший приоритет.
     // Возвращает id зоны или -1.
@@ -93,4 +99,5 @@ class GangZoneService final : public IService
     IGangZonesComponent *m_gangZones = nullptr;
     std::vector<Zone> m_zones; // порядок = приоритет: первые обрезают последующих
     int m_nextId = 1;
+    int m_revision = 0; // растёт на каждой мутации набора зон (см. getRevision)
 };

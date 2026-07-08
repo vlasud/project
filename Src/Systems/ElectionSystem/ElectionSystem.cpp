@@ -28,11 +28,6 @@ const Vector3 URN_POSITIONS[] = {
     {2106.00f, 2190.00f, 11.06f},   // ЛВ
 };
 constexpr int PICKUP_MODEL = 1239; // иконка «i»
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 ElectionSystem::ElectionSystem(ICore &core, const ServiceRegister &serviceRegister)

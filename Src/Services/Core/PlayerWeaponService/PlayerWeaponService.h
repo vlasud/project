@@ -7,6 +7,8 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 // Сервис оружия — серверный инвентарь как единственный источник истины о том,
 // какое оружие и сколько патронов есть у игрока.
@@ -51,6 +53,12 @@ class PlayerWeaponService final : public IService
     void removeWeapon(IPlayer &player, std::uint8_t weaponId);
     void resetWeapons(IPlayer &player);
     void setAmmo(IPlayer &player, std::uint8_t weaponId, std::uint32_t ammo);
+
+    // --- read-only снимок для персиста (см. PlayerWeaponPersistSystem) ---
+    // Текущий набор непустых слотов: (weaponId, ammo). out очищается перед
+    // заполнением; ammo клампится к >=0 (Slot::ammo может уйти в минус до порога
+    // долга на ammo-hack — отрицательное сохранять бессмысленно). Bounds-safe.
+    void getWeapons(int playerId, std::vector<std::pair<std::uint8_t, int>> &out) const;
 
     struct Outcome
     {

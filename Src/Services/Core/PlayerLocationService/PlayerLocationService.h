@@ -97,7 +97,8 @@ class PlayerLocationService final : public IService
 
         bool pendingTeleport = false; // ждём, пока клиент доедет до teleportTarget
         Vector3 teleportTarget{};
-        TimePoint teleportAt;
+        TimePoint teleportIssuedAt; // момент РЕАЛЬНОЙ выдачи телепорта; грейс гейтится по нему,
+                                    // resumedFromPause его НЕ трогает (иначе grace продлевался бы бесконечно)
         float arriveRadius = 30.0f; // адаптивный: доля от дальности прыжка, иначе
                                     // запоздавшие пакеты со старой позицией
                                     // засчитываются как «прибыл» при коротком откате

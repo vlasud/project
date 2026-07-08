@@ -8,11 +8,6 @@
 namespace
 {
 const Colour DEBUG_COLOUR{120, 220, 255};
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 PlayerSessionSystem::PlayerSessionSystem(ICore &core, const ServiceRegister &serviceRegister)

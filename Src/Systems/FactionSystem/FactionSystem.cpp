@@ -22,11 +22,6 @@ const Colour CIVILIAN_COLOUR{200, 200, 200};
 // Рация организации: весь текст светло-зелёный.
 const Colour RADIO_COLOUR{144, 238, 144};
 constexpr std::size_t MAX_RADIO_BYTES = 180; // utf-8, ~90 кириллических
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 FactionSystem::FactionSystem(ICore &core, const ServiceRegister &serviceRegister)

@@ -391,6 +391,8 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
                 st.confirmed = false;
                 player.setHealth(st.maxHealth);
             }
+            if (st.health <= 0.0f)
+                enterDying(player); // легальный даунсинк до 0 — фиксируем смерть серверно
             return outcome;
         }
         if (timeNow - st.lastChange < SYNC_GRACE)

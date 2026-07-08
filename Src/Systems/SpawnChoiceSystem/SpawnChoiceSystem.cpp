@@ -23,11 +23,6 @@ constexpr float STATION_ANGLE = 89.2331f;
 // телепорт»), под ней три реальных пункта. Поэтому listItem смещён на единицу:
 // 0 — подсказка, 1 — вокзал, 2 — дом, 3 — работа (см. dispatch по индексу ниже).
 constexpr int HINT_ROWS = 1;
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 SpawnChoiceSystem::SpawnChoiceSystem(ICore &core, const ServiceRegister &serviceRegister)

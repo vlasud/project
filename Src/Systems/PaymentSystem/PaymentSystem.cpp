@@ -12,11 +12,6 @@ constexpr size_t PAY_BUFFER_SIZE = 128 + 1;
 const Colour PAY_COLOUR = Colour::FromRGBA(0x33AA33FF); // читаемый зелёный
 // Потолок баланса: HUD money на клиенте — signed int32, выше уедет в минус.
 constexpr unsigned long long MONEY_MAX = static_cast<unsigned long long>(std::numeric_limits<int>::max());
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 PaymentSystem::PaymentSystem(ICore &core, const ServiceRegister &serviceRegister)

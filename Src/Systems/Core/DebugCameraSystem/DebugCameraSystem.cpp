@@ -3,6 +3,7 @@
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
+#include "Utils/FileNameSanitizer.h"
 #include "glm/geometric.hpp"
 #include <algorithm>
 #include <chrono>
@@ -30,11 +31,6 @@ constexpr float SEGMENT_TIME_MAX_S = 120.0f;
 constexpr std::size_t MAX_POINTS = 64;
 
 const std::string PATHS_DIR = "camerapaths";
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
@@ -577,10 +573,9 @@ void DebugCameraSystem::showSaveNameInput(IPlayer &player)
             }
 
             const std::string name = text.to_string();
-            if (name.empty() || name.find('/') != std::string::npos || name.find('\\') != std::string::npos ||
-                name.find("..") != std::string::npos)
+            if (!Utils::isValidPresetName(name))
             {
-                player->sendClientMessage(Colour::White(), u("Недопустимое имя файла"));
+                player->sendClientMessage(Colour::White(), u("Недопустимое имя файла (разрешены A-Za-z0-9, _, -)"));
                 showSaveNameInput(*player);
                 return;
             }
@@ -711,6 +706,14 @@ void DebugCameraSystem::savePathToFileAsync(IPlayer &player, const std::string &
 
 void DebugCameraSystem::loadPathFromFileAsync(IPlayer &player, const std::string &name)
 {
+    // Ре-санитизация имени перед построением пути чтения (defense-in-depth: даже
+    // при выборе из листинга имя не должно вырваться из PATHS_DIR).
+    if (!Utils::isValidPresetName(name))
+    {
+        player.sendClientMessage(Colour::White(), u("Недопустимое имя файла"));
+        showMain(player);
+        return;
+    }
     const std::string path = PATHS_DIR + "/" + name + ".txt";
 
     ThreadPool::Task<std::string> task;

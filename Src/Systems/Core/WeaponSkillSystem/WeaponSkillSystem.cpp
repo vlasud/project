@@ -1,5 +1,6 @@
 #include "Systems/Core/WeaponSkillSystem/WeaponSkillSystem.h"
 
+#include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
 #include <fmt/format.h>
@@ -11,11 +12,6 @@ const Colour INFO_COLOUR{120, 220, 255};
 // Имена скиллов в порядке PlayerWeaponSkill (0..10) — только для дев-вывода.
 constexpr const char *SKILL_NAMES[WeaponSkillService::NUM_SKILLS] = {
     "Pistol", "Silenced", "Deagle", "Shotgun", "SawnOff", "SPAS12", "Uzi", "MP5", "AK47", "M4", "Sniper"};
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 WeaponSkillSystem::WeaponSkillSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -26,9 +22,11 @@ WeaponSkillSystem::WeaponSkillSystem(ICore &core, const ServiceRegister &service
     core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
 
     // Дев-тулза: одна команда -> диалог-меню (серверная правда + максимум/сброс).
+    // Гейт прав обязателен: maxOut/reset навыков — privilege escalation без него.
     serviceRegister.getService<PlayerCommandService>().add(
-        "wskill", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showSkillMenu(player); }, {},
-        "дев-меню навыков оружия (меню)", PlayerCommandService::HelpCategory::Hidden);
+        "wskill", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showSkillMenu(player); },
+        PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "дев-меню навыков оружия (меню)",
+        PlayerCommandService::HelpCategory::Hidden);
 }
 
 void WeaponSkillSystem::showSkillMenu(IPlayer &player)

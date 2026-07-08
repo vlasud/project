@@ -21,11 +21,14 @@ session-end-персист для остававшихся онлайн игро
 Автосейв ограничивает потерю **интервалом** и заодно покрывает **краш** сервера
 (там события дисконнекта тоже нет).
 
-**Zero-loss на штатном стопе НЕ гарантируется.** Гарантированная нулевая потеря
-потребовала бы shutdown-flush: в `GameMode::free()` до `ThreadPool::shutdown`
-форсить персист онлайн-игроков и синхронно дренировать backpressure-очереди
-`DatabaseManager` (хрупко: после join воркеров перезапущенные задачи не
-выполнятся). Это отложено намеренно — автосейв проще и закрывает основную потерю.
+**Zero-loss на штатном стопе НЕ гарантируется.** `ThreadPool::shutdown()` дренирует
+backpressure-очереди `DatabaseManager` до фикс-точки (см. `Docs/Bugs.md`,
+`shutdown-loss` — исправлено), так что уже ПОСТАВЛЕННЫЕ к моменту стопа запросы
+досохраняются гарантированно. Но `GameMode::free()` не форсит персист онлайн-игроков
+перед `ThreadPool::shutdown` — изменения, накопленные с последнего автосейва
+(интервал `AUTOSAVE_INTERVAL`), в очередь попасть не успевают. Это отложено
+намеренно — периодический автосейв проще и закрывает основную потерю; полный
+zero-loss потребовал бы forced-persist прохода по онлайну перед shutdown.
 
 ## Как
 
@@ -54,7 +57,10 @@ Offline/без сессии — ранний return.
 
 - `InventorySystem::persistItems` — REPLACE снимка `player_items` (транзакция);
 - `WeaponProficiencySystem::persistProficiency` — UPSERT `player_weapon_skill`;
-- `PlayerPersonalSkinSystem` — UPDATE `player.skin`.
+- `PlayerPersonalSkinSystem` — UPDATE `player.skin`;
+- `PlayerMoneyPersistSystem::persistMoney` — UPSERT `player_money`;
+  `PlayerWeaponPersistSystem::persistWeapons` — REPLACE снимка `player_weapon`
+  (транзакция), см. `Docs/Persistence.md`.
 
 **Исключены (остаются на `subscribeEnd`, автосейвом НЕ гоняются):**
 

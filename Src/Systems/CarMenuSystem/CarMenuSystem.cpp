@@ -20,11 +20,6 @@ const Colour ERROR_COLOUR{255, 90, 90};
 // Радиус, в котором можно припарковать машину у СВОЕГО дома (двор дома, не полгорода).
 constexpr float PARK_HOUSE_RADIUS = 30.0f;
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
 {

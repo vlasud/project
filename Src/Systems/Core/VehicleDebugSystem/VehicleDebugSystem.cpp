@@ -17,11 +17,6 @@ const Colour DEBUG_COLOUR{170, 255, 170};
 // Модель машины владельца Work для дев-спавна по умолчанию.
 constexpr int DEV_WORK_MODEL = 411; // Infernus
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
 {

@@ -15,11 +15,6 @@ constexpr int RP_MAX_TEXT_LENGTH = 80;
 
 const Colour RP_COLOUR = Colour::FromRGBA(0xC2A2DAFF); // фиолетовый RP
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 // Исход /try: 50/50. Генератор thread_local, сидится один раз — без аллокаций
 // и пересоздания на вызов.
 bool trySucceeds()

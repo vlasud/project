@@ -17,11 +17,6 @@ const Colour ERROR_COLOUR{255, 90, 90};
 // Допуск на «полное здоровье»: тот же масштаб, что EPS рассинхрона в
 // PlayerHealthService — float HP не всегда ровно 100.
 constexpr float FULL_HEALTH_EPS = 1.0f;
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 MedkitSystem::MedkitSystem(ICore &core, const ServiceRegister &serviceRegister)

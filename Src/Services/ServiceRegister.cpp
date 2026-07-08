@@ -25,6 +25,8 @@
 #include "Services/Core/PlayerActivityService/PlayerActivityService.h"
 #include "Services/Core/PlayerAnimationService/PlayerAnimationService.h"
 #include "Services/PlayerAuthService/PlayerAuthService.h"
+#include "Services/PlayerMoneyPersistService/PlayerMoneyPersistService.h"
+#include "Services/PlayerWeaponPersistService/PlayerWeaponPersistService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/PlayerSpawnService/PlayerSpawnService.h"
 #include "Services/Core/PlayerChatService/PlayerChatService.h"
@@ -123,6 +125,12 @@ void ServiceRegister::registerServices()
     registerService<PlayerMoneyService>();
     registerService<PlayerSpawnService>();
     registerService<PlayerSessionService>();
+    // Кэш персиста стартовой экипировки (наличные+оружие аккаунта, бизнес-фича,
+    // не Core, разведена по SRP на два независимых сервиса): без зависимостей;
+    // загрузку/сохранение делает PlayerMoneyPersistSystem/PlayerWeaponPersistSystem,
+    // выдачу на логин-спавне — PlayerAuthSystem.
+    registerService<PlayerMoneyPersistService>();
+    registerService<PlayerWeaponPersistService>();
     registerService<BankService>();
     registerService<FactionService>();
     // Семьи — player-created социальные группы (бизнес-фича, не Core). Без

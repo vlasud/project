@@ -9,14 +9,6 @@
 #include <chrono>
 #include <fmt/format.h>
 
-namespace
-{
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-} // namespace
-
 SpectateSystem::SpectateSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_spectateService(serviceRegister.getService<SpectateService>()),
       m_timerService(serviceRegister.getService<TimerService>())

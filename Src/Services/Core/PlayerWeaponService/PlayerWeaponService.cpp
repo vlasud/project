@@ -245,8 +245,11 @@ PlayerWeaponService::ShotOutcome PlayerWeaponService::onShot(IPlayer &player, co
     --slot->ammo;
     if (slot->ammo < -AMMO_DEBT)
     {
-        // Стрельба при серверном нуле патронов глубже допуска на дрейф.
-        slot->ammo = 0;
+        // Стрельба при серверном нуле патронов глубже допуска на дрейф. Долг клампим
+        // к полу (-AMMO_DEBT), а НЕ обнуляем: обнуление давало окно прощения на
+        // AMMO_DEBT выстрелов, а с клампом следующий нелегальный выстрел ретриггерит
+        // детект сразу.
+        slot->ammo = -AMMO_DEBT;
         player.setWeaponAmmo(WeaponSlotData{weaponId, 0});
         flag(ShotFlag::WeaponHack, fmt::format("shooting weapon {} with no ammo", weaponId));
         return outcome;
@@ -362,4 +365,17 @@ void PlayerWeaponService::onSpawn(IPlayer &player)
 void PlayerWeaponService::reset(int playerId)
 {
     m_state[playerId] = State{};
+}
+
+void PlayerWeaponService::getWeapons(int playerId, std::vector<std::pair<std::uint8_t, int>> &out) const
+{
+    out.clear();
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return;
+    for (const Slot &slot : m_state[playerId].slots)
+    {
+        if (slot.id == 0)
+            continue; // пустой слот
+        out.emplace_back(slot.id, slot.ammo > 0 ? slot.ammo : 0);
+    }
 }

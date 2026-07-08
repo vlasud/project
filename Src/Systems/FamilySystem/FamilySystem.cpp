@@ -32,11 +32,6 @@ constexpr const char *OFFLINE_TAG = "{FF5A5A}оффлайн";
 constexpr Milliseconds FAMILY_CREATED_POPUP_TIME{5000};
 const Colour FAMILY_CREATED_POPUP_COLOUR{0x90, 0xEE, 0x90, 0xFF};
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
 {

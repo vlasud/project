@@ -7,11 +7,6 @@
 namespace
 {
 const Colour INFO_COLOUR{120, 220, 255};
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 BankSystem::BankSystem(ICore &core, const ServiceRegister &serviceRegister)

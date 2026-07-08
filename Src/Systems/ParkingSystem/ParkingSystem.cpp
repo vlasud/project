@@ -43,11 +43,6 @@ const Colour PARKING_LABEL_COLOUR{120, 220, 255};
 constexpr float PARKING_LABEL_DRAW_DISTANCE = 25.0f;
 constexpr bool PARKING_LABEL_TEST_LOS = false;
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
 {

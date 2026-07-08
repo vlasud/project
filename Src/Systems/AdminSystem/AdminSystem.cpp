@@ -79,11 +79,6 @@ bool isPlayingState(PlayerState state)
     return state == PlayerState_OnFoot || state == PlayerState_Driver || state == PlayerState_Passenger;
 }
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 // IP игрока (серверный факт) для лога регистрации. Пусто — если адрес не
 // сериализуется (на всякий случай, чтобы запись не упала).
 std::string playerIp(IPlayer &player)

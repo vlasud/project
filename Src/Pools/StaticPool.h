@@ -28,6 +28,28 @@ template <typename T, size_t N> class StaticPool
     StaticPool(const StaticPool &) = delete;
     StaticPool &operator=(const StaticPool &) = delete;
 
+    // Переинициализация пула, когда создание слота может провалиться (напр.
+    // соединение к БД оборвано): initFn вызывается для каждого слота, доступным
+    // становится ТОЛЬКО тот, где initFn вернул true — сбойный get() больше
+    // никогда не выдаст. Заменяет полное наполнение из конструктора. Возвращает
+    // число успешно инициализированных слотов.
+    size_t init(const std::function<bool(T &)> &initFn)
+    {
+        std::stack<size_t> empty;
+        m_availableIndices.swap(empty);
+
+        size_t succeeded = 0;
+        for (size_t i = 0; i < N; ++i)
+        {
+            if (initFn(m_pool[i]))
+            {
+                m_availableIndices.push(i);
+                ++succeeded;
+            }
+        }
+        return succeeded;
+    }
+
     T *get()
     {
         if (m_availableIndices.empty())

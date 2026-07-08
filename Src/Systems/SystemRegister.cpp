@@ -54,6 +54,8 @@
 #include "Systems/Core/PlayerActivitySystem/PlayerActivitySystem.h"
 #include "Systems/Core/PlayerAnimationSystem/PlayerAnimationSystem.h"
 #include "Systems/PlayerAuthSystem/PlayerAuthSystem.h"
+#include "Systems/PlayerMoneyPersistSystem/PlayerMoneyPersistSystem.h"
+#include "Systems/PlayerWeaponPersistSystem/PlayerWeaponPersistSystem.h"
 #include "Systems/PlayerSessionSystem/PlayerSessionSystem.h"
 #include "Systems/PlayerSpawnSystem/PlayerSpawnSystem.h"
 #include "Systems/Core/PlayerCommandSystem/PlayerCommandSystem.h"
@@ -233,6 +235,15 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // SpectateSystem после SpawnSystem: возврат из спектейта перекрывает
     // интерьер/мир точки спавна своим сохранённым местом.
     m_systems.push_back(std::make_unique<SpectateSystem>(core, serviceRegister));
+    // Персист стартовой экипировки (наличные+оружие аккаунта, бизнес-фича, не
+    // Core, разведена по SRP на два независимых сервиса+системы) до
+    // PlayerAuthSystem: тот на логин-спавне читает кэш PlayerMoneyPersistService/
+    // PlayerWeaponPersistService (и подписывается на late-загрузку) — сервисы
+    // уже должны принимать подписки к этому моменту. Порядок конструирования
+    // здесь не критичен (обе подписки регистрируются в конструкторах ДО первого
+    // реального события), но так нагляднее видна зависимость.
+    m_systems.push_back(std::make_unique<PlayerMoneyPersistSystem>(core, serviceRegister));
+    m_systems.push_back(std::make_unique<PlayerWeaponPersistSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAuthSystem>(core, serviceRegister));
     // FactionSystem после auth: подписки на сессию (членство грузится по её
     // старту). Конкретные фракции регистрируются после неё.

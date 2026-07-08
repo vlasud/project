@@ -5,14 +5,6 @@
 #include "Utils/Encoding/Encoding.h"
 #include <string>
 
-namespace
-{
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-} // namespace
-
 HelpSystem::HelpSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_commandService(serviceRegister.getService<PlayerCommandService>()),
       m_factionService(serviceRegister.getService<FactionService>()),

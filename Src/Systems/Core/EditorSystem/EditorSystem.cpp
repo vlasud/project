@@ -3,6 +3,7 @@
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
+#include "Utils/FileNameSanitizer.h"
 #include "anim.hpp"
 #include "component.hpp"
 #include "glm/geometric.hpp"
@@ -243,11 +244,6 @@ constexpr AnimPreset ANIM_PRESETS[] = {
 };
 constexpr int ANIM_PRESET_COUNT = static_cast<int>(sizeof(ANIM_PRESETS) / sizeof(ANIM_PRESETS[0]));
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
 {
@@ -364,6 +360,16 @@ void EditorSystem::initialize(IComponentList *components)
 EditorSystem::EditorState &EditorSystem::stateOf(const IPlayer &player)
 {
     return m_state[player.getID()];
+}
+
+bool EditorSystem::asyncOpBusy(IPlayer &player)
+{
+    if (!stateOf(player).asyncOpPending)
+    {
+        return false;
+    }
+    player.sendClientMessage(Colour::White(), u("Идёт операция с файлом, подождите"));
+    return true;
 }
 
 IPlayer *EditorSystem::editorPlayer(int playerId)
@@ -697,6 +703,10 @@ Vector3 EditorSystem::placementPoint(IPlayer &player) const
 
 void EditorSystem::createObjectEntity(IPlayer &player, int model)
 {
+    if (asyncOpBusy(player))
+    {
+        return;
+    }
     EditorState &state = stateOf(player);
     const Vector3 pos = placementPoint(player);
 
@@ -933,6 +943,10 @@ void EditorSystem::beginMouseSelect(IPlayer &player)
 
 void EditorSystem::createActorEntity(IPlayer &player, int skin)
 {
+    if (asyncOpBusy(player))
+    {
+        return;
+    }
     EditorState &state = stateOf(player);
     const Vector3 pos = placementPoint(player);
 
@@ -980,6 +994,10 @@ IVehicle *EditorSystem::spawnVehicle(const EditorEntity &entity)
 
 void EditorSystem::createVehicleEntity(IPlayer &player, int model)
 {
+    if (asyncOpBusy(player))
+    {
+        return;
+    }
     EditorState &state = stateOf(player);
 
     EditorEntity entity;
@@ -1010,6 +1028,10 @@ void EditorSystem::createVehicleEntity(IPlayer &player, int model)
 
 void EditorSystem::createPickupEntity(IPlayer &player, int model)
 {
+    if (asyncOpBusy(player))
+    {
+        return;
+    }
     EditorState &state = stateOf(player);
     const Vector3 pos = placementPoint(player);
 
@@ -1040,6 +1062,10 @@ void EditorSystem::createPickupEntity(IPlayer &player, int model)
 
 void EditorSystem::createCheckpointEntity(IPlayer &player)
 {
+    if (asyncOpBusy(player))
+    {
+        return;
+    }
     EditorState &state = stateOf(player);
 
     EditorEntity entity;
@@ -1100,6 +1126,10 @@ void EditorSystem::refreshCheckpointPreview(IPlayer &player)
 
 void EditorSystem::duplicateEntity(IPlayer &player, int index)
 {
+    if (asyncOpBusy(player))
+    {
+        return;
+    }
     EditorState &state = stateOf(player);
     if (index < 0 || index >= (int)state.entities.size())
     {
@@ -3072,10 +3102,10 @@ void EditorSystem::showSaveNameInput(IPlayer &player)
                              }
 
                              const std::string name = text.to_string();
-                             if (name.empty() || name.find('/') != std::string::npos ||
-                                 name.find('\\') != std::string::npos || name.find("..") != std::string::npos)
+                             if (!Utils::isValidPresetName(name))
                              {
-                                 player->sendClientMessage(Colour::White(), u("Недопустимое имя файла"));
+                                 player->sendClientMessage(Colour::White(),
+                                                           u("Недопустимое имя файла (разрешены A-Za-z0-9, _, -)"));
                                  showSaveNameInput(*player);
                                  return;
                              }
@@ -3435,6 +3465,10 @@ std::string EditorSystem::serializeScene(const EditorState &state) const
 
 void EditorSystem::saveToFileAsync(IPlayer &player, const std::string &name)
 {
+    if (asyncOpBusy(player))
+    {
+        return;
+    }
     const std::string path = MAPS_DIR + "/" + name + ".txt";
 
     ThreadPool::Task<bool> task;
@@ -3456,6 +3490,7 @@ void EditorSystem::saveToFileAsync(IPlayer &player, const std::string &name)
     };
     task.callback = [this, playerId = player.getID(), path](bool)
     {
+        m_state[playerId].asyncOpPending = false;
         if (IPlayer *player = editorPlayer(playerId))
         {
             player->sendClientMessage(Colour::White(), u("Карта сохранена: " + path));
@@ -3463,16 +3498,30 @@ void EditorSystem::saveToFileAsync(IPlayer &player, const std::string &name)
     };
     task.errorCallback = [this, playerId = player.getID()](const std::string &error)
     {
+        m_state[playerId].asyncOpPending = false;
         if (IPlayer *player = editorPlayer(playerId))
         {
             player->sendClientMessage(Colour::White(), u("Ошибка сохранения: " + error));
         }
     };
+    stateOf(player).asyncOpPending = true;
     ThreadPool::addTask(std::move(task));
 }
 
 void EditorSystem::loadFromFileAsync(IPlayer &player, const std::string &name, bool replace)
 {
+    if (asyncOpBusy(player))
+    {
+        return;
+    }
+    // Ре-санитизация имени перед построением пути чтения (defense-in-depth: даже
+    // при выборе из листинга имя не должно вырваться из MAPS_DIR).
+    if (!Utils::isValidPresetName(name))
+    {
+        player.sendClientMessage(Colour::White(), u("Недопустимое имя файла"));
+        showMain(player);
+        return;
+    }
     const std::string path = MAPS_DIR + "/" + name + ".txt";
 
     ThreadPool::Task<std::string> task;
@@ -3489,6 +3538,7 @@ void EditorSystem::loadFromFileAsync(IPlayer &player, const std::string &name, b
     };
     task.callback = [this, playerId = player.getID(), name, replace](std::string content)
     {
+        m_state[playerId].asyncOpPending = false; // снимаем гард до мутаций сцены в этом же колбэке
         IPlayer *player = editorPlayer(playerId);
         if (!player)
         {
@@ -3513,17 +3563,23 @@ void EditorSystem::loadFromFileAsync(IPlayer &player, const std::string &name, b
     };
     task.errorCallback = [this, playerId = player.getID()](const std::string &error)
     {
+        m_state[playerId].asyncOpPending = false;
         if (IPlayer *player = editorPlayer(playerId))
         {
             player->sendClientMessage(Colour::White(), u("Ошибка загрузки: " + error));
             showMain(*player);
         }
     };
+    stateOf(player).asyncOpPending = true;
     ThreadPool::addTask(std::move(task));
 }
 
 void EditorSystem::listMapFilesAsync(IPlayer &player)
 {
+    if (asyncOpBusy(player))
+    {
+        return;
+    }
     ThreadPool::Task<std::vector<std::string>> task;
     task.func = []()
     {
@@ -3544,11 +3600,14 @@ void EditorSystem::listMapFilesAsync(IPlayer &player)
     };
     task.callback = [this, playerId = player.getID()](std::vector<std::string> files)
     {
+        m_state[playerId].asyncOpPending = false;
         if (IPlayer *player = editorPlayer(playerId))
         {
             showLoadList(*player, std::move(files));
         }
     };
+    task.errorCallback = [this, playerId = player.getID()](const std::string &) { m_state[playerId].asyncOpPending = false; };
+    stateOf(player).asyncOpPending = true;
     ThreadPool::addTask(std::move(task));
 }
 

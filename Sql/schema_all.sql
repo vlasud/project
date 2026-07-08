@@ -443,3 +443,45 @@ CREATE TABLE IF NOT EXISTS `player_spawn` (
     `choice`     INT    NOT NULL DEFAULT 0,
     PRIMARY KEY (`account_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
+-- ============ player_money.sql ============
+
+-- Наличные аккаунта (персист PlayerMoneyService). Применить вручную к схеме
+-- геймода. НЕ банковский счёт (см. bank_account) — это баланс на руках,
+-- отображаемый в HUD. Один снимок на аккаунт (PK): геймод переписывает `cash`
+-- идемпотентным UPSERT на save-канале сессии (конец сессии И периодический
+-- автосейв — см. Docs/Autosave.md), НЕ на каждую транзакцию (наличные меняются
+-- часто). Нет строки — новый аккаунт, наличные $0 (стартовой эмиссии по входу
+-- больше нет — см. Docs/Persistence.md).
+--
+-- account_id — аккаунт (player.id). cash — серверный баланс наличных
+-- (PlayerMoneyService::getMoney), unsigned по природе — отрицательного не бывает.
+CREATE TABLE IF NOT EXISTS `player_money` (
+    `account_id` BIGINT NOT NULL,
+    `cash`       BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`account_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
+-- ============ player_weapon.sql ============
+
+-- Оружие аккаунта (персист PlayerWeaponService). Применить вручную к схеме
+-- геймода. Одна строка на пару (аккаунт, оружие) — снимок ЖИВОГО инвентаря на
+-- момент сохранения (как player_items): геймод REPLACE'ит строки аккаунта
+-- (DELETE+INSERT в одной транзакции) на save-канале сессии.
+--
+-- account_id — аккаунт (player.id). weapon — id оружия (SA-MP weapon id).
+-- ammo — патроны на момент сохранения (>= 0).
+--
+-- КАВЕАТ: GTA теряет оружие на смерти — серверный инвентарь чистится на каждом
+-- спавне и восстанавливается ТОЛЬКО на логин-спавне (см. Docs/Persistence.md).
+-- Снимок отражает то, что у игрока в руках прямо сейчас, а не исторический
+-- максимум — если игрок умер/безоружен на момент автосейва, в БД уйдёт пустой
+-- набор.
+CREATE TABLE IF NOT EXISTS `player_weapon` (
+    `account_id` BIGINT NOT NULL,
+    `weapon`     INT    NOT NULL,
+    `ammo`       INT    NOT NULL DEFAULT 0,
+    PRIMARY KEY (`account_id`, `weapon`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;

@@ -3,6 +3,7 @@
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
+#include "Utils/FileNameSanitizer.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -22,11 +23,6 @@ constexpr float SPRINT_MULTIPLIER = 5.0f;
 constexpr std::size_t LIST_TEXT_PREVIEW = 24;  // байт текста в строке списка
 constexpr std::size_t MAX_FILE_ITEMS = 256;    // защита от мусорных файлов
 const Colour PICK_HIGHLIGHT = Colour(255, 64, 64, 255);
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 
 // body передаётся уже в cp1251 (через u() по месту сборки): в него попадает
 // сырой текст textdraw, введённый игроком, который нельзя прогонять через
@@ -1341,10 +1337,9 @@ void TextDrawEditorSystem::showSaveNameInput(IPlayer &player)
             }
 
             const std::string name = text.to_string();
-            if (name.empty() || name.find('/') != std::string::npos || name.find('\\') != std::string::npos ||
-                name.find("..") != std::string::npos)
+            if (!Utils::isValidPresetName(name))
             {
-                player->sendClientMessage(Colour::White(), u("Недопустимое имя файла"));
+                player->sendClientMessage(Colour::White(), u("Недопустимое имя файла (разрешены A-Za-z0-9, _, -)"));
                 showSaveNameInput(*player);
                 return;
             }
@@ -1459,6 +1454,14 @@ void TextDrawEditorSystem::saveToFileAsync(IPlayer &player, const std::string &n
 
 void TextDrawEditorSystem::loadFromFileAsync(IPlayer &player, const std::string &name)
 {
+    // Ре-санитизация имени перед построением пути чтения (defense-in-depth: даже
+    // при выборе из листинга имя не должно вырваться из TEXTDRAWS_DIR).
+    if (!Utils::isValidPresetName(name))
+    {
+        player.sendClientMessage(Colour::White(), u("Недопустимое имя файла"));
+        showMain(player);
+        return;
+    }
     const std::string path = TEXTDRAWS_DIR + "/" + name + ".txt";
 
     ThreadPool::Task<std::string> task;

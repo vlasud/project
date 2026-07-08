@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 class Encoding final
 {
@@ -23,3 +24,11 @@ class Encoding final
     // utf-8 (>= 0x80) не задевают — порча мультибайтных символов невозможна.
     static std::string neutralizeColorCodes(std::string_view utf8);
 };
+
+// UTF-8 (кодировка исходника) -> CP1251 (кодировка рендера кириллицы клиентом SA-MP/open.mp).
+// Русский текст диалогов/чата/текстдравов ОБЯЗАН пройти через это, иначе на клиенте кракозябры.
+// string_view принимает и строковые литералы, и std::string, и результат fmt::format без лишней аллокации.
+inline std::string u(std::string_view text)
+{
+    return Encoding::utf8Tocp1251(text);
+}

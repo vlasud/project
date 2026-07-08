@@ -38,6 +38,8 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
       m_stateService(serviceRegister.getService<PlayerStateService>()),
       m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
+      m_moneyPersistService(serviceRegister.getService<PlayerMoneyPersistService>()),
+      m_weaponPersistService(serviceRegister.getService<PlayerWeaponPersistService>()),
       m_spawnService(serviceRegister.getService<PlayerSpawnService>()),
       m_skinService(serviceRegister.getService<PlayerSkinService>()),
       m_personalSkinService(serviceRegister.getService<PlayerPersonalSkinService>()),
@@ -46,6 +48,33 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
     core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
     core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+
+    // Late-применение персиста: если логин-спавн (applyPersistedEquipment)
+    // прошёл раньше, чем async-загрузка PlayerMoneyPersistService/
+    // PlayerWeaponPersistService, спавн взводит m_awaitingXxxApply — здесь
+    // довершаем выдачу, как только кэш пришёл. В штатном случае (загрузка
+    // раньше спавна) флаги не взведены, наблюдатель — no-op (двойной выдачи
+    // нет).
+    m_moneyPersistService.subscribeMoneyLoaded(
+        [this](IPlayer &player, unsigned long long cash)
+        {
+            const int playerId = player.getID();
+            if (playerId < 0 || playerId >= MAX_PLAYERS || !m_awaitingMoneyApply[playerId])
+                return;
+            m_awaitingMoneyApply[playerId] = false;
+            m_moneyService.setMoney(player, cash);
+        });
+    m_weaponPersistService.subscribeWeaponsLoaded(
+        [this](IPlayer &player, const std::vector<std::pair<std::uint8_t, int>> &weapons)
+        {
+            const int playerId = player.getID();
+            if (playerId < 0 || playerId >= MAX_PLAYERS || !m_awaitingWeaponsApply[playerId])
+                return;
+            m_awaitingWeaponsApply[playerId] = false;
+            for (const auto &[weaponId, ammo] : weapons)
+                m_weaponService.giveWeapon(player, weaponId, static_cast<std::uint32_t>(ammo));
+            m_weaponPersistService.markWeaponsApplied(playerId);
+        });
 }
 
 void PlayerAuthSystem::onPlayerConnect(IPlayer &player)
@@ -83,9 +112,7 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
     if (m_pendingSpawnSetup[player.getID()])
     {
         m_pendingSpawnSetup[player.getID()] = false;
-        m_weaponService.giveWeapon(player, 24, 100);
-        m_weaponService.giveWeapon(player, 31, 100);
-        m_moneyService.setMoney(player, 1500);
+        applyPersistedEquipment(player);
         return;
     }
 
@@ -194,6 +221,8 @@ void PlayerAuthSystem::resetState(int playerId)
     m_loginData[playerId] = {};
     m_registrationData[playerId] = {};
     m_pendingSpawnSetup[playerId] = false;
+    m_awaitingMoneyApply[playerId] = false;
+    m_awaitingWeaponsApply[playerId] = false;
 }
 
 void PlayerAuthSystem::runRegistration(int playerId)
@@ -268,13 +297,23 @@ void PlayerAuthSystem::showLoginDialog(IPlayer &player)
                                  return;
                              }
 
+                             // Захват версии соединения ДО долгого argon2-verify: слот playerId
+                             // может за это время достаться другому игроку (reuse после дисконнекта),
+                             // и без сверки колбэк авторизовал бы его в чужой аккаунт без пароля.
+                             const int requestConnectionVersion = m_connectionVersionService.getVersion(playerId);
+
                              ThreadPool::Task<bool> task;
                              task.func = [password = text.to_string(), hash = m_loginData[playerId].passwordHash]()
                              {
                                  return crypto_pwhash_str_verify(hash.c_str(), password.c_str(), password.size()) == 0;
                              };
-                             task.callback = [this, playerId](bool verified)
+                             task.callback = [this, playerId, requestConnectionVersion](bool verified)
                              {
+                                 if (m_connectionVersionService.getVersion(playerId) != requestConnectionVersion)
+                                 {
+                                     return;
+                                 }
+
                                  IPlayer *player = m_core.getPlayers().get(playerId);
                                  if (!player)
                                  {
@@ -503,4 +542,32 @@ void PlayerAuthSystem::finalize(IPlayer &player, int personalSkin)
     // сбросит их (инвентарь чистится на спавне). Экипировка — в onPlayerSpawn.
     m_pendingSpawnSetup[player.getID()] = true;
     m_stateService.setSpectating(player, false);
+}
+
+void PlayerAuthSystem::applyPersistedEquipment(IPlayer &player)
+{
+    const int playerId = player.getID();
+
+    // Раньше тут был хардкод (Deagle+M4, $1500), теперь наличные/оружие приходят
+    // из PlayerMoneyPersistService/PlayerWeaponPersistService (см.
+    // Docs/Persistence.md). Наличные реальный баланс получают ещё на загрузке
+    // (спавн их не сбрасывает) — setMoney здесь лишь идемпотентный ресинхрон
+    // HUD на случай, если загрузка ещё не пришла. Оружие сбрасывается на
+    // КАЖДОМ спавне — giveWeapon строго здесь, не раньше: PlayerWeaponService::
+    // onSpawn уже отработал.
+    if (m_moneyPersistService.isMoneyLoaded(playerId))
+        m_moneyService.setMoney(player, m_moneyPersistService.cachedMoney(playerId));
+    else
+        m_awaitingMoneyApply[playerId] = true; // загрузка ещё в пути — применит наблюдатель
+
+    if (m_weaponPersistService.areWeaponsLoaded(playerId))
+    {
+        for (const auto &[weaponId, ammo] : m_weaponPersistService.cachedWeapons(playerId))
+            m_weaponService.giveWeapon(player, weaponId, static_cast<std::uint32_t>(ammo));
+        // Взводим ПОСЛЕ реальной выдачи: PlayerWeaponPersistSystem гейтит save
+        // оружия этим флагом, а не areWeaponsLoaded (см. Docs/Persistence.md).
+        m_weaponPersistService.markWeaponsApplied(playerId);
+    }
+    else
+        m_awaitingWeaponsApply[playerId] = true;
 }

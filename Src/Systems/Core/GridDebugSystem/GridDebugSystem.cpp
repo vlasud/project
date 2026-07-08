@@ -22,11 +22,6 @@ constexpr float PICKUP_STREAM_DIST = 100.0f;
 constexpr float ICON_STREAM_DIST = 250.0f;
 
 const Colour DEBUG_COLOUR{255, 220, 100};
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 GridDebugSystem::GridDebugSystem(ICore &core, const ServiceRegister &serviceRegister)

@@ -11,11 +11,6 @@ namespace
 const Colour INFO_COLOUR{120, 220, 255};
 const Colour ERROR_COLOUR{255, 90, 90};
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
                   const std::string &rightButton)
 {

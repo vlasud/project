@@ -13,11 +13,6 @@ namespace
 // играть за это время он теоретически может — кик неминуем в любом случае.
 constexpr Milliseconds KICK_TIMEOUT{15s};
 
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
-
 std::string sv(StringView view)
 {
     return std::string(view.data(), view.size());

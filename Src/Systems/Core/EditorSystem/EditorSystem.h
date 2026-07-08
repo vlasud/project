@@ -79,6 +79,7 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
     struct EditorState
     {
         bool enabled = false;
+        bool asyncOpPending = false; // в полёте async файловая операция (load/save/list) — мутации сцены отклоняются
         Vector3 cameraPosition{};
         int cameraObjectId = -1;  // невидимый объект, к которому привязана камера
         Vector3 returnPosition{}; // куда вернуть тело игрока при выходе из редактора
@@ -196,6 +197,10 @@ class EditorSystem : public BaseSystem, public PlayerUpdateEventHandler, public 
 
     EditorState &stateOf(const IPlayer &player);
     IPlayer *editorPlayer(int playerId); // игрок, если онлайн и редактор включён
+    // true (и шлёт сообщение игроку), пока у него в полёте async файловая операция:
+    // отклоняет мутации сцены (create/place/load/save/list), чтобы replace-load в
+    // колбэке не затёр правки, сделанные за окно async-чтения.
+    bool asyncOpBusy(IPlayer &player);
 
     PlayerDialogService &m_dialogService;
     PlayerCommandService &m_commandService;

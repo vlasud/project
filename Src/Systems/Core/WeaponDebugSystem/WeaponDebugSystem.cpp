@@ -18,11 +18,6 @@ constexpr std::chrono::milliseconds BURST_GAP{2000};
 // Слот гейм-текста тулзы — вне классических стилей 0..6 игровых сообщений.
 constexpr int GT_STYLE = 7;
 constexpr Milliseconds GT_TIME{2000};
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 WeaponDebugSystem::WeaponDebugSystem(ICore &core, const ServiceRegister &serviceRegister)

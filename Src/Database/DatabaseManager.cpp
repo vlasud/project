@@ -7,6 +7,7 @@
 #include "mysqlx/xdevapi.h"
 #include <cassert>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 
 namespace
@@ -35,6 +36,13 @@ bool SessionWrapper::initialize()
 
 mysqlx::Schema SessionWrapper::getSchema()
 {
+    if (!m_session)
+    {
+        // Слот с провалившимся initialize() не должен доходить до сюда (StaticPool
+        // его больше не выдаёт), но если всё же дошёл — это исключение поймает
+        // catch в ThreadPool и уведёт в errorCallback, а не UB на нулевом unique_ptr.
+        throw std::runtime_error("SessionWrapper::getSchema: session was not initialized");
+    }
     return m_session->getSchema(DATABASE);
 }
 
@@ -44,22 +52,22 @@ void DatabaseManager::initialize()
     // чтобы потом assertMainThread() ловил доступ к пулу/очередям с воркеров.
     s_mainThreadId = std::this_thread::get_id();
 
-    size_t opened = 0;
-    m_sessionPool.forEach(
-        [&opened](SessionWrapper &wrapper)
-        {
-            if (wrapper.initialize())
-            {
-                ++opened;
-            }
-            return true;
-        });
+    // Слоты с проваленным initialize() (обрыв к MySQL) исключаются из пула
+    // насовсем — get() их больше не выдаст (см. StaticPool::init).
+    size_t opened = m_sessionPool.init([](SessionWrapper &wrapper) { return wrapper.initialize(); });
 
     if (opened == 0)
     {
         LogManager::log(Error, "DatabaseManager: no MySQL sessions could be opened. Check that MySQL X Protocol "
                                "(port 33060) is reachable and credentials are correct.");
         return;
+    }
+
+    if (opened < m_sessionPool.size())
+    {
+        LogManager::log(Error, "DatabaseManager: only " + std::to_string(opened) + "/" +
+                                   std::to_string(m_sessionPool.size()) +
+                                   " MySQL sessions could be opened; failed slots excluded from the pool.");
     }
 
     LogManager::log(Message, "DatabaseManager initialized with " + std::to_string(opened) + " sessions");

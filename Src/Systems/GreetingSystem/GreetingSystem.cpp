@@ -6,11 +6,6 @@
 namespace
 {
 constexpr std::chrono::milliseconds GREETING_TIME{5000};
-
-std::string u(const std::string &text)
-{
-    return Encoding::utf8Tocp1251(text);
-}
 } // namespace
 
 GreetingSystem::GreetingSystem(ICore &core, const ServiceRegister &serviceRegister)
