@@ -581,6 +581,32 @@ void VehicleService::setFuel(IVehicle &vehicle, float amount)
     }
 }
 
+void VehicleService::setInfiniteFuel(IVehicle &vehicle, bool enable)
+{
+    VehicleState &st = m_vehicleState[vehicle.getID()];
+    if (!st.exists)
+        return;
+    st.infiniteFuel = enable;
+    if (enable)
+    {
+        // Наполняем бак и снимаем «пустой»: сухая машина становится заводимой по
+        // обычным правилам (setEngine/Fire), а дренаж secondTick её впредь не
+        // трогает и держит полной. Двигатель НЕ заводим сами (как refuel) —
+        // «заглохла» по HP это тоже НЕ снимает (иная причина, чинит repair).
+        st.fuel = FUEL_CAPACITY;
+        st.outOfFuel = false;
+    }
+    // Выключение — бак/outOfFuel оставляем как есть (был полным — останется полным):
+    // обычное поведение возвращается сразу, следующий secondTick снова дренажит.
+}
+
+bool VehicleService::hasInfiniteFuel(int vehicleId) const
+{
+    if (vehicleId < 0 || vehicleId >= VEHICLE_POOL_SIZE)
+        return false;
+    return m_vehicleState[vehicleId].infiniteFuel;
+}
+
 void VehicleService::secondTick(float seconds)
 {
     if (seconds <= 0.0f || !m_vehicles)
@@ -599,8 +625,11 @@ void VehicleService::secondTick(float seconds)
 
         // Тушение нужно машине БЕЗ водителя (driverId — O(1) обратный индекс из
         // bindOccupant, серверный факт посадки), дренаж — машине с топливом.
+        // Бесконечное топливо держит слот «с топливом» при ЛЮБОМ значении бака,
+        // иначе гипотетический fuel==0 у флагованной машины пропустил бы пин к
+        // полному ниже и инвариант «бак всегда полный» стал бы условным.
         const bool wantDouse = st.driverId < 0 && !st.serverKilled;
-        const bool wantFuel = st.fuel > 0.0f;
+        const bool wantFuel = st.fuel > 0.0f || st.infiniteFuel;
         if (!wantDouse && !wantFuel)
             continue;
 
@@ -613,6 +642,15 @@ void VehicleService::secondTick(float seconds)
 
         if (!wantFuel)
             continue;
+
+        // Бесконечное топливо: бак не расходуется и держится ПОЛНЫМ (флаг ставит
+        // бизнес рабочего транспорта). Пиннинг здесь — источник инварианта «полный
+        // бак» на каждом проходе, тушение (douse) выше от флага не зависит.
+        if (st.infiniteFuel)
+        {
+            st.fuel = FUEL_CAPACITY;
+            continue;
+        }
 
         // Расход — по факту РАБОТАЮЩЕГО двигателя: 1 жжёт всегда (заведённой её и
         // оставили), -1 (клиентский авто-режим, дефолт создания/clearStall) жжёт

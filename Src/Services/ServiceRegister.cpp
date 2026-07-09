@@ -5,6 +5,8 @@
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
 #include "Services/Core/AttachmentService/AttachmentService.h"
 #include "Services/BankService/BankService.h"
+#include "Services/BusJobService/BusJobService.h"
+#include "Services/BusWalletService/BusWalletService.h"
 #include "Services/ElectionService/ElectionService.h"
 #include "Services/FactionService/FactionService.h"
 #include "Services/FamilyService/FamilyService.h"
@@ -168,6 +170,15 @@ void ServiceRegister::registerServices()
     // незавершённой смене. Без зависимостей; загрузку по сессии/начисление/выдачу
     // ведёт привод PortJobSystem.
     registerService<PortWalletService>();
+    // Работа-водитель автобуса (бизнес-фича, не Core): источник правды о пер-player
+    // фазе смены/прогрессе маршрута, занятости 3 слотов автобусов и FIFO-очереди.
+    // Без зависимостей; спавн автобусов/чекпоинты/таймер смены ведёт привод BusJobSystem.
+    registerService<BusJobService>();
+    // Персистентный кошелёк заработка автобусника (write-through в БД, bus_wallet):
+    // зачёт чекпоинта/круга зачисляет деньги СРАЗУ, не сгорают при дисконнекте/
+    // смерти/увольнении. Без зависимостей; загрузку по сессии/начисление/выдачу
+    // ведёт привод BusJobSystem.
+    registerService<BusWalletService>();
     // Базовая система вещей (источник правды о предметах игроков онлайн). Без
     // зависимостей; типы регистрируют системы-владельцы (MedkitSystem) в своих
     // конструкторах, persist по сессии делает InventorySystem.

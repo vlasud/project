@@ -279,6 +279,16 @@ class VehicleService final : public IService
     bool isOutOfFuel(int vehicleId) const;  // пустой бак — двигатель не заводится
     void refuel(IVehicle &vehicle, float amount); // долить (amount>0), кламп на CAP
     void setFuel(IVehicle &vehicle, float amount); // абсолют, кламп 0..CAP
+    // Бесконечное топливо (per-экземпляр, СЕССИОННЫЙ флаг — НЕ персистится). При
+    // включении бак наполняется до FUEL_CAPACITY и снимается outOfFuel (сухая машина
+    // становится заводимой по обычным правилам), дренаж secondTick её не расходует и
+    // держит бак полным — заглохнуть от пустого бака нельзя (HP-«заглохла» флаг НЕ
+    // трогает). Выключение возвращает обычное поведение (бак остаётся каким был на
+    // момент выключения). Дефолт false; сбрасывается на create/destroy — реюз
+    // vehicleId не наследует флаг на чужую машину. Кому включать — решает бизнес
+    // (Core флаг сам не раздаёт), напр. рабочий транспорт.
+    void setInfiniteFuel(IVehicle &vehicle, bool enable);
+    bool hasInfiniteFuel(int vehicleId) const;
     // Секундный обслуживающий проход по пулу (таймер VehicleSystem, не per-tick),
     // одним циклом два дела:
     //  * тушение машин БЕЗ водителя: ядровое getHealth() ниже порога -> кламп +
@@ -543,6 +553,7 @@ class VehicleService final : public IService
         int ownerId = -1;          // id владельца в рамках типа (None — -1)
         float fuel = FUEL_CAPACITY; // топливо в баке
         bool outOfFuel = false;     // пустой бак: двигатель не заводится (снимает refuel)
+        bool infiniteFuel = false;  // бак не дренажится и держится полным (сессионный, не персист)
         TimePoint lastChange;    // грейс после серверного изменения (кламп его НЕ освежает)
         TimePoint lastClampSend; // темп повторных кламп-RPC (stallIfCritical/douse-гейт)
         TimePoint lastFlag;      // rate limit нарушений

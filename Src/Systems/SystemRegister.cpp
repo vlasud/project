@@ -13,6 +13,7 @@
 #include "Systems/Core/DebugCameraSystem/DebugCameraSystem.h"
 #include "Systems/Core/EditorSystem/EditorSystem.h"
 #include "Systems/BankSystem/BankSystem.h"
+#include "Systems/BusJobSystem/BusJobSystem.h"
 #include "Systems/CarMenuSystem/CarMenuSystem.h"
 #include "Systems/PaymentSystem/PaymentSystem.h"
 #include "Systems/DeathPenaltySystem/DeathPenaltySystem.h"
@@ -228,6 +229,17 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // волатильного состояния смены и памяти кошелька, БД не трогает). Цикл целиком
     // событийный (пикап/чекпоинт/таймер), per-tick работы нет.
     m_systems.push_back(std::make_unique<PortJobSystem>(core, serviceRegister));
+    // BusJobSystem (работа-водитель автобуса, бизнес-фича вне Core) после
+    // TimerSystem (общий per-second таймер смены в initialize), VehicleSystem
+    // (VehicleService связан с пулом — спавн автобусов Owner::Work + driver-gate),
+    // PickupSystem/MapIconSystem/CheckpointSystem (пикап/иконка/чекпоинты маршрута
+    // в initialize — компоненты уже подключены), PlayerMoneySystem (выдача наличных
+    // на «Забрать деньги» — заработок копится в BusWalletService, write-through),
+    // PlayerLocationSystem (зона stop-чекпоинта по принятой позиции), PlayerHealthSystem
+    // (subscribeDeath — увольнение по смерти) и PlayerSessionSystem (старт — загрузка
+    // кошелька; конец — teardown смены + сброс кэша). Геймплей событийный + один
+    // общий per-second таймер, обходящий снимок 3 слотов (не per-tick).
+    m_systems.push_back(std::make_unique<BusJobSystem>(core, serviceRegister));
     // SpawnSystem раньше AuthSystem: на спавне сперва применяются интерьер/мир
     // точки спавна, затем auth навешивает экипировку.
     m_systems.push_back(std::make_unique<ClassSelectionSystem>(core, serviceRegister));

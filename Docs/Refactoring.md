@@ -60,6 +60,7 @@
 | ✅ `makeDialog(...)` с u()-конвертацией | med/S | 12 бизнес- + 9 editor-систем | общий `makeDialog` + `makeDialogCp1251Body` под готовый body; Faction/Election/Admin/Menu подтянуты |
 | ✅ `finiteOrZero` + `sanitize(Vector3/Vector2)` переизобретены | med/S | 8 сервисов | `Utils/Sanitize.h` (`finiteOrZero`/`sanitize(Vector3)`/`clampFinite`) |
 | `sanitizeText` дублирован дословно | med/S | `TextDrawService:71-99`, `GameTextService:14-38`, `TextLabelService:20-43` | общий хелпер с флагами allowNewline/tildeParity/emptyFallback |
+| `PortWalletService` ≈ `BusWalletService` дословно (иная таблица) | med/S | `Services/PortWalletService`, `Services/BusWalletService` | общий `WorkWalletService`/`AccountWallet<Tag>` (persist-кошелёк работы: add/withdraw/load/reset + таблица параметром); сейчас НЕ обобщено сознательно (две работы — ранняя стадия) |
 | `asciiLower`/`iequals`, `ceilSecondsUntil` | low/S | Command/Animation, Admin/Report | `Utils/Ascii.h`, `TimeUtils::ceilSecondsUntil` |
 
 ## Тема 3. Персистентность и инфраструктура БД
