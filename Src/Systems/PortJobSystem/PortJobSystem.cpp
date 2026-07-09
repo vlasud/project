@@ -62,6 +62,7 @@ constexpr Milliseconds PUTDOWN_DURATION{300};
 // GreetingSystem/FamilySystem/VehicleEngineNotice), ASCII — u()/cp1251 не нужен.
 constexpr Milliseconds START_WORK_POPUP_TIME{3000};
 constexpr Milliseconds DELIVERY_POPUP_TIME{3000};
+constexpr Milliseconds EMPTY_WALLET_POPUP_TIME{2000};
 const Colour DELIVERY_POPUP_COLOUR{0x90, 0xEE, 0x90, 0xFF};
 } // namespace
 
@@ -78,7 +79,8 @@ PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_timers(serviceRegister.getService<TimerService>()),
-      m_screenNoticeService(serviceRegister.getService<ScreenNoticeService>())
+      m_screenNoticeService(serviceRegister.getService<ScreenNoticeService>()),
+      m_mapIconService(serviceRegister.getService<MapIconService>())
 {
     m_boxSlot.fill(-1);
 
@@ -126,6 +128,8 @@ void PortJobSystem::initialize(IComponentList * /*components*/)
             onPickup(player);
         },
         0);
+
+    m_mapIconService.addGlobal(9, PORT_PICKUP_POS, Colour::White(), MapIconStyle_Global);
 }
 
 void PortJobSystem::onPickup(IPlayer &player)
@@ -272,7 +276,8 @@ void PortJobSystem::onWithdrawMoney(IPlayer &player)
 
     if (m_portWalletService.balanceOf(playerId) <= 0)
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Забирать нечего — кошелёк порта пуст"));
+        player.sendClientMessage(ERROR_COLOUR, u("Забирать нечего"));
+        m_screenNoticeService.show(player, "empty", EMPTY_WALLET_POPUP_TIME, DELIVERY_POPUP_COLOUR);
         return;
     }
 
