@@ -3,6 +3,7 @@
 #include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/VehicleService/VehicleModelNames.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include <array>
 #include <cmath>
@@ -16,18 +17,6 @@ const Colour DEBUG_COLOUR{170, 255, 170};
 
 // Модель машины владельца Work для дев-спавна по умолчанию.
 constexpr int DEV_WORK_MODEL = 411; // Infernus
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 
 // --- /vtune: русские подписи слотов/компонентов/цветов (бизнес-слой, не Core) ---
 

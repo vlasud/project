@@ -5,6 +5,7 @@
 #include "Server/Components/Dialogs/dialogs.hpp"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "ThreadPool/ThreadPool.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include "network.hpp"
 #include "sodium/crypto_pwhash.h"
@@ -955,12 +956,7 @@ void AdminSystem::cmdAdminHelp(IPlayer &player)
         body += "Нет доступных команд\t\n";
     body.pop_back(); // убрать хвостовой '\n' — иначе пустая строка-фантом в tablist
 
-    Dialog dialog;
-    dialog.style = DialogStyle_TABLIST_HEADERS;
-    dialog.title = u("Админ-команды");
-    dialog.body = u(body);
-    dialog.leftButton = u("Закрыть");
-    dialog.rightButton = u("");
+    Dialog dialog = makeDialog(DialogStyle_TABLIST_HEADERS, "Админ-команды", body, "Закрыть", "");
 
     // Just-read список: на любой ответ просто закрыть (реакции на выбор нет).
     m_dialogService.show(player, dialog, [](DialogResponse, int, StringView) {});
@@ -988,12 +984,8 @@ void AdminSystem::startRegistration(IPlayer &target, int level)
 
 void AdminSystem::showRegisterPasswordDialog(IPlayer &target)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_PASSWORD;
-    dialog.title = u("Регистрация админа — Пароль");
-    dialog.body = u("Придумайте админ-пароль. Минимум 8 символов");
-    dialog.leftButton = u("Далее");
-    dialog.rightButton = u("Отмена");
+    Dialog dialog = makeDialog(DialogStyle_PASSWORD, "Регистрация админа — Пароль",
+                               "Придумайте админ-пароль. Минимум 8 символов", "Далее", "Отмена");
 
     m_dialogService.show(
         target, dialog,
@@ -1031,12 +1023,8 @@ void AdminSystem::showRegisterPasswordDialog(IPlayer &target)
 
 void AdminSystem::showRegisterConfirmDialog(IPlayer &target)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_PASSWORD;
-    dialog.title = u("Регистрация админа — Подтверждение");
-    dialog.body = u("Повторите админ-пароль");
-    dialog.leftButton = u("Далее");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_PASSWORD, "Регистрация админа — Подтверждение", "Повторите админ-пароль",
+                               "Далее", "Назад");
 
     m_dialogService.show(
         target, dialog,

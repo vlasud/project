@@ -2,6 +2,7 @@
 
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include "Utils/FileNameSanitizer.h"
 #include <algorithm>
@@ -59,18 +60,6 @@ std::string boneName(int bone)
         }
     }
     return "?";
-}
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
 }
 
 // Общий whitelist-хелпер (Utils/FileNameSanitizer.h) — единая проверка для всех

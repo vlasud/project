@@ -2,6 +2,7 @@
 
 #include "Services/Core/VehicleService/VehicleModelNames.h"
 #include "Services/ParkedVehicleService/ParkedVehicleRow.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include "Utils/Geometry/Geometry.h"
 #include <fmt/format.h>
@@ -42,18 +43,6 @@ constexpr PickupType PARKING_PICKUP_TYPE = 1;
 const Colour PARKING_LABEL_COLOUR{120, 220, 255};
 constexpr float PARKING_LABEL_DRAW_DISTANCE = 25.0f;
 constexpr bool PARKING_LABEL_TEST_LOS = false;
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 } // namespace
 
 ParkingSystem::ParkingSystem(ICore &core, const ServiceRegister &serviceRegister)

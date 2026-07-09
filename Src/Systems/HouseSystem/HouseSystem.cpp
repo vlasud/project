@@ -4,6 +4,7 @@
 #include "Log/LogManager.h"
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <chrono>
@@ -63,18 +64,6 @@ constexpr std::chrono::milliseconds EXIT_GRACE{1500};
 // Смещение пикапа выхода от точки спавна внутри — чтобы появившийся игрок не стоял
 // прямо на нём (основной гард, грейс — вторичный).
 constexpr float EXIT_PICKUP_OFFSET = 2.0f;
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 
 bool finite3(const Vector3 &v)
 {

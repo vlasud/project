@@ -1,6 +1,7 @@
 #include "Services/HouseService/HouseService.h"
 
 #include "Utils/Geometry/Geometry.h"
+#include "Utils/Sanitize.h"
 #include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>
@@ -10,10 +11,6 @@ namespace
 {
 constexpr float EXIT_DISTANCE = 1.5f; // метров за спину создателя до точки выхода
 
-float finiteOrZero(float value)
-{
-    return std::isfinite(value) ? value : 0.0f;
-}
 } // namespace
 
 // ------------------------------------------------------------------- каталог
@@ -105,8 +102,8 @@ const HouseService::House *HouseService::createHouse(const Vector3 &creatorPos, 
     House house;
     house.id = m_nextId++;
     house.interiorIndex = interiorIndex;
-    house.entrance = {finiteOrZero(creatorPos.x), finiteOrZero(creatorPos.y), finiteOrZero(creatorPos.z)};
-    house.exitAngle = finiteOrZero(creatorAngle);
+    house.entrance = {Utils::finiteOrZero(creatorPos.x), Utils::finiteOrZero(creatorPos.y), Utils::finiteOrZero(creatorPos.z)};
+    house.exitAngle = Utils::finiteOrZero(creatorAngle);
     house.exit = backOf(house.entrance, house.exitAngle, EXIT_DISTANCE);
     house.virtualWorld = VW_BASE + house.id;
     house.owner.clear(); // ничейный

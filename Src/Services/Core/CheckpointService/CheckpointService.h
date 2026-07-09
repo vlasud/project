@@ -116,7 +116,6 @@ class CheckpointService final : public IService
     // Принятая позиция игрока внутри radius + ENTER_SLACK; иначе CheckpointHack.
     bool validateInside(IPlayer &player, const Vector3 &position, float radius, TimePoint now);
     static float clampRadius(float radius);
-    static Vector3 sanitizePosition(Vector3 position);
 
     PlayerLocationService *m_location = nullptr;
     AntiCheatService *m_antiCheat = nullptr;

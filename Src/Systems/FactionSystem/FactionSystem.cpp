@@ -4,6 +4,7 @@
 #include "Log/LogManager.h"
 #include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <fmt/format.h>
@@ -279,12 +280,7 @@ void FactionSystem::showSkinDialog(IPlayer &player)
         body += fmt::format("Скин {}\n", skin);
     body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(fmt::format("{} — скины", faction->name));
-    dialog.body = u(body);
-    dialog.leftButton = u("Надеть");
-    dialog.rightButton = u("Закрыть");
+    Dialog dialog = makeDialog(DialogStyle_LIST, fmt::format("{} — скины", faction->name), body, "Надеть", "Закрыть");
 
     m_dialogService.show(
         player, dialog,
@@ -468,12 +464,8 @@ void FactionSystem::showHireInput(IPlayer &leader)
     if (!permittedFaction(leader, FactionService::PERM_INVITE))
         return;
 
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Найм сотрудника");
-    dialog.body = u("Введите id игрока для приёма во фракцию");
-    dialog.leftButton = u("Далее");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Найм сотрудника", "Введите id игрока для приёма во фракцию", "Далее",
+                               "Назад");
 
     m_dialogService.showNumberInput(
         leader, dialog,
@@ -512,12 +504,8 @@ void FactionSystem::showHireRankPick(IPlayer &leader, int targetId, std::uint32_
         body += fmt::format("{}\n", rank.name);
     body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(fmt::format("Найм {} — ранг", target->getName().to_string()));
-    dialog.body = u(body);
-    dialog.leftButton = u("Далее");
-    dialog.rightButton = u("Отмена");
+    Dialog dialog = makeDialog(DialogStyle_LIST, fmt::format("Найм {} — ранг", target->getName().to_string()), body,
+                               "Далее", "Отмена");
 
     m_dialogService.show(
         leader, dialog,
@@ -547,14 +535,11 @@ void FactionSystem::showHireRankPick(IPlayer &leader, int targetId, std::uint32_
 
 void FactionSystem::showHireSalaryInput(IPlayer &leader, int targetId, std::uint32_t targetSerial, std::int64_t rankId)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Найм — зарплата");
-    dialog.body = u(fmt::format("Укажите персональную зарплату нанимаемого (0..{}).\n"
-                                "Зарплата платится из бюджета фракции.",
-                                FactionService::MAX_SALARY));
-    dialog.leftButton = u("Нанять");
-    dialog.rightButton = u("Отмена");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Найм — зарплата",
+                               fmt::format("Укажите персональную зарплату нанимаемого (0..{}).\n"
+                                           "Зарплата платится из бюджета фракции.",
+                                           FactionService::MAX_SALARY),
+                               "Нанять", "Отмена");
 
     m_dialogService.showNumberInput(
         leader, dialog,
@@ -615,13 +600,10 @@ void FactionSystem::showSetSalaryDialog(IPlayer &leader, int targetId, std::func
     if (!targetSession)
         return;
 
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u(fmt::format("Зарплата {}", target->getName().to_string()));
-    dialog.body = u(fmt::format("Текущая зарплата: ${}\nВведите новую (0..{})",
-                                m_factionService.getMemberSalary(targetId), FactionService::MAX_SALARY));
-    dialog.leftButton = u("Сохранить");
-    dialog.rightButton = u("Отмена");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, fmt::format("Зарплата {}", target->getName().to_string()),
+                               fmt::format("Текущая зарплата: ${}\nВведите новую (0..{})",
+                                           m_factionService.getMemberSalary(targetId), FactionService::MAX_SALARY),
+                               "Сохранить", "Отмена");
 
     m_dialogService.showNumberInput(
         leader, dialog,
@@ -713,12 +695,8 @@ void FactionSystem::showSetRankDialog(IPlayer &leader, int targetId, std::functi
         body += fmt::format("{}\n", rank.name);
     body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(fmt::format("Ранг для {}", target->getName().to_string()));
-    dialog.body = u(body);
-    dialog.leftButton = u("Назначить");
-    dialog.rightButton = u("Отмена");
+    Dialog dialog = makeDialog(DialogStyle_LIST, fmt::format("Ранг для {}", target->getName().to_string()), body,
+                               "Назначить", "Отмена");
 
     m_dialogService.show(
         leader, dialog,
@@ -792,12 +770,8 @@ void FactionSystem::showMembersMenu(IPlayer &player)
     }
     body += "» Нанять сотрудника";
 
-    Dialog dialog;
-    dialog.style = DialogStyle_TABLIST_HEADERS;
-    dialog.title = u(fmt::format("{} — сотрудники", faction->name));
-    dialog.body = u(body);
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_TABLIST_HEADERS, fmt::format("{} — сотрудники", faction->name), body,
+                               "Выбрать", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -849,13 +823,10 @@ void FactionSystem::showMemberCard(IPlayer &player, int targetId, std::uint32_t 
     }
 
     const FactionService::Rank *rank = m_factionService.getMemberRank(targetId);
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(fmt::format("{} — ранг «{}», ${}", target->getName().to_string(), rank ? rank->name : "?",
-                                 m_factionService.getMemberSalary(targetId)));
-    dialog.body = u("Изменить ранг\nИзменить зарплату\nУволить");
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_LIST,
+                               fmt::format("{} — ранг «{}», ${}", target->getName().to_string(), rank ? rank->name : "?",
+                                           m_factionService.getMemberSalary(targetId)),
+                               "Изменить ранг\nИзменить зарплату\nУволить", "Выбрать", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -917,12 +888,7 @@ void FactionSystem::showMyRankMenu(IPlayer &player)
         body += fmt::format("{}\n", rank.name);
     body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u("Мой ранг");
-    dialog.body = u(body);
-    dialog.leftButton = u("Назначить");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_LIST, "Мой ранг", body, "Назначить", "Назад");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
@@ -968,12 +934,7 @@ void FactionSystem::showGovMenu(IPlayer &player)
     }
     body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u("Подопечные фракции");
-    dialog.body = u(body);
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Закрыть");
+    Dialog dialog = makeDialog(DialogStyle_LIST, "Подопечные фракции", body, "Выбрать", "Закрыть");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
@@ -994,12 +955,8 @@ void FactionSystem::showGovFactionMenu(IPlayer &player, int factionId)
     if (!faction || !m_factionService.canManage(player.getID(), factionId))
         return;
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(faction->name);
-    dialog.body = u("Назначить лидера\nСнять лидера\nУволить сотрудника");
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_LIST, faction->name, "Назначить лидера\nСнять лидера\nУволить сотрудника",
+                               "Выбрать", "Назад");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID(), factionId](DialogResponse response, int listItem, StringView)
@@ -1025,12 +982,9 @@ void FactionSystem::showGovFactionMenu(IPlayer &player, int factionId)
 
 void FactionSystem::showGovAppointInput(IPlayer &player, int factionId)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Назначение лидера");
-    dialog.body = u("Введите id игрока.\nИгрок должен быть в сети и не состоять в другой фракции.");
-    dialog.leftButton = u("Далее");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Назначение лидера",
+                               "Введите id игрока.\nИгрок должен быть в сети и не состоять в другой фракции.", "Далее",
+                               "Назад");
 
     m_dialogService.showNumberInput(
         player, dialog,
@@ -1068,13 +1022,10 @@ void FactionSystem::showGovAppointInput(IPlayer &player, int factionId)
 
 void FactionSystem::showGovAppointSalaryInput(IPlayer &player, int factionId, int targetId, std::uint32_t targetSerial)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Зарплата лидера");
-    dialog.body =
-        u(fmt::format("Укажите зарплату лидера (0..{}).\nПлатится из бюджета фракции.", FactionService::MAX_SALARY));
-    dialog.leftButton = u("Назначить");
-    dialog.rightButton = u("Отмена");
+    Dialog dialog = makeDialog(
+        DialogStyle_INPUT, "Зарплата лидера",
+        fmt::format("Укажите зарплату лидера (0..{}).\nПлатится из бюджета фракции.", FactionService::MAX_SALARY),
+        "Назначить", "Отмена");
 
     m_dialogService.showNumberInput(
         player, dialog,
@@ -1181,12 +1132,8 @@ void FactionSystem::showGovMembersMenu(IPlayer &player, int factionId)
     }
     body.pop_back(); // убрать хвостовой '\n' — иначе пустая строка-фантом в tablist
 
-    Dialog dialog;
-    dialog.style = DialogStyle_TABLIST_HEADERS;
-    dialog.title = u(fmt::format("{} — увольнение", faction->name));
-    dialog.body = u(body);
-    dialog.leftButton = u("Уволить");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_TABLIST_HEADERS, fmt::format("{} — увольнение", faction->name), body,
+                               "Уволить", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -1241,13 +1188,11 @@ void FactionSystem::showGovDismissConfirm(IPlayer &player, int factionId, int ta
     const FactionService::Rank *rank = m_factionService.getMemberRank(targetId);
     const char *marker = m_factionService.isLeader(targetId) ? " (лидер фракции)" : "";
 
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u("Увольнение сотрудника");
-    dialog.body = u(fmt::format("Уволить {}{} (ранг «{}») из фракции «{}»?\nЭто полное исключение из организации.",
-                                target->getName().to_string(), marker, rank ? rank->name : "?", faction->name));
-    dialog.leftButton = u("Уволить");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(
+        DialogStyle_MSGBOX, "Увольнение сотрудника",
+        fmt::format("Уволить {}{} (ранг «{}») из фракции «{}»?\nЭто полное исключение из организации.",
+                    target->getName().to_string(), marker, rank ? rank->name : "?", faction->name),
+        "Уволить", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -1302,13 +1247,10 @@ void FactionSystem::showGovDismissConfirm(IPlayer &player, int factionId, int ta
 
 void FactionSystem::showDevMenu(IPlayer &player)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u("Фракции — дев-меню");
-    dialog.body = u("Список фракций\nПринять игрока во фракцию\nНазначить лидера\nИсключить из фракции\n"
-                    "Установить бюджет\nТелепорт на спавн организации");
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Закрыть");
+    Dialog dialog = makeDialog(DialogStyle_LIST, "Фракции — дев-меню",
+                               "Список фракций\nПринять игрока во фракцию\nНазначить лидера\nИсключить из фракции\n"
+                               "Установить бюджет\nТелепорт на спавн организации",
+                               "Выбрать", "Закрыть");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
@@ -1359,12 +1301,9 @@ void FactionSystem::listFactions(IPlayer &player)
 
 void FactionSystem::showDevTargetInput(IPlayer &player, DevAction action)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u(action == DevAction::Invite ? "Принять во фракцию" : "Назначить лидера");
-    dialog.body = u("Введите id игрока");
-    dialog.leftButton = u("Далее");
-    dialog.rightButton = u("Назад");
+    Dialog dialog =
+        makeDialog(DialogStyle_INPUT, action == DevAction::Invite ? "Принять во фракцию" : "Назначить лидера",
+                   "Введите id игрока", "Далее", "Назад");
 
     m_dialogService.showNumberInput(
         player, dialog,
@@ -1405,12 +1344,7 @@ void FactionSystem::showDevFactionPick(IPlayer &player, DevAction action, int ta
         body += fmt::format("{} (id {})\n", faction.name, faction.id);
     body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u("Выбор фракции");
-    dialog.body = u(body);
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_LIST, "Выбор фракции", body, "Выбрать", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -1456,12 +1390,7 @@ void FactionSystem::showDevFactionPick(IPlayer &player, DevAction action, int ta
 
 void FactionSystem::showDevKickInput(IPlayer &player)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Исключить из фракции");
-    dialog.body = u("Введите id игрока");
-    dialog.leftButton = u("Исключить");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Исключить из фракции", "Введите id игрока", "Исключить", "Назад");
 
     m_dialogService.showNumberInput(
         player, dialog,
@@ -1499,12 +1428,7 @@ void FactionSystem::showDevBudgetPick(IPlayer &player)
         body += fmt::format("{} — ${}\n", faction.name, faction.budget);
     body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u("Бюджет — выбор фракции");
-    dialog.body = u(body);
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_LIST, "Бюджет — выбор фракции", body, "Выбрать", "Назад");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
@@ -1526,13 +1450,10 @@ void FactionSystem::showDevBudgetPick(IPlayer &player)
 
 void FactionSystem::showDevBudgetInput(IPlayer &player, int factionId)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Установить бюджет");
-    dialog.body = u(fmt::format("Текущий бюджет: ${}\nВведите новый (0..{})", m_factionService.getBudget(factionId),
-                                FactionService::MAX_BUDGET));
-    dialog.leftButton = u("Сохранить");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Установить бюджет",
+                               fmt::format("Текущий бюджет: ${}\nВведите новый (0..{})",
+                                           m_factionService.getBudget(factionId), FactionService::MAX_BUDGET),
+                               "Сохранить", "Назад");
 
     // Числовой ввод: парс делает сервис (мусор/overflow → повтор показа сам),
     // здесь остаётся только проверка диапазона через setBudget.
@@ -1580,12 +1501,7 @@ void FactionSystem::showDevSpawnTeleportPick(IPlayer &player)
     }
     body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u("Телепорт на спавн — выбор фракции");
-    dialog.body = u(body);
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_LIST, "Телепорт на спавн — выбор фракции", body, "Выбрать", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -1683,13 +1599,10 @@ void FactionSystem::showLeaderMenu(IPlayer &player)
     if (!faction)
         return;
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(fmt::format("{} — бюджет ${}", faction->name, faction->budget));
     // Порядок пунктов завязан на индексы в колбэке ниже — менять синхронно.
-    dialog.body = u("Сотрудники\nМой ранг\nУправление рангами\nПриказ о выплате зарплат\nИнформация о фракции");
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Закрыть");
+    Dialog dialog = makeDialog(DialogStyle_LIST, fmt::format("{} — бюджет ${}", faction->name, faction->budget),
+                               "Сотрудники\nМой ранг\nУправление рангами\nПриказ о выплате зарплат\nИнформация о фракции",
+                               "Выбрать", "Закрыть");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
@@ -1744,12 +1657,8 @@ void FactionSystem::showRanksMenu(IPlayer &player)
     }
     body += "» Создать ранг";
 
-    Dialog dialog;
-    dialog.style = DialogStyle_TABLIST_HEADERS;
-    dialog.title = u(fmt::format("{} — ранги", faction->name));
-    dialog.body = u(body);
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_TABLIST_HEADERS, fmt::format("{} — ранги", faction->name), body, "Выбрать",
+                               "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -1788,14 +1697,11 @@ void FactionSystem::confirmPayOrder(IPlayer &player)
         return;
     }
 
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u("Приказ о выплате зарплат");
-    dialog.body = u(fmt::format("Каждому члену фракции (включая оффлайн) будет зачислен чек на его\n"
-                                "персональную зарплату на счёт в банке.\n\nБюджет фракции: ${}",
-                                faction->budget));
-    dialog.leftButton = u("Отдать приказ");
-    dialog.rightButton = u("Отмена");
+    Dialog dialog = makeDialog(DialogStyle_MSGBOX, "Приказ о выплате зарплат",
+                               fmt::format("Каждому члену фракции (включая оффлайн) будет зачислен чек на его\n"
+                                           "персональную зарплату на счёт в банке.\n\nБюджет фракции: ${}",
+                                           faction->budget),
+                               "Отдать приказ", "Отмена");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID()](DialogResponse response, int, StringView)
@@ -1935,12 +1841,7 @@ void FactionSystem::showRankMenu(IPlayer &player, std::int64_t rankId)
     else
         body += "Удалить ранг";
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(fmt::format("Ранг «{}»", rank->name));
-    dialog.body = u(body);
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_LIST, fmt::format("Ранг «{}»", rank->name), body, "Выбрать", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -2016,12 +1917,8 @@ void FactionSystem::showRankScopeMenu(IPlayer &player, std::int64_t rankId)
     }
     body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(fmt::format("«{}» — подопечные организации", rank->name));
-    dialog.body = u(body);
-    dialog.leftButton = u("Переключить");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_LIST, fmt::format("«{}» — подопечные организации", rank->name), body,
+                               "Переключить", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -2056,12 +1953,8 @@ void FactionSystem::showRankScopeMenu(IPlayer &player, std::int64_t rankId)
 
 void FactionSystem::showRankNameInput(IPlayer &player, std::int64_t rankId)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u(rankId == 0 ? "Создание ранга" : "Название ранга");
-    dialog.body = u("Введите название ранга (до 24 символов)");
-    dialog.leftButton = u("Сохранить");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, rankId == 0 ? "Создание ранга" : "Название ранга",
+                               "Введите название ранга (до 24 символов)", "Сохранить", "Назад");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID(), rankId](DialogResponse response, int, StringView text)
@@ -2121,13 +2014,10 @@ void FactionSystem::showRankPresetMenu(IPlayer &player, std::int64_t rankId)
         return;
     }
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(fmt::format("«{}» — права", rank->name));
     // Порядок строк завязан на индексы в колбэке — менять синхронно.
-    dialog.body = u("Рядовой (без прав)\nОфицер (приём + скины)\nЗаместитель (все базовые права)\nНастроить вручную");
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Готово");
+    Dialog dialog = makeDialog(DialogStyle_LIST, fmt::format("«{}» — права", rank->name),
+                               "Рядовой (без прав)\nОфицер (приём + скины)\nЗаместитель (все базовые права)\nНастроить вручную",
+                               "Выбрать", "Готово");
 
     m_dialogService.show(
         player, dialog,
@@ -2191,12 +2081,10 @@ void FactionSystem::showRankDeleteConfirm(IPlayer &player, std::int64_t rankId)
         return;
     }
 
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u("Удаление ранга");
-    dialog.body = u(fmt::format("Удалить ранг «{}»?\nЕго обладатели будут переведены на «Без ранга».", rank->name));
-    dialog.leftButton = u("Удалить");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_MSGBOX, "Удаление ранга",
+                               fmt::format("Удалить ранг «{}»?\nЕго обладатели будут переведены на «Без ранга».",
+                                           rank->name),
+                               "Удалить", "Назад");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID(), rankId](DialogResponse response, int, StringView)

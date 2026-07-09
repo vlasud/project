@@ -58,6 +58,19 @@ void PlayerHealthService::enterDying(IPlayer &player)
         handler(player);
 }
 
+void PlayerHealthService::clampToCapAndForce(IPlayer &player, State &st, TimePoint timeNow)
+{
+    // Анти-чит: не даём перелить броню в HP выше активного потолка. Зажимаем HP к
+    // maxHealth, снимаем confirmed и форсим клиент вниз; бронь под кэп не попадает.
+    if (st.capActive && st.health > st.maxHealth)
+    {
+        st.health = st.maxHealth;
+        st.lastChange = timeNow;
+        st.confirmed = false;
+        player.setHealth(st.maxHealth);
+    }
+}
+
 void PlayerHealthService::setHealth(IPlayer &player, float health)
 {
     State &st = m_state[player.getID()];
@@ -382,15 +395,8 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
             }
             // Под кэпом сумма может совпасть, а раскладка нарушать потолок: имея броню,
             // читер шлёт высокий HP + 0 брони (та же сумма) и переливает броню в HP в
-            // обход кэпа. Зажимаем HP к потолку и форсим клиент вниз; бронь не трогаем
-            // (она под кэп не попадает).
-            if (st.capActive && st.health > st.maxHealth)
-            {
-                st.health = st.maxHealth;
-                st.lastChange = timeNow;
-                st.confirmed = false;
-                player.setHealth(st.maxHealth);
-            }
+            // обход кэпа.
+            clampToCapAndForce(player, st, timeNow);
             if (st.health <= 0.0f)
                 enterDying(player); // легальный даунсинк до 0 — фиксируем смерть серверно
             return outcome;
@@ -413,15 +419,8 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
             st.health = reportedHealth;
             st.armour = reportedArmour;
             // При равной сумме клиент мог переписать раскладку «высокий HP + 0 брони» и
-            // перелить броню в HP в обход кэпа. Зажимаем HP к потолку и форсим клиент;
-            // бронь под кэп не попадает.
-            if (st.capActive && st.health > st.maxHealth)
-            {
-                st.health = st.maxHealth;
-                st.lastChange = timeNow;
-                st.confirmed = false;
-                player.setHealth(st.maxHealth);
-            }
+            // перелить броню в HP в обход кэпа.
+            clampToCapAndForce(player, st, timeNow);
             if (st.health <= 0.0f)
                 enterDying(player); // самоубился об окружение — смерть серверная сразу
         }

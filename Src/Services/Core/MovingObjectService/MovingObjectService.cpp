@@ -1,22 +1,13 @@
 #include "Services/Core/MovingObjectService/MovingObjectService.h"
 
 #include "Log/LogManager.h"
+#include "Utils/Sanitize.h"
 #include <algorithm>
 #include <cmath>
 
 namespace
 {
 constexpr int MAX_OBJECT_MODEL = 19999;
-
-float finiteOrZero(float value)
-{
-    return std::isfinite(value) ? value : 0.0f;
-}
-
-Vector3 sanitizeVec(Vector3 v)
-{
-    return {finiteOrZero(v.x), finiteOrZero(v.y), finiteOrZero(v.z)};
-}
 } // namespace
 
 int MovingObjectService::create(int model, const Vector3 &position, const Vector3 &rotation, float drawDistance)
@@ -28,7 +19,7 @@ int MovingObjectService::create(int model, const Vector3 &position, const Vector
     }
 
     model = std::clamp(model, 0, MAX_OBJECT_MODEL);
-    IObject *object = m_objects->create(model, sanitizeVec(position), sanitizeVec(rotation),
+    IObject *object = m_objects->create(model, Utils::sanitize(position), Utils::sanitize(rotation),
                                         std::isfinite(drawDistance) ? drawDistance : 0.0f);
     if (!object)
     {
@@ -66,8 +57,8 @@ bool MovingObjectService::moveTo(int objectId, const Vector3 &targetPosition, co
     m_defs[objectId].onArrived = std::move(onArrived);
 
     ObjectMoveData data;
-    data.targetPos = sanitizeVec(targetPosition);
-    data.targetRot = sanitizeVec(targetRotation);
+    data.targetPos = Utils::sanitize(targetPosition);
+    data.targetRot = Utils::sanitize(targetRotation);
     data.speed = std::clamp(std::isfinite(speed) ? speed : MIN_SPEED, MIN_SPEED, MAX_SPEED);
     object->move(data);
     return true;
@@ -109,8 +100,8 @@ void MovingObjectService::setTransform(int objectId, const Vector3 &position, co
     {
         object->stop();
     }
-    object->setPosition(sanitizeVec(position));
-    object->setRotation(GTAQuat(sanitizeVec(rotation)));
+    object->setPosition(Utils::sanitize(position));
+    object->setRotation(GTAQuat(Utils::sanitize(rotation)));
 }
 
 Vector3 MovingObjectService::getPosition(int objectId) const

@@ -1,5 +1,6 @@
 #include "Services/Core/TextDrawService/TextDrawService.h"
 #include "Log/LogManager.h"
+#include "Utils/Sanitize.h"
 #include <algorithm>
 #include <cmath>
 
@@ -19,16 +20,6 @@ constexpr int MAX_PREVIEW_MODEL = 20000;
 constexpr float MIN_PREVIEW_ZOOM = 0.05f;
 constexpr float MAX_PREVIEW_ZOOM = 10.0f;
 constexpr int MAX_VEHICLE_COLOUR = 255;
-
-float finiteOrZero(float value)
-{
-    return std::isfinite(value) ? value : 0.0f;
-}
-
-float clampFinite(float value, float min, float max)
-{
-    return std::clamp(finiteOrZero(value), min, max);
-}
 } // namespace
 
 // ------------------------------------------------------------------ валидация
@@ -102,10 +93,10 @@ TextDrawParams TextDrawService::clampParams(const TextDrawParams &params)
 {
     TextDrawParams p = params;
 
-    p.letterSize.x = clampFinite(p.letterSize.x, -MAX_LETTER_SIZE, MAX_LETTER_SIZE);
-    p.letterSize.y = clampFinite(p.letterSize.y, -MAX_LETTER_SIZE, MAX_LETTER_SIZE);
-    p.textSize.x = clampFinite(p.textSize.x, 0.0f, MAX_TEXT_SIZE);
-    p.textSize.y = clampFinite(p.textSize.y, 0.0f, MAX_TEXT_SIZE);
+    p.letterSize.x = Utils::clampFinite(p.letterSize.x, -MAX_LETTER_SIZE, MAX_LETTER_SIZE);
+    p.letterSize.y = Utils::clampFinite(p.letterSize.y, -MAX_LETTER_SIZE, MAX_LETTER_SIZE);
+    p.textSize.x = Utils::clampFinite(p.textSize.x, 0.0f, MAX_TEXT_SIZE);
+    p.textSize.y = Utils::clampFinite(p.textSize.y, 0.0f, MAX_TEXT_SIZE);
     p.shadow = std::clamp(p.shadow, 0, MAX_SHADOW);
     p.outline = std::clamp(p.outline, 0, MAX_OUTLINE);
 
@@ -119,10 +110,10 @@ TextDrawParams TextDrawService::clampParams(const TextDrawParams &params)
     }
 
     p.previewModel = std::clamp(p.previewModel, -1, MAX_PREVIEW_MODEL);
-    p.previewRotation.x = finiteOrZero(p.previewRotation.x);
-    p.previewRotation.y = finiteOrZero(p.previewRotation.y);
-    p.previewRotation.z = finiteOrZero(p.previewRotation.z);
-    p.previewZoom = clampFinite(p.previewZoom, MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM);
+    p.previewRotation.x = Utils::finiteOrZero(p.previewRotation.x);
+    p.previewRotation.y = Utils::finiteOrZero(p.previewRotation.y);
+    p.previewRotation.z = Utils::finiteOrZero(p.previewRotation.z);
+    p.previewZoom = Utils::clampFinite(p.previewZoom, MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM);
     p.previewVehicleColour1 = std::clamp(p.previewVehicleColour1, -1, MAX_VEHICLE_COLOUR);
     p.previewVehicleColour2 = std::clamp(p.previewVehicleColour2, -1, MAX_VEHICLE_COLOUR);
 
@@ -131,7 +122,7 @@ TextDrawParams TextDrawService::clampParams(const TextDrawParams &params)
 
 Vector2 TextDrawService::clampPosition(Vector2 position)
 {
-    return {clampFinite(position.x, MIN_SCREEN_X, MAX_SCREEN_X), clampFinite(position.y, MIN_SCREEN_Y, MAX_SCREEN_Y)};
+    return {Utils::clampFinite(position.x, MIN_SCREEN_X, MAX_SCREEN_X), Utils::clampFinite(position.y, MIN_SCREEN_Y, MAX_SCREEN_Y)};
 }
 
 // ------------------------------------------------------------------ глобальные

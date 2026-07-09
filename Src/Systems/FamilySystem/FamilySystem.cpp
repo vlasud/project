@@ -4,6 +4,7 @@
 #include "Log/LogManager.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/ParkedVehicleService/ParkedVehicleRow.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include <algorithm>
 #include <chrono>
@@ -31,18 +32,6 @@ constexpr const char *OFFLINE_TAG = "{FF5A5A}оффлайн";
 // текст, времени заметить достаточно).
 constexpr Milliseconds FAMILY_CREATED_POPUP_TIME{5000};
 const Colour FAMILY_CREATED_POPUP_COLOUR{0x90, 0xEE, 0x90, 0xFF};
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 
 // Текст ошибки операции членства для клиента (utf-8).
 const char *resultError(FamilyService::Result result)

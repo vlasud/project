@@ -2,6 +2,7 @@
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include <cstdint>
 #include <fmt/format.h>
@@ -62,18 +63,6 @@ constexpr Milliseconds PUTDOWN_DURATION{300};
 constexpr Milliseconds START_WORK_POPUP_TIME{3000};
 constexpr Milliseconds DELIVERY_POPUP_TIME{3000};
 const Colour DELIVERY_POPUP_COLOUR{0x90, 0xEE, 0x90, 0xFF};
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 } // namespace
 
 PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister)

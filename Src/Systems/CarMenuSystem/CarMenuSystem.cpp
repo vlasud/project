@@ -4,6 +4,7 @@
 #include "Services/Core/VehicleService/VehicleModelNames.h"
 #include "Services/ParkedVehicleService/ParkedVehicleRow.h"
 #include "Systems/Core/VehicleControlSystem/VehicleEngineNotice.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include "glm/geometric.hpp"
 #include <algorithm>
@@ -19,18 +20,6 @@ const Colour ERROR_COLOUR{255, 90, 90};
 
 // Радиус, в котором можно припарковать машину у СВОЕГО дома (двор дома, не полгорода).
 constexpr float PARK_HOUSE_RADIUS = 30.0f;
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 } // namespace
 
 CarMenuSystem::CarMenuSystem(ICore &core, const ServiceRegister &serviceRegister)

@@ -120,6 +120,13 @@ class PlayerHealthService final : public IService
     // Переход в серверную смерть: выставляет dying и один раз зовёт подписчиков.
     void enterDying(IPlayer &player);
 
+    // Зажим HP к активному кэпу с форсом клиента вниз. Под кэпом клиент может
+    // прислать раскладку «высокий HP + 0 брони» с той же суммой и перелить броню
+    // в HP в обход потолка; здесь ловим это — держим HP на maxHealth, снимаем
+    // confirmed и форсим клиент. Бронь под кэп не попадает, её не трогаем. No-op,
+    // если кэп неактивен или HP уже не выше потолка.
+    void clampToCapAndForce(IPlayer &player, State &st, TimePoint timeNow);
+
     std::array<State, MAX_PLAYERS> m_state;
     std::vector<DeathHandler> m_deathHandlers;
 };

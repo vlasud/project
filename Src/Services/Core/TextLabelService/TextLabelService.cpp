@@ -2,6 +2,7 @@
 
 #include "Log/LogManager.h"
 #include "Services/Core/StreamerService/StreamerService.h"
+#include "Utils/Sanitize.h"
 #include <algorithm>
 #include <cmath>
 
@@ -11,10 +12,6 @@ namespace
 // когда тот входит в зону видимости.
 constexpr float STREAM_MARGIN = 30.0f;
 
-float finiteOrZero(float value)
-{
-    return std::isfinite(value) ? value : 0.0f;
-}
 } // namespace
 
 std::string TextLabelService::sanitizeText(StringView text)
@@ -54,8 +51,8 @@ int TextLabelService::add(StringView text, const Vector3 &position, Colour colou
     def.text = sanitizeText(text);
     def.colour = colour;
 
-    const float draw = std::clamp(finiteOrZero(drawDistance), MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE);
-    const Vector3 pos{finiteOrZero(position.x), finiteOrZero(position.y), finiteOrZero(position.z)};
+    const float draw = std::clamp(Utils::finiteOrZero(drawDistance), MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE);
+    const Vector3 pos{Utils::finiteOrZero(position.x), Utils::finiteOrZero(position.y), Utils::finiteOrZero(position.z)};
 
     const int labelId = m_streamer->addTextLabel(def.text, def.colour, pos, draw, testLOS, draw + STREAM_MARGIN);
     if (labelId < 0)

@@ -3,6 +3,7 @@
 #include "Log/LogManager.h"
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
+#include "Utils/Sanitize.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -30,7 +31,7 @@ float distanceSq(const Vector3 &a, const Vector3 &b)
 int CheckpointService::add(const Vector3 &position, float radius, EnterHandler onEnter, LeaveHandler onLeave)
 {
     Def def;
-    def.position = sanitizePosition(position);
+    def.position = Utils::sanitize(position);
     def.radius = clampRadius(radius);
     def.onEnter = std::move(onEnter);
     def.onLeave = std::move(onLeave);
@@ -59,7 +60,7 @@ bool CheckpointService::update(int checkpointId, const Vector3 &position, float 
     {
         return false;
     }
-    it->second.position = sanitizePosition(position);
+    it->second.position = Utils::sanitize(position);
     it->second.radius = clampRadius(radius);
 
     // Сбрасываем показ у тех, кому он показан: ближайший проход стрима
@@ -82,7 +83,7 @@ void CheckpointService::setForPlayer(IPlayer &player, const Vector3 &position, f
 {
     Slot &slot = m_slots[player.getID()];
     slot.personal = true;
-    slot.personalPosition = sanitizePosition(position);
+    slot.personalPosition = Utils::sanitize(position);
     slot.personalRadius = clampRadius(radius);
     slot.personalEnter = std::move(onEnter);
     slot.personalLeave = std::move(onLeave);
@@ -130,7 +131,7 @@ void CheckpointService::setRaceForPlayer(IPlayer &player, RaceCheckpointType typ
 
     Slot &slot = m_slots[player.getID()];
     slot.race = true;
-    slot.racePosition = sanitizePosition(position);
+    slot.racePosition = Utils::sanitize(position);
     slot.raceRadius = clampRadius(radius);
     slot.raceEnter = std::move(onEnter);
     slot.raceLeave = std::move(onLeave);
@@ -143,7 +144,7 @@ void CheckpointService::setRaceForPlayer(IPlayer &player, RaceCheckpointType typ
     }
     race.setType(type);
     race.setPosition(slot.racePosition);
-    race.setNextPosition(sanitizePosition(nextPosition));
+    race.setNextPosition(Utils::sanitize(nextPosition));
     race.setRadius(slot.raceRadius);
     race.enable();
 }
@@ -410,10 +411,4 @@ bool CheckpointService::validateInside(IPlayer &player, const Vector3 &position,
 float CheckpointService::clampRadius(float radius)
 {
     return std::clamp(std::isfinite(radius) ? radius : MIN_RADIUS, MIN_RADIUS, MAX_RADIUS);
-}
-
-Vector3 CheckpointService::sanitizePosition(Vector3 position)
-{
-    auto fix = [](float v) { return std::isfinite(v) ? v : 0.0f; };
-    return {fix(position.x), fix(position.y), fix(position.z)};
 }

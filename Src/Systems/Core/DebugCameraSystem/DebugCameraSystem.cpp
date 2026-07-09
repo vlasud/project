@@ -2,6 +2,7 @@
 
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include "Utils/FileNameSanitizer.h"
 #include "glm/geometric.hpp"
@@ -31,18 +32,6 @@ constexpr float SEGMENT_TIME_MAX_S = 120.0f;
 constexpr std::size_t MAX_POINTS = 64;
 
 const std::string PATHS_DIR = "camerapaths";
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 
 bool parseFloat(const std::string &text, float &out)
 {

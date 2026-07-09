@@ -28,9 +28,9 @@
 ## С чего начать дальше (ранжировано по ROI)
 
 1. ✅ **Сделано** — `u()`/`utf8Tocp1251` вынесен в `Encoding.h` (`inline u(std::string_view)`), удалены 38 локальных копий.
-2. `[med/S]` Вынести `makeDialog()` в общий заголовок.
-3. `[med/S]` Вынести `finiteOrZero`/`sanitize(Vector3/Vector2)` в `Utils/Sanitize.h` (8 сервисов).
-4. `[high/S]` Убрать дословный дубль клэмпа HP к кэпу в `PlayerHealthService::verify` (риск рассинхрона анти-чита).
+2. ✅ **Сделано** — общий `makeDialog`/`makeDialogCp1251Body` в `Services/Core/PlayerDialogService/MakeDialog.h`; удалены 12 локальных копий, подтянуты Faction/Election/Admin/Menu (все их ручные Dialog-блоки оказались drop-in).
+3. ✅ **Сделано** — `finiteOrZero`/`sanitize(Vector3)`/`clampFinite` в `Utils/Sanitize.h`; удалены копии в 8 сервисах (в т.ч. member-методы `sanitizePosition` в MapIcon/Checkpoint).
+4. ✅ **Сделано** — дубль клэмпа HP к кэпу вынесен в приватный `clampToCapAndForce`, зовётся из обеих веток `verify` (семантика бит-в-бит).
 5. `[high/M]` Вынести `VehicleFuelRestoreTracker` для Personal/Parked vehicle.
 6. `[high/M]` Шаблонный `PresetFileService<T>` для async save/load/list в 5 editor-системах.
 7. `[high/L]` Абстрагировать account-scoped персист (serial-guard + `m_loaded`) в миксин/хелпер.
@@ -57,8 +57,8 @@
 |---|---|---|---|
 | `u() = Encoding::utf8Tocp1251` продублирован дословно | high/S | **38 файлов** | `inline std::string u(std::string_view)` в `Encoding.h`; перегрузка под готовый cp1251 (TextDrawEditor) |
 | Ручной гард `playerId<0 \|\| >=MAX_PLAYERS` | high/S | **~128 вхождений / 35 файлов** | `constexpr isValidPlayerId(int)` + free `onlinePlayer(ICore&,int)` |
-| `makeDialog(...)` с u()-конвертацией | med/S | 12 бизнес- + 9 editor-систем | общий `makeDialog` + перегрузка под готовый body; подтянуть Faction/Election/Admin/Menu |
-| `finiteOrZero` + `sanitize(Vector3/Vector2)` переизобретены | med/S | 8 сервисов | `Utils/Sanitize.h` |
+| ✅ `makeDialog(...)` с u()-конвертацией | med/S | 12 бизнес- + 9 editor-систем | общий `makeDialog` + `makeDialogCp1251Body` под готовый body; Faction/Election/Admin/Menu подтянуты |
+| ✅ `finiteOrZero` + `sanitize(Vector3/Vector2)` переизобретены | med/S | 8 сервисов | `Utils/Sanitize.h` (`finiteOrZero`/`sanitize(Vector3)`/`clampFinite`) |
 | `sanitizeText` дублирован дословно | med/S | `TextDrawService:71-99`, `GameTextService:14-38`, `TextLabelService:20-43` | общий хелпер с флагами allowNewline/tildeParity/emptyFallback |
 | `asciiLower`/`iequals`, `ceilSecondsUntil` | low/S | Command/Animation, Admin/Report | `Utils/Ascii.h`, `TimeUtils::ceilSecondsUntil` |
 
@@ -94,7 +94,7 @@
 
 | Находка | i/e | Место | Направление |
 |---|---|---|---|
-| Дубль блока клэмпа HP к кэпу в `verify()` — дословно дважды | high/S | `PlayerHealthService.cpp:387-393` и `416-422` | `clampToCapAndForce(...)` |
+| ✅ Дубль блока клэмпа HP к кэпу в `verify()` — дословно дважды | high/S | `PlayerHealthService.cpp:387-393` и `416-422` | `clampToCapAndForce(...)` |
 | Идиома forceSync (lastChange/confirmed=false/setHealth[+Armour]) ×4 | med/S | `PlayerHealthService.cpp` (setHealth/setArmour/setMaxHealth/applyDamage) | приватный `forceSync(...)` |
 | `validateMod` и `validatePaintJob` — почти дублирующиеся тела | med/S | `VehicleService.cpp:1137-1249` | `validateModShopTuning(predicate,label)` |
 | `PlayerLocationService::verify` — god-метод ~175 строк, 8 сценариев | med/L | `PlayerLocationService.cpp:222-397` | выделить `checkBypass/checkPendingTeleport/checkPauseResume/checkSpeedLimit` |

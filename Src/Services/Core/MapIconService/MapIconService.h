@@ -65,7 +65,6 @@ class MapIconService final : public IService
 
     static int clampIconType(int iconType);
     static MapIconStyle clampStyle(MapIconStyle style);
-    static Vector3 sanitizePosition(Vector3 position);
 
     StreamerService *m_streamer = nullptr;
     // m_used[playerId][i] — занят ли ручной слот FIRST_MANUAL_SLOT + i.

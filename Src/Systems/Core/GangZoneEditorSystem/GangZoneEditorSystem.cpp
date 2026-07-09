@@ -2,6 +2,7 @@
 
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include "Utils/FileNameSanitizer.h"
 #include <algorithm>
@@ -35,18 +36,6 @@ constexpr float MIN_ZONE_SIZE = 5.0f;      // меньше клавишами н
 // Применять изменения (с пересборкой обрезки и перепоказом) не чаще, чем раз
 // в столько тиков: живой отклик без спама радара hide/show на каждый тик.
 constexpr int REBUILD_INTERVAL_TICKS = 5;
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 
 // Цвет в форме RRGGBB или RRGGBBAA, допускается префикс # или 0x.
 bool parseHexColour(const std::string &input, Colour &out)

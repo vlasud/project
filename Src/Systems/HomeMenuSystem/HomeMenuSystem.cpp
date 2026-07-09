@@ -2,6 +2,7 @@
 
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include <fmt/format.h>
 #include <string>
@@ -10,18 +11,6 @@ namespace
 {
 const Colour INFO_COLOUR{120, 220, 255};
 const Colour ERROR_COLOUR{255, 90, 90};
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 } // namespace
 
 HomeMenuSystem::HomeMenuSystem(ICore &core, const ServiceRegister &serviceRegister)

@@ -2,6 +2,7 @@
 
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include "Utils/FileNameSanitizer.h"
 #include <algorithm>
@@ -23,21 +24,6 @@ constexpr float SPRINT_MULTIPLIER = 5.0f;
 constexpr std::size_t LIST_TEXT_PREVIEW = 24;  // байт текста в строке списка
 constexpr std::size_t MAX_FILE_ITEMS = 256;    // защита от мусорных файлов
 const Colour PICK_HIGHLIGHT = Colour(255, 64, 64, 255);
-
-// body передаётся уже в cp1251 (через u() по месту сборки): в него попадает
-// сырой текст textdraw, введённый игроком, который нельзя прогонять через
-// utf8Tocp1251 повторно.
-Dialog makeDialog(DialogStyle style, const std::string &title, std::string body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = std::move(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 
 bool parseFloat(const std::string &text, float &out)
 {
@@ -469,7 +455,7 @@ void TextDrawEditorSystem::showMain(IPlayer &player)
     body += u("Удалить все текстдравы\n");
     body += u("Выйти из редактора");
 
-    m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Редактор textdraw", std::move(body), "Выбрать", "Закрыть"),
+    m_dialogService.show(player, makeDialogCp1251Body(DialogStyle_LIST, "Редактор textdraw", std::move(body), "Выбрать", "Закрыть"),
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
                          {
                              IPlayer *player = editorPlayer(playerId);
@@ -521,7 +507,7 @@ void TextDrawEditorSystem::showCreateTextInput(IPlayer &player)
 {
     m_dialogService.show(
         player,
-        makeDialog(DialogStyle_INPUT, "Создать textdraw",
+        makeDialogCp1251Body(DialogStyle_INPUT, "Создать textdraw",
                    u("Введите текст (коды вида ~r~, ~n~ поддерживаются)"), "Создать", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
         {
@@ -562,7 +548,7 @@ void TextDrawEditorSystem::showCreateTextInput(IPlayer &player)
 void TextDrawEditorSystem::showCreateModelInput(IPlayer &player)
 {
     m_dialogService.showNumberInput(
-        player, makeDialog(DialogStyle_INPUT, "Превью модели", u("Введите ID модели (скин, машина, объект)"), "Создать", "Назад"),
+        player, makeDialogCp1251Body(DialogStyle_INPUT, "Превью модели", u("Введите ID модели (скин, машина, объект)"), "Создать", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -623,7 +609,7 @@ void TextDrawEditorSystem::showList(IPlayer &player)
         body = u("Список пуст");
     }
 
-    m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Текстдравы", std::move(body), "Выбрать", "Назад"),
+    m_dialogService.show(player, makeDialogCp1251Body(DialogStyle_LIST, "Текстдравы", std::move(body), "Выбрать", "Назад"),
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
                          {
                              IPlayer *player = editorPlayer(playerId);
@@ -686,7 +672,7 @@ void TextDrawEditorSystem::showEdit(IPlayer &player)
     body += u("Удалить");
 
     m_dialogService.show(
-        player, makeDialog(DialogStyle_LIST, fmt::format("Textdraw #{}", session.selected), std::move(body), "Выбрать", "Назад"),
+        player, makeDialogCp1251Body(DialogStyle_LIST, fmt::format("Textdraw #{}", session.selected), std::move(body), "Выбрать", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -802,7 +788,7 @@ void TextDrawEditorSystem::showEdit(IPlayer &player)
 void TextDrawEditorSystem::showTextInput(IPlayer &player)
 {
     m_dialogService.show(
-        player, makeDialog(DialogStyle_INPUT, "Текст", u("Введите новый текст (~n~ — перенос строки)"), "OK", "Назад"),
+        player, makeDialogCp1251Body(DialogStyle_INPUT, "Текст", u("Введите новый текст (~n~ — перенос строки)"), "OK", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -833,7 +819,7 @@ void TextDrawEditorSystem::showPositionInput(IPlayer &player)
 {
     m_dialogService.show(
         player,
-        makeDialog(DialogStyle_INPUT, "Позиция", u("Введите координаты экрана: X Y (экран 640x480)"), "OK", "Назад"),
+        makeDialogCp1251Body(DialogStyle_INPUT, "Позиция", u("Введите координаты экрана: X Y (экран 640x480)"), "OK", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -865,7 +851,7 @@ void TextDrawEditorSystem::showMoveStepInput(IPlayer &player)
 {
     m_dialogService.show(
         player,
-        makeDialog(DialogStyle_INPUT, "Шаг перемещения",
+        makeDialogCp1251Body(DialogStyle_INPUT, "Шаг перемещения",
                    u(fmt::format("Введите шаг в пикселях за тик ({}-{})", MOVE_STEP_MIN, MOVE_STEP_MAX)), "OK", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
         {
@@ -902,7 +888,7 @@ void TextDrawEditorSystem::showStylePicker(IPlayer &player)
     body += u("Спрайт TXD (текст — имя спрайта, напр. LD_BEAT:chit)\n");
     body += u("Превью модели");
 
-    m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Стиль textdraw", std::move(body), "Выбрать", "Назад"),
+    m_dialogService.show(player, makeDialogCp1251Body(DialogStyle_LIST, "Стиль textdraw", std::move(body), "Выбрать", "Назад"),
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
                          {
                              IPlayer *player = editorPlayer(playerId);
@@ -926,7 +912,7 @@ void TextDrawEditorSystem::showLetterSizeInput(IPlayer &player)
 {
     m_dialogService.show(
         player,
-        makeDialog(DialogStyle_INPUT, "Размер букв", u("Введите ширину и высоту букв: X Y (напр. 0.4 1.6)"), "OK",
+        makeDialogCp1251Body(DialogStyle_INPUT, "Размер букв", u("Введите ширину и высоту букв: X Y (напр. 0.4 1.6)"), "OK",
                    "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
         {
@@ -961,7 +947,7 @@ void TextDrawEditorSystem::showTextSizeInput(IPlayer &player)
 {
     m_dialogService.show(
         player,
-        makeDialog(DialogStyle_INPUT, "Размер текста",
+        makeDialogCp1251Body(DialogStyle_INPUT, "Размер текста",
                    u("Введите размер области текста/бокса: X Y (для спрайта и превью — размер картинки)"), "OK",
                    "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
@@ -1022,7 +1008,7 @@ void TextDrawEditorSystem::showScaleMenu(IPlayer &player)
     body += u("Задать коэффициент...");
 
     m_dialogService.show(
-        player, makeDialog(DialogStyle_LIST, "Масштаб размера букв", std::move(body), "Выбрать", "Назад"),
+        player, makeDialogCp1251Body(DialogStyle_LIST, "Масштаб размера букв", std::move(body), "Выбрать", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -1069,7 +1055,7 @@ void TextDrawEditorSystem::showScaleFactorInput(IPlayer &player)
 {
     m_dialogService.show(
         player,
-        makeDialog(DialogStyle_INPUT, "Коэффициент масштаба",
+        makeDialogCp1251Body(DialogStyle_INPUT, "Коэффициент масштаба",
                    u("Множитель к текущему размеру букв (1.5 - крупнее, 0.5 - мельче)"), "OK", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
         {
@@ -1107,7 +1093,7 @@ void TextDrawEditorSystem::showAlignmentPicker(IPlayer &player)
     body += u("По центру\n");
     body += u("Справа");
 
-    m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Выравнивание", std::move(body), "Выбрать", "Назад"),
+    m_dialogService.show(player, makeDialogCp1251Body(DialogStyle_LIST, "Выравнивание", std::move(body), "Выбрать", "Назад"),
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
                          {
                              IPlayer *player = editorPlayer(playerId);
@@ -1135,7 +1121,7 @@ void TextDrawEditorSystem::showColourInput(IPlayer &player, ColourTarget target)
 
     m_dialogService.show(
         player,
-        makeDialog(DialogStyle_INPUT, title, u("Введите цвет: RRGGBB или RRGGBBAA (напр. FF0000 или FF000080)"), "OK",
+        makeDialogCp1251Body(DialogStyle_INPUT, title, u("Введите цвет: RRGGBB или RRGGBBAA (напр. FF0000 или FF000080)"), "OK",
                    "Назад"),
         [this, playerId = player.getID(), target](DialogResponse response, int, StringView text)
         {
@@ -1180,7 +1166,7 @@ void TextDrawEditorSystem::showColourInput(IPlayer &player, ColourTarget target)
 void TextDrawEditorSystem::showShadowInput(IPlayer &player)
 {
     m_dialogService.showNumberInput(
-        player, makeDialog(DialogStyle_INPUT, "Тень", u("Введите размер тени (0 — без тени)"), "OK", "Назад"),
+        player, makeDialogCp1251Body(DialogStyle_INPUT, "Тень", u("Введите размер тени (0 — без тени)"), "OK", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -1205,7 +1191,7 @@ void TextDrawEditorSystem::showShadowInput(IPlayer &player)
 void TextDrawEditorSystem::showOutlineInput(IPlayer &player)
 {
     m_dialogService.showNumberInput(
-        player, makeDialog(DialogStyle_INPUT, "Контур", u("Введите толщину контура (0 — без контура)"), "OK", "Назад"),
+        player, makeDialogCp1251Body(DialogStyle_INPUT, "Контур", u("Введите толщину контура (0 — без контура)"), "OK", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -1230,7 +1216,7 @@ void TextDrawEditorSystem::showOutlineInput(IPlayer &player)
 void TextDrawEditorSystem::showPreviewModelInput(IPlayer &player)
 {
     m_dialogService.showNumberInput(
-        player, makeDialog(DialogStyle_INPUT, "Превью — модель", u("Введите ID модели (работает при стиле «превью модели»)"), "OK", "Назад"),
+        player, makeDialogCp1251Body(DialogStyle_INPUT, "Превью — модель", u("Введите ID модели (работает при стиле «превью модели»)"), "OK", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -1256,7 +1242,7 @@ void TextDrawEditorSystem::showPreviewRotationInput(IPlayer &player)
 {
     m_dialogService.show(
         player,
-        makeDialog(DialogStyle_INPUT, "Превью — поворот", u("Введите углы поворота модели: X Y Z (напр. -10 0 -20)"),
+        makeDialogCp1251Body(DialogStyle_INPUT, "Превью — поворот", u("Введите углы поворота модели: X Y Z (напр. -10 0 -20)"),
                    "OK", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
         {
@@ -1288,7 +1274,7 @@ void TextDrawEditorSystem::showPreviewRotationInput(IPlayer &player)
 void TextDrawEditorSystem::showPreviewZoomInput(IPlayer &player)
 {
     m_dialogService.show(
-        player, makeDialog(DialogStyle_INPUT, "Превью — зум", u("Введите зум камеры превью (напр. 1.0)"), "OK", "Назад"),
+        player, makeDialogCp1251Body(DialogStyle_INPUT, "Превью — зум", u("Введите зум камеры превью (напр. 1.0)"), "OK", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -1321,7 +1307,7 @@ void TextDrawEditorSystem::showPreviewZoomInput(IPlayer &player)
 void TextDrawEditorSystem::showSaveNameInput(IPlayer &player)
 {
     m_dialogService.show(
-        player, makeDialog(DialogStyle_INPUT, "Сохранить текстдравы", u("Введите имя файла"), "Сохранить", "Назад"),
+        player, makeDialogCp1251Body(DialogStyle_INPUT, "Сохранить текстдравы", u("Введите имя файла"), "Сохранить", "Назад"),
         [this, playerId = player.getID()](DialogResponse response, int, StringView text)
         {
             IPlayer *player = editorPlayer(playerId);
@@ -1362,7 +1348,7 @@ void TextDrawEditorSystem::showLoadList(IPlayer &player, std::vector<std::string
     }
 
     m_dialogService.show(
-        player, makeDialog(DialogStyle_LIST, "Загрузить текстдравы", std::move(body), "Загрузить", "Назад"),
+        player, makeDialogCp1251Body(DialogStyle_LIST, "Загрузить текстдравы", std::move(body), "Загрузить", "Назад"),
         [this, playerId = player.getID(), files = std::move(files)](DialogResponse response, int listItem, StringView)
         {
             IPlayer *player = editorPlayer(playerId);

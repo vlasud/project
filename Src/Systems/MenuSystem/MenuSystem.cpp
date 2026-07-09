@@ -2,6 +2,7 @@
 
 #include "Server/Components/Dialogs/dialogs.hpp"
 #include "Systems/HelpSystem/HelpDialog.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include <chrono>
 #include <fmt/format.h>
@@ -53,12 +54,8 @@ void MenuSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason
 
 void MenuSystem::showMenu(IPlayer &player)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u("Меню игрока");
-    dialog.body = u("Информация\nСвязь с администрацией\nПомощь");
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Закрыть");
+    Dialog dialog = makeDialog(DialogStyle_LIST, "Меню игрока", "Информация\nСвязь с администрацией\nПомощь",
+                               "Выбрать", "Закрыть");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
@@ -116,12 +113,7 @@ void MenuSystem::showInfo(IPlayer &player)
     body += fmt::format("Организация\t{}\n", orgValue);
     body += fmt::format("Должность\t{}", rankValue);
 
-    Dialog dialog;
-    dialog.style = DialogStyle_TABLIST_HEADERS;
-    dialog.title = u("Информация");
-    dialog.body = u(body);
-    dialog.leftButton = u("Назад");
-    dialog.rightButton = u("");
+    Dialog dialog = makeDialog(DialogStyle_TABLIST_HEADERS, "Информация", body, "Назад", "");
 
     // Просмотр (выбор строки ничего не делает); «Назад» возвращает в /mn.
     m_dialogService.show(player, dialog,
@@ -135,12 +127,9 @@ void MenuSystem::showInfo(IPlayer &player)
 
 void MenuSystem::showReportInput(IPlayer &player)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Связь с администрацией");
-    dialog.body = u("Опишите вашу проблему или вопрос. Сообщение увидят администраторы онлайн.");
-    dialog.leftButton = u("Отправить");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Связь с администрацией",
+                               "Опишите вашу проблему или вопрос. Сообщение увидят администраторы онлайн.",
+                               "Отправить", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -221,12 +210,7 @@ void MenuSystem::showHelp(IPlayer &player)
     // Тот же общий слой, что /help — пункт «Помощь» и /help показывают одно и то же.
     const std::string body = buildHelpDialogBody(m_commandService, m_factionService, player.getID());
 
-    Dialog dialog;
-    dialog.style = DialogStyle_TABLIST_HEADERS;
-    dialog.title = u("Команды");
-    dialog.body = u(body);
-    dialog.leftButton = u("Закрыть");
-    dialog.rightButton = u("");
+    Dialog dialog = makeDialog(DialogStyle_TABLIST_HEADERS, "Команды", body, "Закрыть", "");
 
     // Самостоятельный экран: закрытие справки завершает сценарий (в /mn не возвращаем).
     m_dialogService.show(player, dialog, [](DialogResponse, int, StringView) {});

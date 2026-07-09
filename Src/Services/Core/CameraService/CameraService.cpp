@@ -4,6 +4,7 @@
 #include "Services/Core/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/FileNameSanitizer.h"
+#include "Utils/Sanitize.h"
 #include "core.hpp"
 #include <algorithm>
 #include <chrono>
@@ -19,16 +20,6 @@ const std::string PATHS_DIR = "camerapaths";
 
 constexpr Milliseconds SEGMENT_TIME_MIN{200};
 constexpr Milliseconds SEGMENT_TIME_MAX{120000};
-
-float finiteOrZero(float value)
-{
-    return std::isfinite(value) ? value : 0.0f;
-}
-
-Vector3 sanitizeVec(Vector3 v)
-{
-    return {finiteOrZero(v.x), finiteOrZero(v.y), finiteOrZero(v.z)};
-}
 } // namespace
 
 // ------------------------------------------------------------------ парсинг и реестр
@@ -60,8 +51,8 @@ bool CameraService::parsePath(const std::string &content, CameraPath &out)
             CameraPathPoint p;
             if (ss >> p.position.x >> p.position.y >> p.position.z >> p.lookAt.x >> p.lookAt.y >> p.lookAt.z)
             {
-                p.position = sanitizeVec(p.position);
-                p.lookAt = sanitizeVec(p.lookAt);
+                p.position = Utils::sanitize(p.position);
+                p.lookAt = Utils::sanitize(p.lookAt);
                 path.points.push_back(p);
             }
         }
@@ -303,8 +294,8 @@ CameraPath CameraService::sanitizePath(CameraPath path)
     }
     for (CameraPathPoint &point : path.points)
     {
-        point.position = sanitizeVec(point.position);
-        point.lookAt = sanitizeVec(point.lookAt);
+        point.position = Utils::sanitize(point.position);
+        point.lookAt = Utils::sanitize(point.lookAt);
     }
     path.segmentTime = std::clamp(path.segmentTime, SEGMENT_TIME_MIN, SEGMENT_TIME_MAX);
     return path;

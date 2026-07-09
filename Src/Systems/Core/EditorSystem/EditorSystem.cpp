@@ -2,6 +2,7 @@
 
 #include "Services/AdminService/AdminService.h"
 #include "ThreadPool/ThreadPool.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include "Utils/FileNameSanitizer.h"
 #include "anim.hpp"
@@ -243,18 +244,6 @@ constexpr AnimPreset ANIM_PRESETS[] = {
     {"SWEET", "Sweet_injuredloop", "Лежит раненый"},
 };
 constexpr int ANIM_PRESET_COUNT = static_cast<int>(sizeof(ANIM_PRESETS) / sizeof(ANIM_PRESETS[0]));
-
-Dialog makeDialog(DialogStyle style, const std::string &title, const std::string &body, const std::string &leftButton,
-                  const std::string &rightButton)
-{
-    Dialog dialog;
-    dialog.style = style;
-    dialog.title = u(title);
-    dialog.body = u(body);
-    dialog.leftButton = u(leftButton);
-    dialog.rightButton = u(rightButton);
-    return dialog;
-}
 
 bool parseFloat(const std::string &text, float &out)
 {

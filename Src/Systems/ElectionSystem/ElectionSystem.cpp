@@ -4,6 +4,7 @@
 #include "Log/LogManager.h"
 #include "Services/AdminService/AdminService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
+#include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include <chrono>
 #include <fmt/format.h>
@@ -171,12 +172,9 @@ void ElectionSystem::finishElection()
 
 void ElectionSystem::showPartyMenu(IPlayer &player)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u("Регистрация партий");
-    dialog.body = u(fmt::format("Список партий\nСоздать партию (взнос ${})", ElectionService::PARTY_COST));
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Закрыть");
+    Dialog dialog = makeDialog(DialogStyle_LIST, "Регистрация партий",
+                               fmt::format("Список партий\nСоздать партию (взнос ${})", ElectionService::PARTY_COST),
+                               "Выбрать", "Закрыть");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
@@ -205,12 +203,8 @@ void ElectionSystem::showPartyList(IPlayer &player, bool forVote)
         body += fmt::format("{} — лидер {}\n", party.name, party.leaderName);
     body.pop_back();
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u(forVote ? "Голосование" : "Партии");
-    dialog.body = u(body);
-    dialog.leftButton = u(forVote ? "Голосовать" : "Подробнее");
-    dialog.rightButton = u("Закрыть");
+    Dialog dialog = makeDialog(DialogStyle_LIST, forVote ? "Голосование" : "Партии", body,
+                               forVote ? "Голосовать" : "Подробнее", "Закрыть");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID(), forVote](DialogResponse response, int listItem, StringView)
@@ -235,12 +229,10 @@ void ElectionSystem::showPartyDetails(IPlayer &player, std::int64_t partyId)
     if (!party)
         return;
 
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u(fmt::format("Партия «{}»", party->name));
-    dialog.body = u(fmt::format("Лидер: {}\n\n{}", party->leaderName,
-                                party->description.empty() ? "Без описания" : party->description));
-    dialog.leftButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_MSGBOX, fmt::format("Партия «{}»", party->name),
+                               fmt::format("Лидер: {}\n\n{}", party->leaderName,
+                                           party->description.empty() ? "Без описания" : party->description),
+                               "Назад", "");
 
     m_dialogService.show(player, dialog,
                          [this, playerId = player.getID()](DialogResponse, int, StringView)
@@ -260,12 +252,8 @@ void ElectionSystem::showPartyNameInput(IPlayer &player)
         return;
     }
 
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Партия — название");
-    dialog.body = u("Введите название партии (до 24 символов)");
-    dialog.leftButton = u("Далее");
-    dialog.rightButton = u("Отмена");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Партия — название", "Введите название партии (до 24 символов)",
+                               "Далее", "Отмена");
 
     m_dialogService.show(
         player, dialog,
@@ -295,12 +283,8 @@ void ElectionSystem::showPartyNameInput(IPlayer &player)
 
 void ElectionSystem::showPartyDescriptionInput(IPlayer &player, const std::string &name)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Партия — описание");
-    dialog.body = u("Опишите программу партии (до 60 символов)");
-    dialog.leftButton = u("Далее");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Партия — описание", "Опишите программу партии (до 60 символов)",
+                               "Далее", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -322,13 +306,11 @@ void ElectionSystem::showPartyDescriptionInput(IPlayer &player, const std::strin
 
 void ElectionSystem::showPartyConfirm(IPlayer &player, const std::string &name, const std::string &description)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u("Партия — взнос");
-    dialog.body = u(fmt::format("Партия: {}\n{}\n\nРегистрационный взнос: ${}", name,
-                                description.empty() ? "Без описания" : description, ElectionService::PARTY_COST));
-    dialog.leftButton = u("Оплатить");
-    dialog.rightButton = u("Отмена");
+    Dialog dialog = makeDialog(
+        DialogStyle_MSGBOX, "Партия — взнос",
+        fmt::format("Партия: {}\n{}\n\nРегистрационный взнос: ${}", name,
+                    description.empty() ? "Без описания" : description, ElectionService::PARTY_COST),
+        "Оплатить", "Отмена");
 
     m_dialogService.show(
         player, dialog,
@@ -389,13 +371,10 @@ void ElectionSystem::confirmVote(IPlayer &player, std::int64_t partyId)
     if (!party)
         return;
 
-    Dialog dialog;
-    dialog.style = DialogStyle_MSGBOX;
-    dialog.title = u("Подтверждение голоса");
-    dialog.body = u(fmt::format("Отдать голос за партию «{}» (лидер {})?\nГолос нельзя изменить.", party->name,
-                                party->leaderName));
-    dialog.leftButton = u("Голосовать");
-    dialog.rightButton = u("Назад");
+    Dialog dialog = makeDialog(
+        DialogStyle_MSGBOX, "Подтверждение голоса",
+        fmt::format("Отдать голос за партию «{}» (лидер {})?\nГолос нельзя изменить.", party->name, party->leaderName),
+        "Голосовать", "Назад");
 
     m_dialogService.show(
         player, dialog,
@@ -442,12 +421,7 @@ void ElectionSystem::showDevMenu(IPlayer &player)
 
     std::string body = fmt::format("Статус: {}\nНачать выборы\nЗавершить досрочно\nПартии и голоса", status);
 
-    Dialog dialog;
-    dialog.style = DialogStyle_LIST;
-    dialog.title = u("Выборы — дев-меню");
-    dialog.body = u(body);
-    dialog.leftButton = u("Выбрать");
-    dialog.rightButton = u("Закрыть");
+    Dialog dialog = makeDialog(DialogStyle_LIST, "Выборы — дев-меню", body, "Выбрать", "Закрыть");
 
     m_dialogService.show(
         player, dialog,
@@ -486,12 +460,8 @@ void ElectionSystem::showDevMenu(IPlayer &player)
 
 void ElectionSystem::showDevDurationInput(IPlayer &player)
 {
-    Dialog dialog;
-    dialog.style = DialogStyle_INPUT;
-    dialog.title = u("Старт выборов");
-    dialog.body = u("Длительность выборов в минутах (1..1440)");
-    dialog.leftButton = u("Начать");
-    dialog.rightButton = u("Отмена");
+    Dialog dialog = makeDialog(DialogStyle_INPUT, "Старт выборов", "Длительность выборов в минутах (1..1440)", "Начать",
+                               "Отмена");
 
     m_dialogService.showNumberInput(
         player, dialog,

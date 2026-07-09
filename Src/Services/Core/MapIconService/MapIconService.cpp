@@ -2,16 +2,9 @@
 
 #include "Log/LogManager.h"
 #include "Services/Core/StreamerService/StreamerService.h"
+#include "Utils/Sanitize.h"
 #include <algorithm>
 #include <cmath>
-
-namespace
-{
-float finiteOrZero(float value)
-{
-    return std::isfinite(value) ? value : 0.0f;
-}
-} // namespace
 
 // ------------------------------------------------------------------ глобальные
 
@@ -23,7 +16,7 @@ int MapIconService::addGlobal(int iconType, const Vector3 &position, Colour colo
         LogManager::log(Error, "MapIconService: not initialized, icon dropped");
         return -1;
     }
-    return m_streamer->addMapIcon(clampIconType(iconType), sanitizePosition(position), colour, clampStyle(style),
+    return m_streamer->addMapIcon(clampIconType(iconType), Utils::sanitize(position), colour, clampStyle(style),
                                   streamDistance);
 }
 
@@ -49,7 +42,7 @@ int MapIconService::setForPlayer(IPlayer &player, int iconType, const Vector3 &p
         }
         used[i] = true;
         const int slot = FIRST_MANUAL_SLOT + i;
-        player.setMapIcon(slot, sanitizePosition(position), clampIconType(iconType), colour, clampStyle(style));
+        player.setMapIcon(slot, Utils::sanitize(position), clampIconType(iconType), colour, clampStyle(style));
         return slot;
     }
 
@@ -67,7 +60,7 @@ bool MapIconService::updateForPlayer(IPlayer &player, int handle, int iconType, 
         return false;
     }
     // Переустановка того же слота заменяет иконку на клиенте.
-    player.setMapIcon(handle, sanitizePosition(position), clampIconType(iconType), colour, clampStyle(style));
+    player.setMapIcon(handle, Utils::sanitize(position), clampIconType(iconType), colour, clampStyle(style));
     return true;
 }
 
@@ -129,9 +122,4 @@ MapIconStyle MapIconService::clampStyle(MapIconStyle style)
         return MapIconStyle_Local;
     }
     return style;
-}
-
-Vector3 MapIconService::sanitizePosition(Vector3 position)
-{
-    return {finiteOrZero(position.x), finiteOrZero(position.y), finiteOrZero(position.z)};
 }
