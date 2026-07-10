@@ -97,13 +97,6 @@ class BusJobService final : public IService
     // игроком); иначе Queued (хвост FIFO). Автобус НЕ спавнится — он уже стоит.
     StartOutcome startWork(int playerId);
 
-    // Гейт-трансфер: работник в Reserved сел за руль ДРУГОГО свободного стоящего
-    // автобуса — перепривязать резерв на него (прежний автобус снова pre-stock).
-    // true — перепривязал; false — не Reserved / целевой не свободный стоящий / резерв
-    // уже уведён с площадки (reservedSpotOf < 0: перепривязка осиротила бы прежний
-    // автобус — в свой пускает workerOfVehicle-ветка, чужой запрещён).
-    bool transferReservation(int playerId, int vehicleId);
-
     // Посадка завершена (первый чекпоинт подобран за рулём): Reserved -> Driving,
     // площадка освобождается (автобус покинул депо, стал личным едущим). no-op вне
     // Reserved.

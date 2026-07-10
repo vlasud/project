@@ -217,6 +217,14 @@ class VehicleService final : public IService
     using DriverGateObserver = std::function<bool(IPlayer &, IVehicle &)>;
     void subscribeDriverGate(DriverGateObserver observer);
 
+    // Вето на посадку ПАССАЖИРОМ (seat != 0) — как driver-gate, но для пассажирских
+    // мест: зовётся из bindOccupant в момент, когда игрок сел не за руль. Наблюдатель
+    // возвращает false, чтобы ОТКАЗАТЬ — сервис высадит игрока (removeFromVehicle,
+    // force). Driver-ветку НЕ трогает (у неё свой гейт). Наблюдатель не должен трогать
+    // occupancy машины (высадку делает сервис после вето). Главный поток, событийно.
+    using PassengerGateObserver = std::function<bool(IPlayer &, IVehicle &)>;
+    void subscribePassengerGate(PassengerGateObserver observer);
+
     // Наблюдатель смены позиции БЕЗ водителя — для систем с пространственным
     // индексом машин (GridService): под водителем грид ведёт driver-апдейт, а на
     // прочих путях смены реальной позиции (респаун, ПРИНЯТЫЙ unoccupied-синк)
@@ -648,6 +656,7 @@ class VehicleService final : public IService
     std::vector<VehicleObserver> m_respawnedObservers;
     std::vector<VehicleMoveObserver> m_movedObservers;
     std::vector<DriverGateObserver> m_driverGateObservers;
+    std::vector<PassengerGateObserver> m_passengerGateObservers;
     std::vector<UnsanctionedDeathObserver> m_unsanctionedDeathObservers;
     std::vector<FuelEmptyObserver> m_fuelEmptyObservers;
     std::vector<EngineBrokenObserver> m_engineBrokenObservers;

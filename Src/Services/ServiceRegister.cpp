@@ -36,6 +36,7 @@
 #include "Services/Core/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/MovingObjectService/MovingObjectService.h"
+#include "Services/Core/NavigationLockService/NavigationLockService.h"
 #include "Services/Core/NicknameService/NicknameService.h"
 #include "Services/Core/ObjectEditService/ObjectEditService.h"
 #include "Services/Core/PickupService/PickupService.h"
@@ -54,6 +55,7 @@
 #include "Services/VehicleWaypointService/VehicleWaypointService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 #include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
+#include "Services/Core/ScreenTimerService/ScreenTimerService.h"
 #include "Services/Core/WeaponSkillService/WeaponSkillService.h"
 #include "Services/WeaponProficiencyService/WeaponProficiencyService.h"
 #include "Services/Core/SpectateService/SpectateService.h"
@@ -86,10 +88,14 @@ void ServiceRegister::registerServices()
     // персистится в БД (personal_vehicle, write-through); машина-сущность сессионная.
     registerService<PersonalVehicleService>();
     // Указатель-на-машину (бизнес-фича, не Core): единый владелец персонального
-    // красного чекпоинта к машине игрока. Переиспользуется парковкой и /car.
+    // красного чекпоинта к машине игрока. Переиспользуется парковкой, /car и /gps.
     // Привязывается к CheckpointService через bind в VehicleWaypointSystem
     // (реестр конструирует сервисы дефолтным ctor — доступность к фазе initialize).
     registerService<VehicleWaypointService>();
+    // Лок навигации (Core-инфраструктура, без бизнеса): пока держится, /gps недоступен
+    // (чекпоинт-слот занят рабочими маркерами). Держат работы (Bus/PortJobSystem) на
+    // всю смену; консюмер — GpsSystem. Без зависимостей.
+    registerService<NavigationLockService>();
     registerService<GridService>();
     registerService<StreamerService>();
     registerService<PlayerDialogService>();
@@ -111,6 +117,10 @@ void ServiceRegister::registerServices()
     // этом сетапе, см. Docs/ScreenNotice.md). Регистрация ПОСЛЕ TextDrawService
     // и TimerService (сервис их использует через initialize в ScreenNoticeSystem).
     registerService<ScreenNoticeService>();
+    // Экранный таймер обратного отсчёта через textdraw (Core, дисплей-слой). Как и
+    // ScreenNoticeService, зависит только от TextDrawService (получает его через
+    // initialize в ScreenTimerSystem); бизнес-система пушит остаток из своего тика.
+    registerService<ScreenTimerService>();
     registerService<SpectateService>();
     registerService<MovingObjectService>();
     registerService<PlayerSkinService>();

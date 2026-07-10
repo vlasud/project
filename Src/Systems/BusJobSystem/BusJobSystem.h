@@ -5,6 +5,7 @@
 #include "Services/BusWalletService/BusWalletService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
+#include "Services/Core/NavigationLockService/NavigationLockService.h"
 #include "Services/Core/PickupService/PickupService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerHealthService/PlayerHealthService.h"
@@ -12,9 +13,11 @@
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
+#include "Services/Core/ScreenTimerService/ScreenTimerService.h"
 #include "Services/Core/TimerService/TimerService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
+#include "Services/VehicleWaypointService/VehicleWaypointService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 #include <array>
@@ -28,9 +31,9 @@
 //  * «Начать работу» -> есть свободный СТОЯЩИЙ автобус -> он закрепляется за игроком
 //    (Reserved); нет свободного стоящего -> FIFO-очередь. Автобус НЕ спавнится под
 //    заказ — он уже стоит в депо;
-//  * с момента резерва 30 с сесть за руль СВОЕГО (или любого свободного стоящего —
-//    резерв перепривяжется) автобуса И подобрать первый чекпоинт (иначе: стоит на
-//    площадке -> оставляем pre-stock, уведён -> деспавн; работник — в КОНЕЦ очереди);
+//  * с момента резерва 30 с сесть за руль СВОЕГО (отмеченного красным маркером)
+//    автобуса И подобрать первый чекпоинт (иначе: стоит на площадке -> оставляем
+//    pre-stock, уведён -> деспавн; работник — в КОНЕЦ очереди);
 //  * маршрут — 54 race-чекпоинта по кругу (move = RACE_NORMAL со стрелкой на следующую
 //    точку, stop = RACE_FINISH без стрелки); зачёт ТОЛЬКО за рулём СВОЕГО
 //    автобуса. move: подобрал -> зачёт; stop: простоять 10 с в зоне за рулём -> зачёт.
@@ -50,12 +53,16 @@
 // ParkingSystem::isSpotFree), продвижение очереди на освободившиеся стоящие автобусы,
 // окна активных работников (посадка/возврат/остановка/анти-сквоттинг).
 //
-// Гейт водителя (subscribeDriverGate): за руль резервного/едущего автобуса пускается
-// ТОЛЬКО его работник; в свободный стоящий pre-stock — только работник в фазе посадки
-// (резерв перепривязывается на выбранный автобус), прочим отказ (иначе угон стоящего).
-// Клиенту не доверяем: «за рулём своего автобуса» — по серверному
-// VehicleService::getDriver, вход в чекпоинт — по принятой сервером позиции
-// (CheckpointService), занятость площадки — серверный расчёт (anyVehicleNear).
+// Привязка автобуса к игроку — ТОЛЬКО РУЛЬ (правило владельца): за руль закреплённого
+// (Reserved/Driving) автобуса пускается ТОЛЬКО его работник, за руль незарезервированного
+// pre-stock — НИКТО (ждёт резерва). Пассажирские места СВОБОДНЫ ДЛЯ ВСЕХ у любого автобуса
+// (стоящего/зарезервированного/едущего): замков дверей и высадки пассажиров нет вообще.
+// Гейт один — серверный (subscribeDriverGate по occupant-трекингу VehicleService: не тот
+// игрок стал водителем -> высадка removeFromVehicle; клиенту не верим). Перенос резерва
+// убран: сесть за руль можно ТОЛЬКО в свой отмеченный маркером автобус. Клиенту не
+// доверяем: «за рулём своего автобуса» — по серверному VehicleService::getDriver, вход в
+// чекпоинт — по принятой сервером позиции (CheckpointService), занятость площадки —
+// серверный расчёт (anyVehicleNear).
 class BusJobSystem : public BaseSystem
 {
   public:
@@ -81,7 +88,10 @@ class BusJobSystem : public BaseSystem
     // немедленное увольнение с сообщением.
     void onPlayerDeath(IPlayer &player);
 
-    // --- гейт водителя ---
+    // --- гейт посадки (только руль) ---
+    // За руль закреплённого автобуса — только его работник; за руль pre-stock — никто.
+    // Пассажирские места НЕ гейтим (свободны для всех). Бэкстоп — серверная высадка:
+    // при отказе гейта VehicleService сам делает removeFromVehicle (force).
     bool onDriverGate(IPlayer &player, IVehicle &vehicle);
 
     // --- резерв/очередь ---
@@ -144,7 +154,10 @@ class BusJobSystem : public BaseSystem
     PlayerHealthService &m_healthService;
     TimerService &m_timers;
     ScreenNoticeService &m_screenNoticeService;
+    ScreenTimerService &m_screenTimerService;
     MapIconService &m_mapIconService;
+    VehicleWaypointService &m_waypointService; // красный чекпоинт-маркер на закреплённый автобус
+    NavigationLockService &m_navLockService;   // лок навигации на всю смену (GPS недоступен)
 
     int m_pickup = -1;                 // хэндл пикапа трудоустройства
     TimerService::Handle m_depotTimer; // общий per-second таймер депо (на весь сервер)

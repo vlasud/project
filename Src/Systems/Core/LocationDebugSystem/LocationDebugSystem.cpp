@@ -56,8 +56,12 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
                  PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "показать свои координаты, мир и интерьер",
                  PlayerCommandService::HelpCategory::Hidden);
 
-    commands.add("tp", {{PlayerCommandService::Param::Int, "x"}, {PlayerCommandService::Param::Int, "y"},
-                        {PlayerCommandService::Param::Int, "z"}},
+    // Dev-телепорт в явные координаты (тест анти-чита). Имя /tpxyz, а не /tp: имя /tp
+    // отдано игровой команде-меню телепорта админов (GpsSystem, уровень 1+); первый
+    // emplace на имя выигрывает, а этот dev-тулинг регистрируется раньше — держим их
+    // на разных именах, чтобы не затирать друг друга молча.
+    commands.add("tpxyz", {{PlayerCommandService::Param::Int, "x"}, {PlayerCommandService::Param::Int, "y"},
+                           {PlayerCommandService::Param::Int, "z"}},
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  {
                      const Vector3 target{static_cast<float>(args.getInt(0)), static_cast<float>(args.getInt(1)),

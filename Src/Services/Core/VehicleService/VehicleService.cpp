@@ -227,6 +227,11 @@ void VehicleService::subscribeDriverGate(DriverGateObserver observer)
     m_driverGateObservers.push_back(std::move(observer));
 }
 
+void VehicleService::subscribePassengerGate(PassengerGateObserver observer)
+{
+    m_passengerGateObservers.push_back(std::move(observer));
+}
+
 void VehicleService::subscribeStreamedInForPlayer(StreamedInForPlayerObserver observer)
 {
     m_streamedInForPlayerObservers.push_back(std::move(observer));
@@ -922,7 +927,7 @@ void VehicleService::bindOccupant(IPlayer &player, PlayerState newState)
             // occupant ДО высадки: removeFromVehicle(force) через clearTasks может
             // синхронно/на след. тике дать вложенный state-change (Driver->OnFoot),
             // и он обязан увидеть уже чистый OnFoot-слот (иначе повторно снимет чужую
-            // привязку). Гейт зовём ТОЛЬКО в driver-ветке — пассажиры не гейтятся.
+            // привязку). Driver-гейт — только seat==0; пассажиров гейтит ветка ниже.
             if (vehicle && !m_driverGateObservers.empty())
             {
                 bool allowed = true;
@@ -939,6 +944,30 @@ void VehicleService::bindOccupant(IPlayer &player, PlayerState newState)
                     m_vehicleState[occupant.vehicleId].driverId = -1;
                     occupant = {};
                     player.removeFromVehicle(true); // отменяет и место, и вход
+                }
+            }
+        }
+        else if (occupant.seat > 0 && occupant.vehicleId >= 0)
+        {
+            // Вето на посадку ПАССАЖИРОМ (seat != 0): бизнес может запретить (напр.
+            // рабочий транспорт без пассажиров). Как в driver-ветке, occupant чистим ДО
+            // высадки — removeFromVehicle(force) через clearTasks даёт вложенный
+            // Passenger->OnFoot стейт-чейндж, и он обязан увидеть уже чистый OnFoot-слот.
+            if (vehicle && !m_passengerGateObservers.empty())
+            {
+                bool allowed = true;
+                for (auto &gate : m_passengerGateObservers)
+                {
+                    if (!gate(player, *vehicle))
+                    {
+                        allowed = false;
+                        break;
+                    }
+                }
+                if (!allowed)
+                {
+                    occupant = {};
+                    player.removeFromVehicle(true);
                 }
             }
         }

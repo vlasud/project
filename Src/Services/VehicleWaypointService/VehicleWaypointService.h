@@ -6,6 +6,7 @@
 #include "Server/Components/Vehicles/vehicles.hpp"
 #include "player.hpp"
 #include <array>
+#include <functional>
 
 // Указатель-на-машину — бизнес-фича (НЕ Core): единый владелец персонального
 // красного чекпоинта, ведущего игрока к ЕГО машине ЛИБО к статической точке
@@ -57,8 +58,24 @@ class VehicleWaypointService final : public IService
     // Bounds-safe; no-op без bind.
     void showFor(IPlayer &player, const Vector3 &point);
 
+    // Поставить GPS-указатель (/gps) к СТАТИЧЕСКОЙ точке. Тот же единый слот, но цель
+    // помечается как GPS (hasGpsWaypoint/clearGpsFor различают её от парковочного/
+    // домашнего указателя). onArrive вызывается при входе в чекпоинт ПОСЛЕ снятия
+    // маркера (clearFor уже отработал) — для сообщения о прибытии. Пере-вызов (в т.ч.
+    // showFor к машине/точке) заменяет цель и снимает пометку GPS. Bounds-safe; no-op
+    // без bind.
+    void showGpsFor(IPlayer &player, const Vector3 &point, std::function<void(IPlayer &)> onArrive);
+
     // Снять указатель игрока (если стоит) + гасит цель. Идемпотентно, bounds-safe.
     void clearFor(IPlayer &player);
+
+    // Снять указатель ТОЛЬКО если текущая цель — GPS (иначе no-op): для гашения GPS
+    // на взятии лока навигации, не трогая парковочный/домашний указатель.
+    // Идемпотентно, bounds-safe.
+    void clearGpsFor(IPlayer &player);
+
+    // Стоит ли у игрока именно GPS-указатель (не парковка/дом). Bounds-safe.
+    bool hasGpsWaypoint(int playerId) const;
 
     // Обнулить цель слота БЕЗ обращения к CheckpointService — на дисконнекте
     // (клиентский чекпоинт CheckpointService сбросит сам своим resetPlayer).
@@ -85,6 +102,7 @@ class VehicleWaypointService final : public IService
     {
         int vehicleId = -1;
         bool hasTarget = false; // указатель стоит (машина или точка)
+        bool gps = false;       // цель поставлена /gps (для hasGpsWaypoint/clearGpsFor)
     };
     std::array<Target, MAX_PLAYERS> m_targets{};
 };

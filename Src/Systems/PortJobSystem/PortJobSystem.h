@@ -4,6 +4,7 @@
 #include "Services/Core/AttachmentService/AttachmentService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
+#include "Services/Core/NavigationLockService/NavigationLockService.h"
 #include "Services/Core/PickupService/PickupService.h"
 #include "Services/Core/PlayerAnimationService/PlayerAnimationService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
@@ -104,6 +105,7 @@ class PortJobSystem : public BaseSystem, public PlayerSpawnEventHandler
     TimerService &m_timers;
     ScreenNoticeService &m_screenNoticeService; // попапы старта смены и сдачи ящика
     MapIconService &m_mapIconService;
+    NavigationLockService &m_navLockService; // лок навигации на всю смену грузчика (GPS недоступен)
 
     int m_pickup = -1; // хэндл пикапа порта
 

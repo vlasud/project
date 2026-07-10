@@ -39,6 +39,7 @@
 #include "Systems/Core/GangZoneSystem/GangZoneSystem.h"
 #include "Systems/Core/GridDebugSystem/GridDebugSystem.h"
 #include "Systems/Core/GridSystem/GridSystem.h"
+#include "Systems/GpsSystem/GpsSystem.h"
 #include "Systems/HelpSystem/HelpSystem.h"
 #include "Systems/InventorySystem/InventorySystem.h"
 #include "Systems/MedkitSystem/MedkitSystem.h"
@@ -72,6 +73,7 @@
 #include "Systems/Core/RoleplayChatSystem/RoleplayChatSystem.h"
 #include "Systems/Core/PlayerVelocitySystem/PlayerVelocitySystem.h"
 #include "Systems/Core/ScreenNoticeSystem/ScreenNoticeSystem.h"
+#include "Systems/Core/ScreenTimerSystem/ScreenTimerSystem.h"
 #include "Systems/Core/PlayerWeaponSystem/PlayerWeaponSystem.h"
 #include "Systems/Core/WeaponSkillSystem/WeaponSkillSystem.h"
 #include "Systems/WeaponProficiencySystem/WeaponProficiencySystem.h"
@@ -155,6 +157,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // initializeSystems идёт отдельным проходом после конструирования всех
     // систем) — на порядок конструирования это не влияет.
     m_systems.push_back(std::make_unique<ScreenNoticeSystem>(core, serviceRegister));
+    // ScreenTimerSystem (экранный таймер-бар через textdraw, дисплей-слой) рядом с
+    // ScreenNoticeSystem: держит зависимость на TextDrawService (зарегистрирован в
+    // ServiceRegister заранее), компонент textdraw сервис получает через
+    // TextDrawSystem::initialize() позже — на порядок конструирования не влияет.
+    m_systems.push_back(std::make_unique<ScreenTimerSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<MapIconSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<CheckpointSystem>(core, serviceRegister));
     // m_systems.push_back(std::make_unique<GridDebugSystem>(core, serviceRegister));
@@ -344,6 +351,15 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // Core-сервисы команд/диалога зарегистрированы раньше. Загрузка выбора — по
     // старту сессии (serial-guard), применение/резолв — по входу/выбору, не per-tick.
     m_systems.push_back(std::make_unique<SpawnChoiceSystem>(core, serviceRegister));
+    // GpsSystem (/gps всем + /tp админам, бизнес-фича вне Core) после VehicleWaypointSystem
+    // (VehicleWaypointService связан с CheckpointService — единый чекпоинт-слот GPS),
+    // Bus/PortJobSystem (держат NavigationLockService — GpsSystem подписывается на его
+    // acquire для гашения GPS; подписка в конструкторе успевает до первого устройства
+    // на работу в игре), HouseSystem/FactionSystem (динамические места «Мой дом»/«Моя
+    // работа» резолвятся от них в момент клика). Core-сервисы команд/диалога/локации/
+    // сессии зарегистрированы раньше. Команды в конструкторе; диалог/чекпоинт/телепорт —
+    // холодный путь (по команде), не per-tick.
+    m_systems.push_back(std::make_unique<GpsSystem>(core, serviceRegister));
     // AutosaveSystem после всех save-подписчиков (Inventory/WeaponProficiency/
     // PersonalSkin) и PlayerSessionSystem: к его initialize() (где ставится таймер)
     // все персистеры уже подписались в своих конструкторах. Периодический автосейв

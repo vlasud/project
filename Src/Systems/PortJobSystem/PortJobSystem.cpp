@@ -80,7 +80,8 @@ PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_timers(serviceRegister.getService<TimerService>()),
       m_screenNoticeService(serviceRegister.getService<ScreenNoticeService>()),
-      m_mapIconService(serviceRegister.getService<MapIconService>())
+      m_mapIconService(serviceRegister.getService<MapIconService>()),
+      m_navLockService(serviceRegister.getService<NavigationLockService>())
 {
     m_boxSlot.fill(-1);
 
@@ -201,11 +202,27 @@ void PortJobSystem::onStartWork(IPlayer &player)
         player.sendClientMessage(ERROR_COLOUR, u("Выйдите из транспорта, чтобы начать работу в порту"));
         return;
     }
+    // Взаимное исключение работ: единственный чекпоинт-слот и лок навигации принадлежат
+    // ТЕКУЩЕЙ смене. Сюда попадаем только когда порт НЕ в работе (onToggleWork развёл),
+    // значит держатель лока — ДРУГАЯ работа (автобус): устройство поверх неё затёрло бы
+    // её лок/маркер. Гейтим ДО startWork (он стартует смену).
+    if (m_navLockService.isLocked(playerId))
+    {
+        player.sendClientMessage(
+            ERROR_COLOUR,
+            u(fmt::format("Нельзя устроиться грузчиком: {}", m_navLockService.lockReason(playerId))));
+        return;
+    }
     if (!m_portJobService.startWork(playerId))
     {
         player.sendClientMessage(ERROR_COLOUR, u("Вы уже работаете в порту"));
         return;
     }
+
+    // Лок навигации на ВСЮ смену грузчика (устройство удалось). Освобождается на конце
+    // смены (onFinishWork/resetPlayer); смерть смену НЕ завершает (delivered жив,
+    // чекпоинт возвращает onPlayerSpawn) — лок держится. Взятие гасит GPS-маркер.
+    m_navLockService.acquire(playerId, "идёт смена грузчика в порту");
 
     // Предзагружаем либу CARRY сейчас (игрок ещё идёт к кораблю ~несколько секунд) —
     // иначе ПЕРВЫЙ ApplyAnimation(PUTDWN05, укладка на сбросе) на незагруженной либе
@@ -249,6 +266,7 @@ void PortJobSystem::onFinishWork(IPlayer &player)
     // порта (write-through, PortWalletService::add). «Завершить работу» лишь
     // завершает смену; заработок забирается отдельным пунктом «Забрать деньги».
     m_portJobService.endWork(playerId);
+    m_navLockService.release(playerId); // смена завершена — снять лок навигации
 
     const std::int64_t walletBalance = m_portWalletService.balanceOf(playerId);
     player.sendClientMessage(
@@ -522,6 +540,7 @@ void PortJobSystem::resetPlayer(IPlayer &player)
     m_checkpointService.clearForPlayer(player); // no-op, если персонального чекпоинта не было
     m_portJobService.resetPlayer(playerId);
     m_portWalletService.reset(playerId); // teardown ТОЛЬКО памяти — баланс остаётся в БД
+    m_navLockService.release(playerId);  // конец сессии/дисконнект в любой фазе — снять лок
 }
 
 void PortJobSystem::loadWallet(IPlayer &player, const PlayerSessionService::Session &session)

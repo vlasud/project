@@ -57,6 +57,10 @@ constexpr float STOP_CP_RADIUS = 6.0f;
 // Баланс (все именованные, в одном месте).
 constexpr std::int64_t PAY_PER_CHECKPOINT = 50; // $ за зачтённый чекпоинт (move и stop)
 constexpr std::int64_t LAP_BONUS = 2000;        // $ за полный круг (54 подряд)
+// Невозвратный вступительный взнос наличными при устройстве (денежный сток): барьер
+// входа в премиальную работу. Берётся ОДИН раз при новом устройстве (не при
+// повторной постановке в очередь после провала посадки), назад не возвращается.
+constexpr std::int64_t BUS_JOB_ENTRY_FEE = 1000;
 constexpr int RESERVE_SECONDS = 30;             // окно посадки от резерва
 constexpr int RETURN_SECONDS = 30;              // окно возврата за руль после выхода
 constexpr int STOP_DWELL_SECONDS = 10;          // простой в зоне stop-чекпоинта
@@ -71,11 +75,16 @@ constexpr Milliseconds DEPOT_TICK{1000}; // период общего тайме
 constexpr Milliseconds RESERVE_POPUP_TIME{4000};
 constexpr Milliseconds CREDIT_POPUP_TIME{2500};
 constexpr Milliseconds LAP_POPUP_TIME{3500};
-constexpr Milliseconds STOP_POPUP_TIME{3000};
 constexpr Milliseconds FAIL_POPUP_TIME{3000};
 const Colour NEUTRAL_POPUP_COLOUR{0xFF, 0xFF, 0xFF, 0xFF};
 const Colour CREDIT_POPUP_COLOUR{0x90, 0xEE, 0x90, 0xFF};
 const Colour ERROR_POPUP_COLOUR{0xFF, 0x5A, 0x5A, 0xFF};
+
+// Метки GUI-таймера обратного отсчёта (ScreenTimerService, верх-центр) — ТОЛЬКО
+// English (как все экранные надписи). Остаток числовой (M:SS), метка поясняет окно.
+const char *const BOARDING_TIMER_LABEL = "BOARDING";
+const char *const RETURN_TIMER_LABEL = "RETURN";
+const char *const STOP_TIMER_LABEL = "BUS STOP";
 
 // Маршрут: 54 race-чекпоинта по кругу. stop-остановки — #3/#14/#28/#47
 // (1-based); после последнего — снова первый. Координаты — от геймдизайна.
@@ -171,7 +180,10 @@ BusJobSystem::BusJobSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_healthService(serviceRegister.getService<PlayerHealthService>()),
       m_timers(serviceRegister.getService<TimerService>()),
       m_screenNoticeService(serviceRegister.getService<ScreenNoticeService>()),
-      m_mapIconService(serviceRegister.getService<MapIconService>())
+      m_screenTimerService(serviceRegister.getService<ScreenTimerService>()),
+      m_mapIconService(serviceRegister.getService<MapIconService>()),
+      m_waypointService(serviceRegister.getService<VehicleWaypointService>()),
+      m_navLockService(serviceRegister.getService<NavigationLockService>())
 {
     // Загрузка персистентного кошелька автобусника по старту сессии (serial-guard).
     m_sessionService.subscribeStart(
@@ -197,8 +209,10 @@ BusJobSystem::BusJobSystem(ICore &core, const ServiceRegister &serviceRegister)
             onPlayerDeath(player);
         });
 
-    // Гейт водителя: за руль резервного/едущего автобуса пускается ТОЛЬКО его работник;
-    // в свободный стоящий pre-stock — только работник в фазе посадки.
+    // Гейт водителя (единственный слой привязки): за руль резервного/едущего автобуса
+    // пускается ТОЛЬКО его работник, в свободный стоящий pre-stock — никто (перенос
+    // резерва убран). Пассажирские места не гейтим — свободны для всех. При отказе
+    // VehicleService сам высаживает игрока (removeFromVehicle) — серверный бэкстоп.
     m_vehicleService.subscribeDriverGate([this](IPlayer &player, IVehicle &vehicle)
                                          { return onDriverGate(player, vehicle); });
 }
@@ -288,13 +302,45 @@ void BusJobSystem::onStartWork(IPlayer &player)
         player.sendClientMessage(ERROR_COLOUR, u("Выйдите из транспорта, чтобы устроиться водителем автобуса"));
         return;
     }
-
-    const BusJobService::StartOutcome outcome = m_busJobService.startWork(playerId);
-    if (outcome.result == BusJobService::StartResult::AlreadyWorking)
+    // Уже в смене/очереди — повторного устройства нет, взнос НЕ берём (гейт до
+    // списания). Провал посадки возвращает в очередь работником — тоже мимо этой ветки.
+    if (m_busJobService.isWorking(playerId))
     {
         player.sendClientMessage(ERROR_COLOUR, u("Вы уже работаете водителем автобуса"));
         return;
     }
+    // Взаимное исключение работ: единственный чекпоинт-слот и лок навигации принадлежат
+    // ТЕКУЩЕЙ смене. isWorking(автобус) выше уже ложно, значит держатель лока — ДРУГАЯ
+    // работа (порт): устройство поверх неё затёрло бы её лок/маркер и оставило первую
+    // смену без чекпоинта. Гейтим ДО списания взноса.
+    if (m_navLockService.isLocked(playerId))
+    {
+        player.sendClientMessage(ERROR_COLOUR,
+                                 u(fmt::format("Нельзя устроиться водителем: {}", m_navLockService.lockReason(playerId))));
+        return;
+    }
+
+    // Невозвратный вступительный взнос НАЛИЧНЫМИ (PlayerMoneyService, не кошелёк работы):
+    // проверка наличия + списание АТОМАРНО в момент клика и ДО перевода в работники
+    // (иначе при нехватке денег повисла бы фаза). Взнос — сток, назад не возвращается.
+    const unsigned long long cash = m_moneyService.getMoney(playerId);
+    if (cash < static_cast<unsigned long long>(BUS_JOB_ENTRY_FEE))
+    {
+        player.sendClientMessage(
+            ERROR_COLOUR,
+            u(fmt::format("Недостаточно наличных: вступительный взнос ${} (у вас ${})", BUS_JOB_ENTRY_FEE, cash)));
+        return;
+    }
+    m_moneyService.setMoney(player, cash - static_cast<unsigned long long>(BUS_JOB_ENTRY_FEE));
+    player.sendClientMessage(INFO_COLOUR,
+                             u(fmt::format("Вступительный взнос ${} списан (не возвращается)", BUS_JOB_ENTRY_FEE)));
+
+    // isWorking выше уже отсёк AlreadyWorking -> startWork возвращает только Reserved/Queued.
+    const BusJobService::StartOutcome outcome = m_busJobService.startWork(playerId);
+    // Лок навигации на ВСЮ смену (устройство удалось — и Reserved, и Queued это уже
+    // смена; лок держится и в очереди). Освобождается на любом её конце (teardownShift/
+    // выход из очереди). Взятие гасит активный GPS-маркер игрока.
+    m_navLockService.acquire(playerId, "идёт смена водителя автобуса");
     if (outcome.result == BusJobService::StartResult::Queued)
     {
         player.sendClientMessage(
@@ -320,6 +366,7 @@ void BusJobSystem::onFinishWork(IPlayer &player)
     {
         m_busJobService.endShift(playerId, false); // автобуса нет — busKept неважен
         clearCounters(playerId);
+        m_navLockService.release(playerId); // выход из очереди = конец смены (teardownShift здесь не проходит)
         player.sendClientMessage(INFO_COLOUR, u("Вы вышли из очереди на автобус"));
         notifyQueueShift(); // стоявшие позади подвинулись
         return;
@@ -368,6 +415,7 @@ void BusJobSystem::showInfo(IPlayer &player)
 
     std::string body = "Поле\tЗначение\n";
     body += "Суть работы\tВозить автобус по кольцевому маршруту (54 чекпоинта)\n";
+    body += fmt::format("Вступительный взнос\t${} наличными, невозвратный\n", BUS_JOB_ENTRY_FEE);
     body += fmt::format("Ставка\t${} за чекпоинт\n", PAY_PER_CHECKPOINT);
     body += fmt::format("Бонус за круг\t${}\n", LAP_BONUS);
     body += "Выплата\tкопится в кошельке автобусника; на руки — через «Забрать деньги»\n";
@@ -420,24 +468,26 @@ bool BusJobSystem::onDriverGate(IPlayer &player, IVehicle &vehicle)
     {
         if (worker == playerId)
         {
+            // Сел за руль своего автобуса — маркер-указатель на него больше не нужен.
+            m_waypointService.clearFor(player);
             return true; // свой закреплённый/угнанный автобус
         }
         player.sendClientMessage(ERROR_COLOUR,
                                  u("Это служебный автобус — за руль пускают только назначенного водителя"));
         return false;
     }
-    // Свободный стоящий pre-stock автобус депо: пускаем ТОЛЬКО работника в фазе посадки
-    // (перепривязываем его резерв на выбранный автобус — площадки идентичны), иначе
-    // отказ (угон стоящего автобуса).
+    // Свободный стоящий pre-stock автобус депо: не пускает НИКОГО (ждёт резерва).
+    // Перенос резерва убран — сесть можно ТОЛЬКО в свой отмеченный маркером автобус.
     if (m_busJobService.isFreeStandingVehicle(vid))
     {
-        if (m_busJobService.phaseOf(playerId) == BusJobService::Phase::Reserved &&
-            m_busJobService.transferReservation(playerId, vid))
+        if (m_busJobService.phaseOf(playerId) == BusJobService::Phase::Reserved)
         {
-            return true;
+            player.sendClientMessage(ERROR_COLOUR, u("Ваш автобус отмечен красным маркером — садитесь только в него"));
         }
-        player.sendClientMessage(ERROR_COLOUR,
-                                 u("Это автобус депо — оформите смену через «Начать работу»"));
+        else
+        {
+            player.sendClientMessage(ERROR_COLOUR, u("Это автобус депо — оформите смену через «Начать работу»"));
+        }
         return false;
     }
     return true; // не наш автобус — гейт не наш
@@ -449,7 +499,21 @@ void BusJobSystem::onReserved(IPlayer &player)
 {
     const int playerId = player.getID();
     clearCounters(playerId);     // свежее окно посадки (reserveSeconds с нуля)
-    showRouteCheckpoint(player); // первый чекпоинт (индекс 0)
+    showRouteCheckpoint(player); // первый чекпоинт (индекс 0, race-слот)
+
+    // Красный чекпоинт-маркер на закреплённый автобус (найти свой среди стоящих) через
+    // общий VehicleWaypointService (обычный слот) — сосуществует с race-чекпоинтом
+    // маршрута (разные клиентские слоты). Единый слот на игрока: если висел указатель
+    // парковки, он перетирается (последний выигрывает). Снимается на посадке за руль
+    // (гейт), провале, увольнении, дисконнекте.
+    const int vid = m_busJobService.vehicleIdOf(playerId);
+    if (IVehicle *bus = m_vehicleService.get(vid))
+    {
+        m_waypointService.showFor(player, *bus);
+    }
+
+    // GUI-таймер посадки: полный остаток RESERVE_SECONDS, дальше тик обновляет.
+    m_screenTimerService.show(player, RESERVE_SECONDS, BOARDING_TIMER_LABEL);
 
     player.sendClientMessage(
         INFO_COLOUR,
@@ -478,6 +542,7 @@ void BusJobSystem::pumpQueue()
             // недостижимо): снять резерв (автобус остаётся pre-stock) и продолжить.
             m_busJobService.endShift(promotion.playerId, true);
             clearCounters(promotion.playerId);
+            m_navLockService.release(promotion.playerId); // на всякий — лок ушедшего снять
             continue;
         }
         onReserved(*next);
@@ -568,6 +633,7 @@ void BusJobSystem::onCheckpointEnter(IPlayer &player)
         m_busJobService.completeBoarding(playerId);
         m_reserveSeconds[playerId] = 0;
         m_exitSeconds[playerId] = 0;
+        m_screenTimerService.hide(player); // посадка завершена — гасим таймер посадки
     }
 
     const int index = m_busJobService.checkpointIndexOf(playerId);
@@ -583,8 +649,9 @@ void BusJobSystem::onCheckpointEnter(IPlayer &player)
         player.sendClientMessage(
             INFO_COLOUR,
             u(fmt::format("Остановка автобуса: постойте {} секунд, не покидая руль", STOP_DWELL_SECONDS)));
-        m_screenNoticeService.show(player, fmt::format("bus stop - wait {}s", STOP_DWELL_SECONDS), STOP_POPUP_TIME,
-                                   NEUTRAL_POPUP_COLOUR);
+        // GUI-таймер остановки: полный остаток STOP_DWELL_SECONDS, дальше тик обновляет
+        // (dwell по принятой позиции); выезд из зоны сбросит и погасит бар.
+        m_screenTimerService.show(player, STOP_DWELL_SECONDS, STOP_TIMER_LABEL);
         return;
     }
     // move — мгновенный зачёт.
@@ -618,7 +685,8 @@ void BusJobSystem::creditAndAdvance(IPlayer &player)
                                    CREDIT_POPUP_TIME, CREDIT_POPUP_COLOUR);
     }
 
-    showRouteCheckpoint(player); // следующая цель
+    m_screenTimerService.hide(player); // зачёт — активного окна отсчёта больше нет
+    showRouteCheckpoint(player);       // следующая цель
 }
 
 // ------------------------------------------------------------------ таймер депо
@@ -720,10 +788,13 @@ void BusJobSystem::tickWorker(IPlayer &player)
     if (phase == BusJobService::Phase::Reserved)
     {
         // Окно посадки: не сел за руль и не доехал до первого чекпоинта за RESERVE_SECONDS.
-        if (++m_reserveSeconds[playerId] >= RESERVE_SECONDS)
+        const int elapsed = ++m_reserveSeconds[playerId];
+        if (elapsed >= RESERVE_SECONDS)
         {
-            failBoarding(player);
+            failBoarding(player); // гасит GUI-таймер внутри
+            return;
         }
+        m_screenTimerService.show(player, RESERVE_SECONDS - elapsed, BOARDING_TIMER_LABEL);
         return;
     }
     if (phase != BusJobService::Phase::Driving)
@@ -756,30 +827,42 @@ void BusJobSystem::tickWorker(IPlayer &player)
             const Vector3 pos = m_locationService.getPosition(playerId);
             if (distanceSq(pos, ROUTE[index].pos) <= STOP_CP_RADIUS * STOP_CP_RADIUS)
             {
-                if (++m_dwellSeconds[playerId] >= STOP_DWELL_SECONDS)
+                const int dwell = ++m_dwellSeconds[playerId];
+                if (dwell >= STOP_DWELL_SECONDS)
                 {
                     m_dwellSeconds[playerId] = 0;
-                    creditAndAdvance(player);
+                    creditAndAdvance(player); // гасит GUI-таймер внутри
+                }
+                else
+                {
+                    m_screenTimerService.show(player, STOP_DWELL_SECONDS - dwell, STOP_TIMER_LABEL);
                 }
             }
             else
             {
                 m_dwellSeconds[playerId] = 0;
+                m_screenTimerService.hide(player); // выехал из зоны — бар гаснет (вернётся при заезде)
             }
         }
         else
         {
             m_dwellSeconds[playerId] = 0;
+            m_screenTimerService.hide(player); // едет между чекпоинтами — активного окна нет
         }
     }
     else
     {
         // Вышел из автобуса (или сел в другой) — окно возврата за руль.
         m_dwellSeconds[playerId] = 0;
-        if (++m_exitSeconds[playerId] >= RETURN_SECONDS)
+        const int away = ++m_exitSeconds[playerId];
+        if (away >= RETURN_SECONDS)
         {
             dismiss(player, "Вы не вернулись за руль автобуса вовремя — вы уволены", ERROR_COLOUR);
+            return; // смена снята (GUI-таймер погашен в teardownShift)
         }
+        // +1: первый тик вне руля (away==1) показывает полное RETURN_SECONDS, как окна
+        // посадки/остановки выставляют полный остаток в момент события.
+        m_screenTimerService.show(player, RETURN_SECONDS - away + 1, RETURN_TIMER_LABEL);
     }
 }
 
@@ -790,6 +873,8 @@ void BusJobSystem::failBoarding(IPlayer &player)
     const int playerId = player.getID();
 
     m_checkpointService.clearRaceForPlayer(player);
+    m_waypointService.clearFor(player); // снять маркер автобуса — не залипает в очереди
+    m_screenTimerService.hide(player);  // окно посадки закрыто — гасим таймер
     const int spot = m_busJobService.reservedSpotOf(playerId);
     const int vid = m_busJobService.vehicleIdOf(playerId);
     // Автобус так и стоит нетронутым на площадке -> оставляем pre-stock; игрок увёл его
@@ -797,6 +882,9 @@ void BusJobSystem::failBoarding(IPlayer &player)
     const bool onSpot = busOnSpot(vid, spot);
 
     m_busJobService.requeueTail(playerId, onSpot); // освобождает резерв + phase Queued + хвост очереди
+    // Автобус так и стоит на площадке -> остаётся свободным pre-stock (резерв снят выше),
+    // ничего не трогаем; уведён с площадки -> деспавн (хлам не бросаем), площадка
+    // пере-стокуется штатно.
     if (!onSpot && vid >= 0)
     {
         m_vehicleService.destroy(vid);
@@ -834,6 +922,8 @@ void BusJobSystem::teardownShift(IPlayer &player)
     const int playerId = player.getID();
 
     m_checkpointService.clearRaceForPlayer(player);
+    m_waypointService.clearFor(player); // снять маркер автобуса на любом конце смены (Reserved)
+    m_screenTimerService.hide(player);  // любое завершение смены — гасим GUI-таймер
 
     const BusJobService::Phase phase = m_busJobService.phaseOf(playerId);
     const int spot = m_busJobService.reservedSpotOf(playerId); // >=0 только для Reserved
@@ -845,11 +935,14 @@ void BusJobSystem::teardownShift(IPlayer &player)
 
     // Порядок: сперва снять состояние сервиса (резерв/площадка/очередь), ПОТОМ destroy.
     m_busJobService.endShift(playerId, busKept);
+    // busKept -> резервный автобус остаётся стоять свободным pre-stock (ничего не трогаем);
+    // едущий/уведённый -> деспавн (не бросаем хлам).
     if (!busKept && vid >= 0)
     {
         m_vehicleService.destroy(vid);
     }
     clearCounters(playerId);
+    m_navLockService.release(playerId); // конец смены — снять лок навигации (общий путь)
 }
 
 // ------------------------------------------------------------------ лайфцикл сессии

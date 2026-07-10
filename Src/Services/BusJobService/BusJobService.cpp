@@ -183,48 +183,6 @@ BusJobService::StartOutcome BusJobService::startWork(int playerId)
     return {StartResult::Queued, -1, static_cast<int>(m_queue.size())};
 }
 
-bool BusJobService::transferReservation(int playerId, int vehicleId)
-{
-    if (!validId(playerId) || vehicleId < 0)
-    {
-        return false;
-    }
-    if (m_state[playerId].phase != Phase::Reserved)
-    {
-        return false;
-    }
-    // Резервный автобус игрока УЖЕ уведён с его площадки (detached reserved: площадку
-    // отвязал пере-сток, но state.vehicleId держит тот автобус) — перепривязка на ДРУГОЙ
-    // стоящий осиротила бы прежний (нет ни площадки, ни стейта -> вечная утечка машины).
-    // В СВОЙ уведённый автобус игрока пускает workerOfVehicle-ветка гейта, сюда он не
-    // доходит; в чужой стоящий — отказ (пусть вернётся в свой либо провалит посадку).
-    const int prev = reservedSpotOf(playerId);
-    if (prev < 0)
-    {
-        return false;
-    }
-    // Целевой автобус должен быть свободным стоящим (не закреплённым).
-    int target = -1;
-    for (int i = 0; i < SLOT_COUNT; ++i)
-    {
-        if (m_spots[i].vehicleId == vehicleId && m_spots[i].reservedBy < 0)
-        {
-            target = i;
-            break;
-        }
-    }
-    if (target < 0)
-    {
-        return false;
-    }
-    // Освободить прежнюю площадку резерва (её автобус снова свободный pre-stock).
-    m_spots[prev].reservedBy = -1;
-    // Закрепить целевую за игроком. cpIndex не трогаем (посадка ещё не завершена).
-    m_spots[target].reservedBy = playerId;
-    m_state[playerId].vehicleId = vehicleId;
-    return true;
-}
-
 void BusJobService::completeBoarding(int playerId)
 {
     if (!validId(playerId))
