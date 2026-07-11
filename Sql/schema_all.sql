@@ -176,6 +176,17 @@ CREATE TABLE IF NOT EXISTS `bus_wallet` (
     PRIMARY KEY (`account_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
+-- Персистентный кошелёк заработка портового развозчика (HaulerWalletService):
+-- каждая РАЗГРУЖЕННАЯ на базе коробка ($100) и бонус за полную разгрузку 10/10
+-- ($1000) зачисляются сюда write-through сразу при сдаче; забираются на руки
+-- отдельным действием («Забрать деньги» на пикапе трудоустройства), не сгорают
+-- при дисконнекте/смерти/увольнении. Зеркало port_wallet/bus_wallet (иная таблица).
+CREATE TABLE IF NOT EXISTS `hauler_wallet` (
+    `account_id` BIGINT NOT NULL,
+    `balance`    BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`account_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
 -- Выборы президента: партии, состояние выборов (одна строка id=1, срок —
 -- unix-время, переживает рестарт) и голоса текущих выборов (один на аккаунт).
 CREATE TABLE IF NOT EXISTS `party` (

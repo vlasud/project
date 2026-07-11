@@ -81,6 +81,11 @@
 `it->second(player)` по ссылке на узел map; self-clear (`erase`) или self-replace внутри обработчика → dangling. Дефект реален и отклоняется от конвенции проекта (5 др. сервисов копируют колбэк), но живого вызывающего, триггерящего его, сейчас нет.
 **Фикс:** `ClickHandler handler = it->second; handler(player);` (как в `handleCancelSelection`).
 
+### 12. ✅ Кошельки работ: `withdraw` чистым UPDATE теряет первое списание нового аккаунта → дюп на релоге
+`BusWalletService.cpp` · `PortWalletService.cpp` · `HaulerWalletService.cpp` · `money-dup / data-loss`
+Класс бага в ТРЁХ близнецах-кошельках (bus/port/hauler). `withdraw` обнулял кэш и слал `UPDATE {wallet} SET balance=balance-N WHERE account_id=?`. У нового аккаунта строки кошелька может ещё не быть: первый в жизни `add` — тоже async в пуле сессий, и `withdraw` может обогнать его INSERT. Тогда UPDATE задевает 0 строк, списание теряется; когда `add`-INSERT наконец вставит `+N`, в БД останется `+N` без вычета → на следующем логине игрок получает дубль суммы.
+**Фикс (исправлено):** `withdraw` во всех трёх сервисах переведён на UPSERT-совместимое относительное списание `INSERT INTO {wallet}(account_id, balance) VALUES(?, -N) ON DUPLICATE KEY UPDATE balance = balance + VALUES(balance)` (тот же стиль, что уже был у `add`). INSERT гарантирует строку; относительные -N/+N коммутируют, итог сходится к верному независимо от порядка async-записей (баланс временно отрицателен, пока не придёт +N от `add`). Обнуление кэша и выдача наличных на руки — без изменений.
+
 ## 🟡 MEDIUM
 
 ### 9. ✅ Replace-load гонка в `EditorSystem` стирает размещённое во время async-чтения

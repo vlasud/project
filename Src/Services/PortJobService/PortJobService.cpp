@@ -1,5 +1,21 @@
 #include "Services/PortJobService/PortJobService.h"
 
+const std::array<Vector3, PortJobService::DROP_COUNT> &PortJobService::dropPositions()
+{
+    // Единый источник координат склада (см. заголовок): 6 точек сброса, куда носят
+    // коробки грузчики порта и откуда грузит развозчик. Function-local static —
+    // одна инициализация, общий адрес для всех потребителей.
+    static const std::array<Vector3, DROP_COUNT> positions = {{
+        {2793.9033f, -2464.2310f, 13.6322f},
+        {2785.7219f, -2449.6755f, 13.6342f},
+        {2793.5857f, -2410.9824f, 13.6322f},
+        {2785.9136f, -2424.7654f, 13.6341f},
+        {2793.3564f, -2502.0574f, 13.6435f},
+        {2785.3872f, -2487.2617f, 13.6532f},
+    }};
+    return positions;
+}
+
 PortJobService::Phase PortJobService::phaseOf(int playerId) const
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)

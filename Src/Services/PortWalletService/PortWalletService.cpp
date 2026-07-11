@@ -69,19 +69,22 @@ std::int64_t PortWalletService::withdraw(int playerId, AccountId accountId)
 
     m_balance[playerId] = 0; // обнулить КЭШ СРАЗУ — анти-дюп двойного клика/висящего диалога
 
-    // Write-through ОТНОСИТЕЛЬНЫМ списанием (balance -= amount), а НЕ абсолютным
-    // SET=0: пул БД (16 сессий, конкурентные воркеры) не гарантирует порядок async-
-    // записей. Относительные -amount (withdraw) и +amount (add) КОММУТИРУЮТ, поэтому
-    // итог сходится к верному независимо от порядка; абсолютный SET=0 мог бы обогнать
-    // ещё не применённый +amount и дать рассинхрон/дюп на релоге. Чистый UPDATE (не
-    // UPSERT): строка всегда существует (withdraw гейтится balance>0), нет строки —
-    // безопасный no-op (списывать нечего).
+    // Write-through ОТНОСИТЕЛЬНЫМ списанием (balance -= amount) через UPSERT, а НЕ
+    // абсолютным SET=0: пул БД (16 сессий, конкурентные воркеры) не гарантирует порядок
+    // async-записей. Относительные -amount (withdraw) и +amount (add) КОММУТИРУЮТ,
+    // поэтому итог сходится к верному независимо от порядка; абсолютный SET=0 мог бы
+    // обогнать ещё не применённый +amount и дать рассинхрон/дюп на релоге. UPSERT, а НЕ
+    // чистый UPDATE: у нового аккаунта строки кошелька может ещё не быть (первый в жизни
+    // add-INSERT гонится в пуле сессий) — тогда UPDATE задел бы 0 строк и потерял
+    // списание -> дубль на следующем логине. INSERT гарантирует строку (баланс
+    // временно отрицательный, до прихода +amount от add).
     DatabaseManager::throwQuery(
         [accountId, amount](mysqlx::Schema schema)
         {
             schema.getSession()
-                .sql("UPDATE port_wallet SET balance = balance - ? WHERE account_id = ?")
-                .bind(amount, accountId)
+                .sql("INSERT INTO port_wallet (account_id, balance) VALUES (?, ?) "
+                     "ON DUPLICATE KEY UPDATE balance = balance + VALUES(balance)")
+                .bind(accountId, -amount)
                 .execute();
         },
         [accountId](const std::string &error)

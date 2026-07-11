@@ -14,6 +14,7 @@
 #include "Systems/Core/EditorSystem/EditorSystem.h"
 #include "Systems/BankSystem/BankSystem.h"
 #include "Systems/BusJobSystem/BusJobSystem.h"
+#include "Systems/HaulerJobSystem/HaulerJobSystem.h"
 #include "Systems/CarMenuSystem/CarMenuSystem.h"
 #include "Systems/PaymentSystem/PaymentSystem.h"
 #include "Systems/DeathPenaltySystem/DeathPenaltySystem.h"
@@ -247,6 +248,16 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // кошелька; конец — teardown смены + сброс кэша). Геймплей событийный + один
     // общий per-second таймер, обходящий снимок 3 слотов (не per-tick).
     m_systems.push_back(std::make_unique<BusJobSystem>(core, serviceRegister));
+    // HaulerJobSystem (работа-развозчик, бизнес-фича вне Core) после тех же систем,
+    // что и BusJobSystem (TimerSystem — общий per-second таймер депо; VehicleSystem —
+    // спавн грузовиков Owner::Work + driver-gate; Pickup/MapIcon/CheckpointSystem —
+    // пикап/иконка/чекпоинты; PlayerMoneySystem — выдача наличных; PlayerLocation/
+    // PlayerState — серверная позиция/стейт; PlayerHealthSystem — увольнение по
+    // смерти; PlayerSessionSystem — кошелёк по сессии), плюс PlayerAnimationSystem/
+    // AttachmentSystem (переноска коробки) и PortJobSystem (единый источник координат
+    // склада — PortJobService::dropPositions, статический, регистрация выше). Депо-
+    // часть O(SLOT_COUNT) в общем per-second таймере, остальное событийно.
+    m_systems.push_back(std::make_unique<HaulerJobSystem>(core, serviceRegister));
     // SpawnSystem раньше AuthSystem: на спавне сперва применяются интерьер/мир
     // точки спавна, затем auth навешивает экипировку.
     m_systems.push_back(std::make_unique<ClassSelectionSystem>(core, serviceRegister));

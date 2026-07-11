@@ -25,11 +25,9 @@ constexpr PickupType PORT_PICKUP_TYPE = 1;
 // Источник ящиков — чекпоинт корабля (один, персональный per-player).
 const Vector3 SOURCE_POS{2809.5854f, -2436.2959f, 13.6283f};
 
-// 6 точек сброса склада — персональные (каждому назначается ровно одна текущая).
-const Vector3 DROP_POSITIONS[PortJobService::DROP_COUNT] = {
-    {2793.9033f, -2464.2310f, 13.6322f}, {2785.7219f, -2449.6755f, 13.6342f}, {2793.5857f, -2410.9824f, 13.6322f},
-    {2785.9136f, -2424.7654f, 13.6341f}, {2793.3564f, -2502.0574f, 13.6435f}, {2785.3872f, -2487.2617f, 13.6532f},
-};
+// 6 точек сброса склада — ЕДИНЫЙ источник координат (PortJobService::dropPositions):
+// те же точки берёт развозчик (PortHaulerJob) для погрузки. Здесь НЕ дублируем —
+// читаем из сервиса.
 
 // Стандартный радиус персонального чекпоинта в проекте (см. CheckpointService.h).
 constexpr float CHECKPOINT_RADIUS = 3.0f;
@@ -396,7 +394,7 @@ void PortJobSystem::onLiftFinished(IPlayer &player)
     // ходьба/бег его не сбрасывают). enforced=false: сам выйдет из carry (прыжок/
     // машина) — без санкции, доставка всё равно гейтится входом в чекпоинт сброса.
     m_stateService.setSpecialAction(player, SpecialAction_Carry);
-    m_checkpointService.setForPlayer(player, DROP_POSITIONS[spot], CHECKPOINT_RADIUS,
+    m_checkpointService.setForPlayer(player, PortJobService::dropPositions()[spot], CHECKPOINT_RADIUS,
                                      [this](IPlayer &p)
                                      {
                                          onDropEnter(p);

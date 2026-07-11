@@ -44,7 +44,7 @@ class PortWalletService final : public IService
     void add(int playerId, AccountId accountId, std::int64_t amount);
 
     // Забрать весь баланс: кэш ОБНУЛЯЕТСЯ СРАЗУ (анти-дюп двойного клика/
-    // висящего диалога), затем write-through (balance = 0). Возвращает сумму К
+    // висящего диалога), затем write-through (относительное списание). Возвращает сумму К
     // ВЫДАЧЕ (то, что было в кэше до обнуления); 0 — нечего забирать/NO_ACCOUNT/
     // bounds-промах — вызывающий не платит наличные.
     std::int64_t withdraw(int playerId, AccountId accountId);

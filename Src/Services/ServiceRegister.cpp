@@ -7,6 +7,8 @@
 #include "Services/BankService/BankService.h"
 #include "Services/BusJobService/BusJobService.h"
 #include "Services/BusWalletService/BusWalletService.h"
+#include "Services/HaulerJobService/HaulerJobService.h"
+#include "Services/HaulerWalletService/HaulerWalletService.h"
 #include "Services/ElectionService/ElectionService.h"
 #include "Services/FactionService/FactionService.h"
 #include "Services/FamilyService/FamilyService.h"
@@ -189,6 +191,16 @@ void ServiceRegister::registerServices()
     // смерти/увольнении. Без зависимостей; загрузку по сессии/начисление/выдачу
     // ведёт привод BusJobSystem.
     registerService<BusWalletService>();
+    // Работа-развозчик (портовый хаулер, бизнес-фича, не Core): источник правды о
+    // пер-player фазе многофазного цикла (езда-туда/погрузка/езда-обратно/разгрузка),
+    // занятости 4 площадок грузовиков и FIFO-очереди. Без зависимостей; спавн
+    // грузовиков/чекпоинты/переноску коробок/таймер смены ведёт привод HaulerJobSystem.
+    registerService<HaulerJobService>();
+    // Персистентный кошелёк заработка развозчика (write-through в БД, hauler_wallet):
+    // каждая разгруженная коробка и бонус за полную разгрузку зачисляются СРАЗУ, не
+    // сгорают при дисконнекте/смерти/увольнении. Без зависимостей; загрузку по
+    // сессии/начисление/выдачу ведёт привод HaulerJobSystem.
+    registerService<HaulerWalletService>();
     // Базовая система вещей (источник правды о предметах игроков онлайн). Без
     // зависимостей; типы регистрируют системы-владельцы (MedkitSystem) в своих
     // конструкторах, persist по сессии делает InventorySystem.

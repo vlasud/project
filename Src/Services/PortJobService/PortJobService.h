@@ -2,6 +2,7 @@
 
 #include "Macro.h"
 #include "Services/IService.h"
+#include "types.hpp"
 #include <array>
 
 class PortJobSystem;
@@ -26,6 +27,12 @@ class PortJobService final : public IService
         GoToSource, // идёт к чекпоинту корабля за ящиком
         Carrying    // несёт ящик к назначенной точке сброса
     };
+
+    // Точки сброса склада порта (серверные, фиксированные) — ЕДИНЫЙ источник
+    // координат склада: сюда грузчики порта носят коробки, ОТСЮДА ЖЕ берёт коробки
+    // развозчик (PortHaulerJob). Не дублировать константы в других системах — брать
+    // строго отсюда, чтобы порт и развозчик грузились с одних и тех же точек.
+    static const std::array<Vector3, DROP_COUNT> &dropPositions();
 
     Phase phaseOf(int playerId) const;
     bool isWorking(int playerId) const;

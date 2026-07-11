@@ -1,11 +1,11 @@
-#include "Services/BusWalletService/BusWalletService.h"
+#include "Services/HaulerWalletService/HaulerWalletService.h"
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
 
-std::int64_t BusWalletService::balanceOf(int playerId) const
+std::int64_t HaulerWalletService::balanceOf(int playerId) const
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)
     {
@@ -14,7 +14,7 @@ std::int64_t BusWalletService::balanceOf(int playerId) const
     return m_balance[playerId];
 }
 
-void BusWalletService::add(int playerId, AccountId accountId, std::int64_t amount)
+void HaulerWalletService::add(int playerId, AccountId accountId, std::int64_t amount)
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)
     {
@@ -37,7 +37,7 @@ void BusWalletService::add(int playerId, AccountId accountId, std::int64_t amoun
         [accountId, amount](mysqlx::Schema schema)
         {
             schema.getSession()
-                .sql("INSERT INTO bus_wallet (account_id, balance) VALUES (?, ?) "
+                .sql("INSERT INTO hauler_wallet (account_id, balance) VALUES (?, ?) "
                      "ON DUPLICATE KEY UPDATE balance = balance + VALUES(balance)")
                 .bind(accountId, amount)
                 .execute();
@@ -45,12 +45,12 @@ void BusWalletService::add(int playerId, AccountId accountId, std::int64_t amoun
         [accountId](const std::string &error)
         {
             LogManager::log(Error,
-                            fmt::format("BusWalletService: failed to persist deposit for account {}: {}", accountId,
+                            fmt::format("HaulerWalletService: failed to persist deposit for account {}: {}", accountId,
                                         error));
         });
 }
 
-std::int64_t BusWalletService::withdraw(int playerId, AccountId accountId)
+std::int64_t HaulerWalletService::withdraw(int playerId, AccountId accountId)
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)
     {
@@ -82,7 +82,7 @@ std::int64_t BusWalletService::withdraw(int playerId, AccountId accountId)
         [accountId, amount](mysqlx::Schema schema)
         {
             schema.getSession()
-                .sql("INSERT INTO bus_wallet (account_id, balance) VALUES (?, ?) "
+                .sql("INSERT INTO hauler_wallet (account_id, balance) VALUES (?, ?) "
                      "ON DUPLICATE KEY UPDATE balance = balance + VALUES(balance)")
                 .bind(accountId, -amount)
                 .execute();
@@ -90,14 +90,14 @@ std::int64_t BusWalletService::withdraw(int playerId, AccountId accountId)
         [accountId](const std::string &error)
         {
             LogManager::log(Error,
-                            fmt::format("BusWalletService: failed to persist withdrawal for account {}: {}", accountId,
-                                        error));
+                            fmt::format("HaulerWalletService: failed to persist withdrawal for account {}: {}",
+                                        accountId, error));
         });
 
     return amount;
 }
 
-void BusWalletService::load(int playerId, std::int64_t balance)
+void HaulerWalletService::load(int playerId, std::int64_t balance)
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)
     {
@@ -106,7 +106,7 @@ void BusWalletService::load(int playerId, std::int64_t balance)
     m_balance[playerId] = balance; // только память (загрузка по старту сессии)
 }
 
-void BusWalletService::reset(int playerId)
+void HaulerWalletService::reset(int playerId)
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)
     {
