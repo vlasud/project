@@ -44,7 +44,8 @@ bool PlayerWeaponSystem::handleShot(IPlayer &player, const PlayerBulletData &bul
     ctx.targetPos = targetPos;
     if (targetPlayer)
     {
-        ctx.targetSpeed = m_velocityService.getSpeed(targetPlayer->getID());
+        // Вектор, а не модуль: сервису нужно упреждение серверной позиции цели.
+        ctx.targetVelocity = m_velocityService.getVelocity(targetPlayer->getID());
         // Авто-прицел драйв-бая легально стреляет под углом к камере.
         ctx.checkSilentAim = player.getState() == PlayerState_OnFoot;
     }

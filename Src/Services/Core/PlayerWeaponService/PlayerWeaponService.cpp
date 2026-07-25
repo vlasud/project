@@ -1,5 +1,6 @@
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <fmt/format.h>
@@ -39,9 +40,23 @@ constexpr float ORIGIN_SLACK_SQ = 15.0f * 15.0f;
 // Кредит leaky bucket: на сколько суммарно темп может опережать таблицу,
 // прежде чем это перестаёт быть сгустком пакетов и становится rapid fire.
 constexpr std::chrono::milliseconds ROF_BURST{1000};
-// Silent aim: базовый промах луча камеры мимо цели + рост с дистанцией.
-constexpr float AIM_BASE = 4.0f;
-constexpr float AIM_PER_METER = 0.05f;
+// Silent aim: направление камеры сверяется с серверной геометрией «стрелок → цель».
+// Начало луча — ПРИНЯТАЯ позиция стрелка, а НЕ camPos из aim sync: позицию камеры
+// не проверяет ни ядро (там только длина camFrontVector), ни сервис, поэтому камерой,
+// подставленной вплотную к цели, чит обнулял бы и дистанцию (уходя под
+// AIM_MIN_DISTANCE), и отклонение. Из aim sync берётся ТОЛЬКО направление.
+// Порог — конус наведения: угловой (растёт с дистанцией), с полом на смещение
+// камеры относительно игрока и разброс, с потолком на дальних дистанциях.
+constexpr float AIM_CONE_TAN = 0.20f;  // ~11° конус наведения
+constexpr float AIM_MIN_OFFSET = 3.5f; // м: камера выше и позади игрока, соседняя цель под стволом
+constexpr float AIM_MAX_OFFSET = 5.0f; // м: потолок конуса — на дальних дистанциях он не должен расти безгранично
+// Рассинхрон позиции цели гасим упреждением по её серверной velocity, а остаточную
+// ошибку упреждения (цель сменила направление) добираем допуском на скорость.
+// Скорость в допуске клампится: без клампа цель в транспорте (40+ м/с) давала
+// десятки метров допуска и выключала детект.
+constexpr float AIM_LEAD_TIME = 0.35f;
+constexpr float AIM_LAG_SLACK = 0.45f;
+constexpr float AIM_SPEED_CAP = 25.0f;
 constexpr float AIM_MIN_DISTANCE = 3.0f; // в упор углы не показательны
 
 struct WeaponShotSpec
@@ -282,33 +297,41 @@ PlayerWeaponService::ShotOutcome PlayerWeaponService::onShot(IPlayer &player, co
 
     if (ctx.targetPos)
     {
+        const float targetSpeed = glm::length(ctx.targetVelocity);
+
         // Дальность до СЕРВЕРНОЙ позиции цели (hitPos рисует клиент — не факт).
         const float targetDistance = glm::length(*ctx.targetPos - bullet.origin);
-        if (targetDistance > spec.range + RANGE_SLACK + ctx.targetSpeed * LAG_WINDOW)
+        if (targetDistance > spec.range + RANGE_SLACK + targetSpeed * LAG_WINDOW)
         {
             flag(ShotFlag::ShotHack,
                  fmt::format("hit at {:.0f}m exceeds weapon {} range {:.0f}m", targetDistance, weaponId, spec.range));
             return outcome;
         }
 
-        // Silent aim: луч камеры обязан проходить рядом с целью. Допуск растёт
-        // с дистанцией (разброс/упреждение) и скоростью цели (лаг).
+        // Silent aim: камера обязана смотреть примерно в сторону цели. Оба конца
+        // луча — серверные факты (позиция стрелка и позиция цели), от клиента идёт
+        // только направление камеры.
         if (ctx.checkSilentAim)
         {
             const PlayerAimData &aim = player.getAimData();
-            const Vector3 toTarget = *ctx.targetPos - aim.camPos;
+            // Цель берём с упреждением: серверная позиция отстаёт от той, что видел
+            // клиент, и тем сильнее, чем быстрее цель. Без упреждения допуск на
+            // быструю цель пришлось бы держать в десятки метров.
+            const Vector3 toTarget = *ctx.targetPos + ctx.targetVelocity * AIM_LEAD_TIME - ctx.shooterPos;
             const float distance = glm::length(toTarget);
             const float frontLen = glm::length(aim.camFrontVector);
-            if (finite(aim.camFrontVector) && finite(aim.camPos) && frontLen > 0.1f && distance > AIM_MIN_DISTANCE)
+            if (finite(aim.camFrontVector) && finite(toTarget) && frontLen > 0.1f && distance > AIM_MIN_DISTANCE)
             {
                 const float along = glm::dot(aim.camFrontVector / frontLen, toTarget);
-                const float threshold = AIM_BASE + distance * AIM_PER_METER + ctx.targetSpeed * LAG_WINDOW;
+                const float cone = std::max(std::min(distance * AIM_CONE_TAN, AIM_MAX_OFFSET), AIM_MIN_OFFSET);
+                const float threshold = cone + std::min(targetSpeed, AIM_SPEED_CAP) * AIM_LAG_SLACK;
                 const float offAxisSq = glm::dot(toTarget, toTarget) - along * along;
                 if (along < 0.0f || offAxisSq > threshold * threshold)
                 {
                     flag(ShotFlag::SilentAim,
                          fmt::format("hit player {:.0f}m off aim ray at {:.0f}m, weapon {}",
-                                     along < 0.0f ? distance : std::sqrt(offAxisSq), distance, weaponId));
+                                     along < 0.0f ? distance : std::sqrt(std::max(offAxisSq, 0.0f)), distance,
+                                     weaponId));
                     return outcome;
                 }
             }
