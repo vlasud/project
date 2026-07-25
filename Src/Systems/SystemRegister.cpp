@@ -3,6 +3,7 @@
 #include "Systems/AdminSystem/AdminSystem.h"
 #include "Systems/AutosaveSystem/AutosaveSystem.h"
 #include "Systems/Core/AntiCheatSystem/AntiCheatSystem.h"
+#include "Systems/Core/AntiCheatTestSystem/AntiCheatTestSystem.h"
 #include "Systems/Core/AttachmentEditorSystem/AttachmentEditorSystem.h"
 #include "Systems/Core/AttachmentSystem/AttachmentSystem.h"
 #include "Systems/Core/AudioSystem/AudioSystem.h"
@@ -217,6 +218,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<GangZoneSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<GangZoneEditorSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<AntiCheatSystem>(core, serviceRegister));
+    // Дев-панель проверки детекторов (/actest): только читает сервисы и регистрирует
+    // команду, на порядок работы анти-чита не влияет.
+    m_systems.push_back(std::make_unique<AntiCheatTestSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<PlayerAnimationSystem>(core, serviceRegister));
     // WeaponSystem раньше HealthSystem: фейковый выстрел (оружие без выдачи)
     // отбрасывается до регистрации bullet sync в health — не легализует give-damage.

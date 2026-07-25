@@ -37,6 +37,7 @@ class AntiCheatService final : public IService
         CheckpointHack,        // вход в чекпоинт с неправдоподобной дистанции
         SpawnHack,             // запрос класса/спавна вне легального контекста (телепорт+хил респауном)
         CarShot,               // попадание из транспорта оружием, которым drive-by невозможен
+        QuickTurn,             // серия мгновенных разворотов модели (CLEO quick turn)
     };
 
     struct Violation

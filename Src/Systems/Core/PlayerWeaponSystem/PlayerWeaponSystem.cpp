@@ -100,7 +100,7 @@ bool PlayerWeaponSystem::onPlayerShotPlayerObject(IPlayer &player, IPlayerObject
 
 bool PlayerWeaponSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
 {
-    PlayerWeaponService::Outcome outcome = m_weaponService.verifyArmed(player, now);
+    PlayerWeaponService::Outcome outcome = m_weaponService.verifySync(player, now);
     if (outcome.weaponHack)
     {
         m_antiCheatService.record(player.getID(), AntiCheatService::ViolationType::WeaponHack,

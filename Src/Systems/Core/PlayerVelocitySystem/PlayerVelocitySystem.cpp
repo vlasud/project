@@ -20,6 +20,11 @@ bool PlayerVelocitySystem::onPlayerUpdate(IPlayer &player, TimePoint now)
         m_antiCheatService.record(player.getID(), AntiCheatService::ViolationType::SpeedHack,
                                   std::move(outcome.detail), now);
     }
+    else if (outcome.quickTurn)
+    {
+        m_antiCheatService.record(player.getID(), AntiCheatService::ViolationType::QuickTurn,
+                                  std::move(outcome.detail), now);
+    }
     return true;
 }
 

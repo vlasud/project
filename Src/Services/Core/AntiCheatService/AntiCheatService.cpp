@@ -38,6 +38,8 @@ const char *AntiCheatService::name(ViolationType type)
         return "SpawnHack";
     case ViolationType::CarShot:
         return "CarShot";
+    case ViolationType::QuickTurn:
+        return "QuickTurn";
     }
     // switch исчерпывающий по всем ViolationType (без default) — добавление нового
     // значения enum ловит -Wswitch на этапе компиляции.

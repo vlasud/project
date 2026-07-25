@@ -18,6 +18,10 @@
 //  * выдача/изъятие — ТОЛЬКО через giveWeapon/removeWeapon этого сервиса;
 //  * на каждом апдейте оружие в руках клиента сверяется с инвентарём: чужое —
 //    снимается + нарушение;
+//  * там же сверяются патроны по слотам, монотонно (как HP в PlayerHealthService):
+//    рост над серверным остатком запрещён — это ammo hack, патроны форсятся назад
+//    + нарушение; снижение принимается за правду (drive-by bullet sync не шлёт,
+//    пакеты теряются — иначе рассинхрон копится и прячет хак);
 //  * каждый выстрел (bullet sync) проверяется на владение и списывает патрон;
 //    стрельба при серверном нуле патронов (с запасом на дрейф) — ammo hack:
 //    патроны обнуляются принудительно + нарушение.
@@ -102,7 +106,9 @@ class PlayerWeaponService final : public IService
     // --- вызывается PlayerWeaponSystem ---
     ShotOutcome onShot(IPlayer &player, const PlayerBulletData &bullet, const ShotContext &ctx,
                        TimePoint now);                   // из bullet sync
-    Outcome verifyArmed(IPlayer &player, TimePoint now); // каждый апдейт
+    // Сверка заявленного клиентом состояния (оружие в руках + патроны по слотам)
+    // с серверным инвентарём. Каждый апдейт.
+    Outcome verifySync(IPlayer &player, TimePoint now);
     void onSpawn(IPlayer &player);
     void reset(int playerId);
 
@@ -125,6 +131,11 @@ class PlayerWeaponService final : public IService
 
     Slot *findWeapon(State &st, std::uint8_t weaponId);
     const Slot *findWeapon(const State &st, std::uint8_t weaponId) const;
+
+    // Части verifySync. verifyArmedWeapon возвращает false, если смотреть патроны
+    // уже нет смысла: оружие в руках чужое либо идёт грейс синхронизации.
+    bool verifyArmedWeapon(IPlayer &player, State &st, TimePoint now, Outcome &outcome);
+    void verifyAmmo(IPlayer &player, State &st, TimePoint now, Outcome &outcome);
 
     std::array<State, MAX_PLAYERS> m_state;
 };

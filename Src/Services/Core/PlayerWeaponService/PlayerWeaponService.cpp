@@ -20,6 +20,11 @@ constexpr std::chrono::milliseconds FLAG_COOLDOWN{2000};
 // приходят bullet sync'ом). Стрельба глубже долга — ammo hack.
 constexpr std::int32_t AMMO_DEBT = 10;
 
+// Допустимое превышение клиентских патронов над серверными. Легальных причин почти
+// нет (расход у клиента идёт не медленнее, чем списание на сервере) — запас только
+// на дубли bullet sync, где сервер списал патрон дважды.
+constexpr std::int64_t AMMO_EXCESS = 5;
+
 bool rateLimited(TimePoint &lastFlag, TimePoint now)
 {
     if (now - lastFlag < FLAG_COOLDOWN)
@@ -428,11 +433,21 @@ PlayerWeaponService::ShotOutcome PlayerWeaponService::onShot(IPlayer &player, co
     return outcome;
 }
 
-PlayerWeaponService::Outcome PlayerWeaponService::verifyArmed(IPlayer &player, TimePoint now)
+PlayerWeaponService::Outcome PlayerWeaponService::verifySync(IPlayer &player, TimePoint now)
 {
     Outcome outcome;
     State &st = m_state[player.getID()];
 
+    // Оружие в руках — первым: если оно уже чужое, разбирать патроны незачем.
+    if (!verifyArmedWeapon(player, st, now, outcome))
+        return outcome;
+
+    verifyAmmo(player, st, now, outcome);
+    return outcome;
+}
+
+bool PlayerWeaponService::verifyArmedWeapon(IPlayer &player, State &st, TimePoint now, Outcome &outcome)
+{
     const std::uint8_t reported = static_cast<std::uint8_t>(player.getArmedWeapon());
 
     // Кулаки — всегда; парашют игра выдаёт сама при прыжке из самолёта;
@@ -440,18 +455,18 @@ PlayerWeaponService::Outcome PlayerWeaponService::verifyArmed(IPlayer &player, T
     if (reported == 0 || reported == 46 || (reported == 40 && findWeapon(st, 39)))
     {
         st.armed = reported;
-        return outcome;
+        return true;
     }
 
     if (findWeapon(st, reported))
     {
         st.armed = reported;
-        return outcome;
+        return true;
     }
 
     // В руках оружие, которого нет в серверном инвентаре.
     if (now - st.lastChange < SYNC_GRACE)
-        return outcome; // клиент ещё применяет недавнюю выдачу/изъятие
+        return false; // клиент ещё применяет недавнюю выдачу/изъятие
 
     if (!rateLimited(st.lastFlag, now))
     {
@@ -460,7 +475,58 @@ PlayerWeaponService::Outcome PlayerWeaponService::verifyArmed(IPlayer &player, T
         outcome.weaponHack = true;
         outcome.detail = fmt::format("armed unowned weapon {}", reported);
     }
-    return outcome;
+    return false;
+}
+
+void PlayerWeaponService::verifyAmmo(IPlayer &player, State &st, TimePoint now, Outcome &outcome)
+{
+    // Грейс серверных операций: после giveWeapon/setAmmo клиент ещё не применил RPC,
+    // его патроны отстают — принять это отставание за правду значило бы съесть
+    // только что выданное.
+    if (now - st.lastChange < SYNC_GRACE)
+        return;
+
+    const WeaponSlots &clientSlots = player.getWeapons();
+    for (std::size_t index = 0; index < MAX_WEAPON_SLOTS; ++index)
+    {
+        Slot &server = st.slots[index];
+        if (server.id == 0)
+            continue; // серверный слот пуст: лишнее оружие ловит проверка «в руках»
+
+        const WeaponSlotData &client = clientSlots[index];
+        if (client.id != server.id)
+            continue; // в слоте другое оружие — это тоже случай проверки «в руках»
+
+        // В int64: клиент присылает uint32, и 0xFFFFFFFF в int32 стал бы -1, то есть
+        // хак с максимумом патронов выглядел бы как их расход.
+        const std::int64_t clientAmmo = static_cast<std::int64_t>(client.ammo);
+        // Долг (отрицательный серверный остаток) сравниваем как ноль: клиент,
+        // показывающий 0 после стрельбы в долг, ничего не подделывал.
+        const std::int64_t serverAmmo = server.ammo > 0 ? server.ammo : 0;
+
+        if (clientAmmo > serverAmmo + AMMO_EXCESS)
+        {
+            // Патроны выросли без серверной выдачи — ammo hack. Ловится СРАЗУ, не
+            // дожидаясь, пока чит отстреляет легальный запас.
+            if (!rateLimited(st.lastFlag, now))
+            {
+                outcome.weaponHack = true;
+                outcome.detail =
+                    fmt::format("weapon {} ammo {} over server {}", server.id, clientAmmo, serverAmmo);
+            }
+            player.setWeaponAmmo(WeaponSlotData{server.id, static_cast<std::uint32_t>(serverAmmo)});
+            st.lastChange = now; // окно на применение отката, иначе форс каждый апдейт
+            return;
+        }
+
+        if (clientAmmo < server.ammo)
+        {
+            // Клиент потратил больше, чем сервер успел списать: drive-by bullet sync
+            // не шлёт, пакеты теряются. Снижение принимаем за правду — занижать себе
+            // патроны читу невыгодно, а иначе рассинхрон копится и прячет хак.
+            server.ammo = static_cast<std::int32_t>(clientAmmo);
+        }
+    }
 }
 
 void PlayerWeaponService::onSpawn(IPlayer &player)
