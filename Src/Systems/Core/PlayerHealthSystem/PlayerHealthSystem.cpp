@@ -1,6 +1,7 @@
 #include "Systems/Core/PlayerHealthSystem/PlayerHealthSystem.h"
 
 #include "Log/LogManager.h"
+#include "Services/Core/PlayerWeaponService/PlayerWeaponService.h" // единый источник темпа стрельбы
 #include "Systems/Core/PlayerHealthSystem/WeaponLimits.h"
 #include "glm/geometric.hpp"
 #include <chrono>
@@ -115,11 +116,20 @@ bool PlayerHealthSystem::validateGiveDamage(IPlayer &attacker, IPlayer &victim, 
     // Темп хитов: токен-бакет. Пополняется со скоростью «1 хит в minInterval»,
     // запас burst покрывает легальные пакетные всплески; стабильный спам быстрее
     // скорострельности оружия упирается в пустой бакет.
+    //
+    // Для пулевого оружия интервал берём из ЕДИНОГО источника темпа
+    // (PlayerWeaponService — реальный shootTime из SDK): своя, более щедрая копия
+    // обесценивала бы строгий лимит на выстрелы — урон всё равно проходил бы чаще.
+    const float intervalMs =
+        WeaponLimits::sendsBulletSync(weapon)
+            ? static_cast<float>(PlayerWeaponService::minShotInterval(static_cast<std::uint8_t>(weapon)).count())
+            : static_cast<float>(info->minIntervalMs);
+
     AttackState &attack = m_attack[attacker.getID()];
     if (attack.lastRefill.time_since_epoch().count() != 0)
     {
         const float elapsedMs = std::chrono::duration<float, std::milli>(timeNow - attack.lastRefill).count();
-        attack.fireTokens += elapsedMs / static_cast<float>(info->minIntervalMs);
+        attack.fireTokens += elapsedMs / intervalMs;
         if (attack.fireTokens > FIRE_BURST)
             attack.fireTokens = FIRE_BURST;
     }

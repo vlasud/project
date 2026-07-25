@@ -59,48 +59,92 @@ constexpr float AIM_LAG_SLACK = 0.45f;
 constexpr float AIM_SPEED_CAP = 25.0f;
 constexpr float AIM_MIN_DISTANCE = 3.0f; // в упор углы не показательны
 
+// Дальность — своя таблица, НЕ WeaponInfo::range из SDK: там дальности weapon.dat
+// (снайперка 100 м), а попадания в SA-MP регистрируются и заметно дальше.
+float weaponRange(std::uint8_t weaponId)
+{
+    switch (weaponId)
+    {
+    case 22: // Colt45
+    case 23: // Silenced
+    case 24: // Deagle
+    case 26: // Sawnoff
+    case 28: // Uzi
+    case 32: // Tec-9
+        return 35.0f;
+    case 25: // Shotgun
+    case 27: // Spas-12
+        return 40.0f;
+    case 29: // MP5
+        return 45.0f;
+    case 30: // AK-47
+        return 70.0f;
+    case 38: // Minigun
+        return 75.0f;
+    case 31: // M4
+        return 90.0f;
+    case 33: // Rifle
+        return 100.0f;
+    case 34: // Sniper
+        return 320.0f;
+    default:
+        return 320.0f; // незнакомое — щедро
+    }
+}
+
+// Минимальный интервал между выстрелами — от РЕАЛЬНОЙ скорострельности оружия
+// (WeaponInfo::shootTime, данные weapon.dat из SDK), а не от значений на глаз:
+// прежняя таблица была щедрее реального темпа в 3-5 раз, и rapid fire такой
+// кратности не считался нарушением.
+//
+// Легальный темп бывает выше табличного, отсюда делитель-запас:
+//  * ROF_DIVISOR — базовый запас на лаг и сгустки пакетов;
+//  * c-bug (присед отменяет анимацию после выстрела) реально ускоряет медленные
+//    стволы — им запас больше;
+//  * dual-wield шлёт bullet sync с двух стволов, то есть вдвое больше пакетов;
+//    множитель ниже двойки сознательно — при полной двойке порог ушёл бы вдвое
+//    ниже реально достижимого темпа, а сгустки пакетов и так гасит ROF_BURST.
+constexpr float ROF_DIVISOR = 2.0f;
+constexpr float ROF_DIVISOR_CBUG = 3.0f;
+constexpr float ROF_DIVISOR_DUAL = 1.5f;
+// Непулевое оружие bullet sync не шлёт (у огнемёта/спрея свой темп) — щедрый дефолт.
+constexpr std::chrono::milliseconds ROF_DEFAULT{40};
+constexpr std::chrono::milliseconds ROF_FLOOR{10};
+
+bool isDualWield(std::uint8_t weaponId)
+{
+    return weaponId == 22 || weaponId == 26 || weaponId == 28 || weaponId == 32;
+}
+
+// Обрез (26) сюда не входит: он и так залповый, и запас ему даёт dual-множитель.
+bool isCbugWeapon(std::uint8_t weaponId)
+{
+    return weaponId == 24 || weaponId == 25 || weaponId == 33 || weaponId == 34;
+}
+
+std::chrono::milliseconds shotInterval(std::uint8_t weaponId)
+{
+    const WeaponInfo &info = WeaponInfo::get(weaponId);
+    if (info.type != PlayerWeaponType_Bullet || info.shootTime <= 0)
+        return ROF_DEFAULT;
+
+    float divisor = isCbugWeapon(weaponId) ? ROF_DIVISOR_CBUG : ROF_DIVISOR;
+    if (isDualWield(weaponId))
+        divisor *= ROF_DIVISOR_DUAL;
+
+    const std::chrono::milliseconds interval{static_cast<int>(static_cast<float>(info.shootTime) / divisor)};
+    return std::max(interval, ROF_FLOOR);
+}
+
 struct WeaponShotSpec
 {
-    float range;                           // дальность из weapon.dat
-    std::chrono::milliseconds minInterval; // быстрее самого быстрого легального
-                                           // (dual-wield, c-bug) в ~2 раза
+    float range;
+    std::chrono::milliseconds minInterval;
 };
 
 WeaponShotSpec shotSpec(std::uint8_t weaponId)
 {
-    switch (weaponId)
-    {
-    case 22:
-        return {35.0f, std::chrono::milliseconds(80)}; // Colt45 (dual)
-    case 23:
-        return {35.0f, std::chrono::milliseconds(150)}; // Silenced
-    case 24:
-        return {35.0f, std::chrono::milliseconds(200)}; // Deagle (c-bug)
-    case 25:
-        return {40.0f, std::chrono::milliseconds(200)}; // Shotgun (c-bug)
-    case 26:
-        return {35.0f, std::chrono::milliseconds(80)}; // Sawnoff (dual)
-    case 27:
-        return {40.0f, std::chrono::milliseconds(150)}; // Spas-12
-    case 28:
-        return {35.0f, std::chrono::milliseconds(40)}; // Uzi (dual)
-    case 29:
-        return {45.0f, std::chrono::milliseconds(40)}; // MP5
-    case 30:
-        return {70.0f, std::chrono::milliseconds(40)}; // AK-47
-    case 31:
-        return {90.0f, std::chrono::milliseconds(40)}; // M4
-    case 32:
-        return {35.0f, std::chrono::milliseconds(40)}; // Tec-9 (dual)
-    case 33:
-        return {100.0f, std::chrono::milliseconds(300)}; // Rifle (c-bug)
-    case 34:
-        return {320.0f, std::chrono::milliseconds(300)}; // Sniper (c-bug)
-    case 38:
-        return {75.0f, std::chrono::milliseconds(10)}; // Minigun
-    default:
-        return {320.0f, std::chrono::milliseconds(40)}; // незнакомое — щедро
-    }
+    return {weaponRange(weaponId), shotInterval(weaponId)};
 }
 
 bool finite(const Vector3 &v)

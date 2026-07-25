@@ -42,8 +42,10 @@
 class PlayerWeaponService final : public IService
 {
   public:
-    // Табличный минимальный интервал между выстрелами (анти-rapid-fire) — для
-    // тулз настройки темпа.
+    // Минимальный интервал между выстрелами (анти-rapid-fire): реальный shootTime
+    // оружия из SDK, поделённый на запас (лаг, c-bug, dual-wield). ЕДИНЫЙ источник
+    // темпа — им же ограничен темп хитов в PlayerHealthSystem, чтобы более щедрая
+    // копия не обесценивала этот лимит. Открыт и для тулз замера темпа (/rof).
     static Milliseconds minShotInterval(std::uint8_t weaponId);
 
     // --- источник истины ---
