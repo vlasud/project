@@ -22,6 +22,9 @@
 // (onPlayerShotPlayer) по той же жертве. Фейковый хит отбрасывается и пишется
 // в журнал как DamageHack.
 //
+// Отдельно ловится carshot — хит из транспорта оружием, которым drive-by невозможен
+// (двуручное): такой выстрел честный клиент не воспроизводит. Пишется как CarShot.
+//
 // onPlayerTakeDamage используем только для урона без источника (падение, огонь,
 // утопление) — для него give-события не существует.
 class PlayerHealthSystem : public BaseSystem,
@@ -50,6 +53,10 @@ class PlayerHealthSystem : public BaseSystem,
         TimePoint lastRefill;
         int lastShotVictim = -1; // последняя цель из bullet sync
         TimePoint lastShotAt;
+        // Стейт и время его смены — для carshot: высадка видна серверу с задержкой
+        // одного синка, и выстрел сразу после неё легален.
+        PlayerState lastState = PlayerState_None;
+        TimePoint stateSince;
     };
 
     // Проверка правдоподобия хита; при фейке пишет DamageHack и возвращает false.

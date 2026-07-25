@@ -5,6 +5,7 @@
 #include <cmath>
 #include <fmt/format.h>
 #include <glm/geometric.hpp>
+#include <glm/trigonometric.hpp>
 
 namespace
 {
@@ -58,6 +59,18 @@ constexpr float AIM_LEAD_TIME = 0.35f;
 constexpr float AIM_LAG_SLACK = 0.45f;
 constexpr float AIM_SPEED_CAP = 25.0f;
 constexpr float AIM_MIN_DISTANCE = 3.0f; // в упор углы не показательны
+
+// Грейс на первые данные прицела после спавна: aim sync идёт ~30 раз в секунду, но
+// первый пакет может отстать от первого выстрела. Вне грейса отсутствие данных
+// прицела — само по себе нарушение (иначе «не шлю aim sync» обходит проверку).
+constexpr std::chrono::seconds AIM_DATA_GRACE{3};
+
+// Корпус стрелка: цель не может быть строго за спиной — модель в SA-MP
+// разворачивается на цель (авто-прицел) либо по направлению стрельбы. Порог ~130°,
+// с запасом на рассинхрон угла: последний onfoot sync мог отстать на пол-оборота.
+// Опора независима от aim sync — направление модели идёт другим пакетом, и его
+// подделку видят остальные игроки.
+constexpr float BODY_MAX_COS = -0.64f;
 
 // Дальность — своя таблица, НЕ WeaponInfo::range из SDK: там дальности weapon.dat
 // (снайперка 100 м), а попадания в SA-MP регистрируются и заметно дальше.
@@ -364,7 +377,20 @@ PlayerWeaponService::ShotOutcome PlayerWeaponService::onShot(IPlayer &player, co
             const Vector3 toTarget = *ctx.targetPos + ctx.targetVelocity * AIM_LEAD_TIME - ctx.shooterPos;
             const float distance = glm::length(toTarget);
             const float frontLen = glm::length(aim.camFrontVector);
-            if (finite(aim.camFrontVector) && finite(toTarget) && frontLen > 0.1f && distance > AIM_MIN_DISTANCE)
+            const bool aimUsable = finite(aim.camFrontVector) && frontLen > 0.1f;
+
+            if (!aimUsable)
+            {
+                // Данных прицела нет: раньше проверка молча пропускалась, и клиент,
+                // который не шлёт aim sync, обходил её бесплатно. Прощаем только
+                // первые секунды после спавна — первый aim sync мог не успеть.
+                if (now - st.spawnAt > AIM_DATA_GRACE)
+                {
+                    flag(ShotFlag::SilentAim, fmt::format("hit player without aim data, weapon {}", weaponId));
+                    return outcome;
+                }
+            }
+            else if (finite(toTarget) && distance > AIM_MIN_DISTANCE)
             {
                 const float along = glm::dot(aim.camFrontVector / frontLen, toTarget);
                 const float cone = std::max(std::min(distance * AIM_CONE_TAN, AIM_MAX_OFFSET), AIM_MIN_OFFSET);
@@ -377,6 +403,24 @@ PlayerWeaponService::ShotOutcome PlayerWeaponService::onShot(IPlayer &player, co
                                      along < 0.0f ? distance : std::sqrt(std::max(offAxisSq, 0.0f)), distance,
                                      weaponId));
                     return outcome;
+                }
+
+                // Корпус стрелка — вторая опора, не зависящая от aim sync: цель
+                // строго за спиной означает, что данные прицела подделаны (сам
+                // разворот модели скрыть нельзя, его видят остальные игроки).
+                const float yaw = player.getRotation().ToEuler().z;
+                const Vector3 flat{toTarget.x, toTarget.y, 0.0f};
+                const float flatLen = glm::length(flat);
+                if (std::isfinite(yaw) && flatLen > 0.001f)
+                {
+                    const float radians = glm::radians(yaw);
+                    const Vector3 facing{-std::sin(radians), std::cos(radians), 0.0f};
+                    if (glm::dot(facing, flat / flatLen) < BODY_MAX_COS)
+                    {
+                        flag(ShotFlag::SilentAim,
+                             fmt::format("hit player {:.0f}m behind shooter's back, weapon {}", distance, weaponId));
+                        return outcome;
+                    }
                 }
             }
         }
@@ -427,6 +471,7 @@ void PlayerWeaponService::onSpawn(IPlayer &player)
     st.slots = {};
     st.armed = 0;
     st.lastChange = std::chrono::steady_clock::now();
+    st.spawnAt = st.lastChange; // отсюда идёт грейс на первые данные прицела
 }
 
 void PlayerWeaponService::reset(int playerId)

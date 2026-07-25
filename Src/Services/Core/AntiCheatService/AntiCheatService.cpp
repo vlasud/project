@@ -1,5 +1,49 @@
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
 
+const char *AntiCheatService::name(ViolationType type)
+{
+    switch (type)
+    {
+    case ViolationType::ForcedAnimationEscape:
+        return "ForcedAnimationEscape";
+    case ViolationType::HealthHack:
+        return "HealthHack";
+    case ViolationType::DamageHack:
+        return "DamageHack";
+    case ViolationType::DeathEvasion:
+        return "DeathEvasion";
+    case ViolationType::TeleportHack:
+        return "TeleportHack";
+    case ViolationType::SpeedHack:
+        return "SpeedHack";
+    case ViolationType::StateHack:
+        return "StateHack";
+    case ViolationType::SpecialActionHack:
+        return "SpecialActionHack";
+    case ViolationType::WeaponHack:
+        return "WeaponHack";
+    case ViolationType::ShotHack:
+        return "ShotHack";
+    case ViolationType::RapidFire:
+        return "RapidFire";
+    case ViolationType::SilentAim:
+        return "SilentAim";
+    case ViolationType::VehicleHack:
+        return "VehicleHack";
+    case ViolationType::PickupHack:
+        return "PickupHack";
+    case ViolationType::CheckpointHack:
+        return "CheckpointHack";
+    case ViolationType::SpawnHack:
+        return "SpawnHack";
+    case ViolationType::CarShot:
+        return "CarShot";
+    }
+    // switch исчерпывающий по всем ViolationType (без default) — добавление нового
+    // значения enum ловит -Wswitch на этапе компиляции.
+    return "Unknown";
+}
+
 void AntiCheatService::record(int playerId, ViolationType type, std::string detail, TimePoint now)
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)

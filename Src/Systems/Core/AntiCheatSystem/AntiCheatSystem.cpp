@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <fmt/format.h>
+#include <string>
 
 namespace
 {
@@ -13,46 +14,18 @@ namespace
 constexpr std::size_t KICK_THRESHOLD = 5;
 constexpr std::chrono::seconds KICK_WINDOW{60};
 
-const char *violationName(AntiCheatService::ViolationType type)
+const char *clientVersionName(ClientVersion version)
 {
-    switch (type)
+    switch (version)
     {
-    case AntiCheatService::ViolationType::ForcedAnimationEscape:
-        return "ForcedAnimationEscape";
-    case AntiCheatService::ViolationType::HealthHack:
-        return "HealthHack";
-    case AntiCheatService::ViolationType::DamageHack:
-        return "DamageHack";
-    case AntiCheatService::ViolationType::DeathEvasion:
-        return "DeathEvasion";
-    case AntiCheatService::ViolationType::TeleportHack:
-        return "TeleportHack";
-    case AntiCheatService::ViolationType::SpeedHack:
-        return "SpeedHack";
-    case AntiCheatService::ViolationType::StateHack:
-        return "StateHack";
-    case AntiCheatService::ViolationType::SpecialActionHack:
-        return "SpecialActionHack";
-    case AntiCheatService::ViolationType::WeaponHack:
-        return "WeaponHack";
-    case AntiCheatService::ViolationType::ShotHack:
-        return "ShotHack";
-    case AntiCheatService::ViolationType::RapidFire:
-        return "RapidFire";
-    case AntiCheatService::ViolationType::SilentAim:
-        return "SilentAim";
-    case AntiCheatService::ViolationType::VehicleHack:
-        return "VehicleHack";
-    case AntiCheatService::ViolationType::PickupHack:
-        return "PickupHack";
-    case AntiCheatService::ViolationType::CheckpointHack:
-        return "CheckpointHack";
-    case AntiCheatService::ViolationType::SpawnHack:
-        return "SpawnHack";
+    case ClientVersion::ClientVersion_SAMP_037:
+        return "SA-MP 0.3.7";
+    case ClientVersion::ClientVersion_SAMP_03DL:
+        return "SA-MP 0.3.DL";
+    case ClientVersion::ClientVersion_openmp:
+        return "open.mp";
     }
-    // switch исчерпывающий по всем ViolationType (без default) — добавление
-    // нового значения enum ловит -Wswitch на этапе компиляции.
-    return "Unknown";
+    return "unknown";
 }
 } // namespace
 
@@ -76,7 +49,7 @@ void AntiCheatSystem::onViolation(int playerId, AntiCheatService::ViolationType 
     }
 
     LogManager::log(LogLevel::Warning, fmt::format("[AntiCheat] {} (id {}): {} — {}", player->getName(), playerId,
-                                                   violationName(type), record.recent.back().detail));
+                                                   AntiCheatService::name(type), record.recent.back().detail));
 
     const TimePoint windowStart = record.lastAt - KICK_WINDOW;
     const std::size_t recentCount =
@@ -90,6 +63,17 @@ void AntiCheatSystem::onViolation(int playerId, AntiCheatService::ViolationType 
                                     player->getName(), playerId, recentCount, record.total));
         player->kick();
     }
+}
+
+void AntiCheatSystem::onPlayerConnect(IPlayer &player)
+{
+    // Версию заявляет клиент, доверять ей нельзя — это телеметрия, не проверка:
+    // по ней видно, с каких сборок идут нарушения (0.3.7 — база большинства читов).
+    const StringView build = player.getClientVersionName();
+    LogManager::log(LogLevel::Message,
+                    fmt::format("[AntiCheat] {} (id {}) connected: client {} (build \"{}\")", player.getName(),
+                                player.getID(), clientVersionName(player.getClientVersion()),
+                                std::string(build.data(), build.size())));
 }
 
 void AntiCheatSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)

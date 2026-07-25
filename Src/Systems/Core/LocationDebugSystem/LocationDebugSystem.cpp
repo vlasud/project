@@ -12,34 +12,6 @@ namespace
 constexpr std::chrono::milliseconds VEL_NOTIFY_INTERVAL{500};
 
 const Colour DEBUG_COLOUR{120, 220, 255};
-
-const char *violationName(AntiCheatService::ViolationType type)
-{
-    switch (type)
-    {
-    case AntiCheatService::ViolationType::ForcedAnimationEscape:
-        return "AnimEscape";
-    case AntiCheatService::ViolationType::HealthHack:
-        return "HealthHack";
-    case AntiCheatService::ViolationType::DamageHack:
-        return "DamageHack";
-    case AntiCheatService::ViolationType::DeathEvasion:
-        return "DeathEvasion";
-    case AntiCheatService::ViolationType::TeleportHack:
-        return "TeleportHack";
-    case AntiCheatService::ViolationType::SpeedHack:
-        return "SpeedHack";
-    case AntiCheatService::ViolationType::StateHack:
-        return "StateHack";
-    case AntiCheatService::ViolationType::SpecialActionHack:
-        return "SpecialActionHack";
-    case AntiCheatService::ViolationType::WeaponHack:
-        return "WeaponHack";
-    case AntiCheatService::ViolationType::VehicleHack:
-        return "VehicleHack";
-    }
-    return "Unknown";
-}
 } // namespace
 
 LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -213,7 +185,7 @@ void LocationDebugSystem::showViolations(IPlayer &player)
     {
         const AntiCheatService::Violation &violation = record.recent[i];
         player.sendClientMessage(
-            DEBUG_COLOUR, u(fmt::format("[{}] {}", violationName(violation.type), violation.detail)));
+            DEBUG_COLOUR, u(fmt::format("[{}] {}", AntiCheatService::name(violation.type), violation.detail)));
     }
 }
 

@@ -36,6 +36,7 @@ class AntiCheatService final : public IService
         PickupHack,            // подбор пикапа с неправдоподобной дистанции / из чужого мира
         CheckpointHack,        // вход в чекпоинт с неправдоподобной дистанции
         SpawnHack,             // запрос класса/спавна вне легального контекста (телепорт+хил респауном)
+        CarShot,               // попадание из транспорта оружием, которым drive-by невозможен
     };
 
     struct Violation
@@ -56,6 +57,10 @@ class AntiCheatService final : public IService
     // Наблюдатель вызывается синхронно после каждой записи — так система-античит
     // реагирует на нарушения без поллинга журнала.
     using Observer = std::function<void(int playerId, ViolationType type, const PlayerRecord &record)>;
+
+    // Имя типа для логов и дев-вывода. Единственное место соответствия «тип -> имя»:
+    // локальные копии в системах отставали от enum и показывали Unknown.
+    static const char *name(ViolationType type);
 
     // Зафиксировать нарушение. Вызывают системы-детекторы.
     void record(int playerId, ViolationType type, std::string detail, TimePoint now);

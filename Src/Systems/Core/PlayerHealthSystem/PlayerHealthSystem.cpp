@@ -24,6 +24,10 @@ constexpr float FIRE_BURST = 3.0f;
 // шлёт в один момент, но это разные пакеты — даём запас на их рассинхрон.
 constexpr std::chrono::milliseconds SHOT_WINDOW{2000};
 
+// Осадка стейта для carshot: смену «в машине -> пешком» сервер узнаёт из следующего
+// синка, поэтому хит сразу после высадки не считаем стрельбой из салона.
+constexpr std::chrono::milliseconds STATE_SETTLE{1500};
+
 TimePoint now()
 {
     return std::chrono::steady_clock::now();
@@ -50,6 +54,16 @@ PlayerHealthSystem::PlayerHealthSystem(ICore &core, const ServiceRegister &servi
 
 bool PlayerHealthSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
 {
+    // Трек смены стейта для carshot-окна: держим здесь, а не в PlayerStateService —
+    // нужна лишь метка времени по каждому синку, отдельного состояния это не стоит.
+    AttackState &attack = m_attack[player.getID()];
+    const PlayerState state = player.getState();
+    if (state != attack.lastState)
+    {
+        attack.lastState = state;
+        attack.stateSince = now;
+    }
+
     PlayerHealthService::VerifyOutcome outcome = m_healthService.verify(player, now);
     if (outcome.healthHack)
     {
@@ -87,12 +101,13 @@ bool PlayerHealthSystem::onPlayerShotPlayer(IPlayer &player, IPlayer &target, co
 bool PlayerHealthSystem::validateGiveDamage(IPlayer &attacker, IPlayer &victim, float amount, unsigned weapon)
 {
     const TimePoint timeNow = now();
-    const auto reject = [&](std::string detail)
+    const auto rejectAs = [&](AntiCheatService::ViolationType type, std::string detail)
     {
-        m_antiCheatService.record(attacker.getID(), AntiCheatService::ViolationType::DamageHack, std::move(detail),
-                                  timeNow);
+        m_antiCheatService.record(attacker.getID(), type, std::move(detail), timeNow);
         return false;
     };
+    const auto reject = [&](std::string detail)
+    { return rejectAs(AntiCheatService::ViolationType::DamageHack, std::move(detail)); };
 
     // NaN/Inf-урон open.mp пропускает (отсекает только <0). Табличный лимит ниже
     // его бы не поймал (NaN>max==false), а applyDamage отравил бы HP жертвы —
@@ -147,6 +162,19 @@ bool PlayerHealthSystem::validateGiveDamage(IPlayer &attacker, IPlayer &victim, 
     if (distance > allowed)
     {
         return reject(fmt::format("weapon {} hit from {:.0f}m (max {:.0f}m)", weapon, distance, allowed));
+    }
+
+    // CarShot: из транспорта игра даёт стрелять только одноручным оружием. Хит
+    // двуручным из салона честный клиент воспроизвести не может. Стейт берём
+    // серверный, но с окном на осадку: высадку сервер видит на синк позже, а
+    // выстрел сразу после неё легален.
+    const PlayerState attackerState = attacker.getState();
+    if ((attackerState == PlayerState_Driver || attackerState == PlayerState_Passenger)
+        && WeaponLimits::sendsBulletSync(weapon) && !WeaponLimits::allowedInVehicle(weapon)
+        && timeNow - attack.stateSince >= STATE_SETTLE)
+    {
+        return rejectAs(AntiCheatService::ViolationType::CarShot,
+                        fmt::format("weapon {} hit from vehicle (drive-by impossible)", weapon));
     }
 
     if (WeaponLimits::sendsBulletSync(weapon))

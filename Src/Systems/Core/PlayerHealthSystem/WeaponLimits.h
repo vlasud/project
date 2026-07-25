@@ -86,4 +86,13 @@ inline bool sendsBulletSync(unsigned weapon)
 {
     return (weapon >= 22 && weapon <= 34) || weapon == 38;
 }
+
+// Drive-by: из транспорта игра позволяет стрелять только одноручным оружием —
+// пистолеты (22-24), обрез (26), Uzi (28), Tec-9 (32). Попадание из салона
+// двуручным (дробовик, Spas, MP5, AK, M4, винтовка, снайперка, миниган) честный
+// клиент воспроизвести не может: это carshot.
+inline bool allowedInVehicle(unsigned weapon)
+{
+    return weapon == 22 || weapon == 23 || weapon == 24 || weapon == 26 || weapon == 28 || weapon == 32;
+}
 } // namespace WeaponLimits

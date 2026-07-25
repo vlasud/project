@@ -15,6 +15,9 @@ class AntiCheatSystem : public BaseSystem, public PlayerConnectEventHandler
   public:
     AntiCheatSystem(ICore &core, const ServiceRegister &serviceRegister);
 
+    // Телеметрия клиента: версия и сборка пишутся в журнал на входе — по ним видно,
+    // с какого клиента приходят нарушения (ядро логирует подключение без версии).
+    void onPlayerConnect(IPlayer &player) override;
     void onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason) override;
 
   private:
