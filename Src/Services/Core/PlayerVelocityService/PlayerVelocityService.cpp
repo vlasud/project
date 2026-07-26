@@ -8,9 +8,17 @@ namespace
 {
 // Лимиты «устойчивой» скорости (м/с). Разовые пики не караются — нарушение
 // фиксируется, только если скорость держится над лимитом дольше OVER_DURATION.
-// Спринт ~7 м/с; запас на прыжки, горки и рассинхрон даёт лимит, но не настолько
-// широкий, чтобы под него влезал CLEO-ускоритель бега (обычно 1.5-2x спринта).
-constexpr float FOOT_HORIZONTAL_MAX = 9.0f;
+// Спринт ~7 м/с; запас на горки и рассинхрон даёт лимит, но не настолько широкий,
+// чтобы под него влезал CLEO-ускоритель бега (обычно 1.5-2x спринта).
+constexpr float FOOT_HORIZONTAL_MAX = 9.5f;
+
+// Bunny hop (спринт с прыжками) — легальная техника, она разгоняет до 11-12 м/с,
+// то есть в ту же зону, что и мягкий ускоритель. Отличие в том, что прыжки видно
+// по вертикали: пока игрок реально подпрыгивает, действует «прыжковый» лимит, а
+// ровное движение по земле на той же скорости остаётся нарушением.
+constexpr float FOOT_HOP_MAX = 13.0f;
+constexpr float JUMP_VZ = 2.0f; // сырой (несглаженный) подъём — признак отрыва от земли
+constexpr std::chrono::milliseconds HOP_WINDOW{2000};
 // Подъём пешком: прыжок даёт ~5 м/с, но всплеском. Устойчивый набор высоты — это
 // уже airbreak/полёт: ни лестниц, ни лифтов такой скорости в игре нет (движущиеся
 // платформы приходят сёрфингом и считаются по транспортному лимиту).
@@ -31,11 +39,17 @@ constexpr float VEHICLE_MAX = 120.0f;
 // а бег под уклон столько не даёт.
 constexpr float FALLING_VZ = -10.0f;
 
-// Сколько скорость должна продержаться над лимитом, чтобы это было нарушением.
+// Сколько времени скорость должна пробыть над лимитом, чтобы это было нарушением.
 // Покрывает легальные всплески: выход из машины на ходу, отброс взрывом,
-// скольжение после приземления. Окно шире прежнего — плата за сниженные лимиты:
-// короткий легальный выброс скорости прощается, устойчивый чит нет.
-constexpr std::chrono::milliseconds OVER_DURATION{2000};
+// скольжение после приземления.
+constexpr float OVER_SECONDS = 2.0f;
+
+// Набранное время НЕ обнуляется при первом же провале под лимит, а убывает с этой
+// скоростью (за секунду под лимитом теряется полсекунды набранного). Обнуление
+// делало детект обходимым: пилящая скорость — что от лагов, что от чита с рывками —
+// начинала отсчёт заново на каждом провале и не давала добраться до порога.
+// Короткий легальный всплеск при этом по-прежнему рассасывается досуха.
+constexpr float OVER_DECAY = 0.5f;
 
 // Quick turn: модель в игре разворачивается анимацией, мгновенно поменять угол
 // может только чит. Одиночный «разворот» бывает и легальным (пакеты слиплись,
@@ -111,7 +125,7 @@ PlayerVelocityService::VerifyOutcome PlayerVelocityService::sample(IPlayer &play
         st.hasSample = false;
         st.hasYaw = false;
         st.velocity = {};
-        st.overSince = {};
+        st.overSeconds = 0.0f;
         return outcome;
     }
 
@@ -128,7 +142,7 @@ PlayerVelocityService::VerifyOutcome PlayerVelocityService::sample(IPlayer &play
         st.lastPosition = position;
         st.lastSample = now;
         st.velocity = {};
-        st.overSince = {};
+        st.overSeconds = 0.0f;
         return outcome;
     }
 
@@ -181,13 +195,21 @@ PlayerVelocityService::VerifyOutcome PlayerVelocityService::sample(IPlayer &play
     const bool surfing = player.getSurfingData().type != PlayerSurfingData::Type::None;
     const bool falling = vertical < FALLING_VZ;
 
+    // Отрыв от земли берём по СЫРОЙ вертикали: EMA усредняет прыжки вверх-вниз почти
+    // в ноль, и серия хопов стала бы неотличима от ровного бега.
+    if (raw.z > JUMP_VZ)
+        st.lastJumpAt = now;
+    const bool hopping =
+        st.lastJumpAt.time_since_epoch().count() != 0 && now - st.lastJumpAt <= HOP_WINDOW;
+
     bool over = false;
     const char *what = "";
     float value = 0.0f;
     float limit = 0.0f;
 
-    st.branch = (inVehicle || surfing) ? State::Branch::Vehicle
-                                       : (falling ? State::Branch::Falling : State::Branch::Foot);
+    st.branch = (inVehicle || surfing)
+                    ? State::Branch::Vehicle
+                    : (falling ? State::Branch::Falling : (hopping ? State::Branch::FootHop : State::Branch::Foot));
 
     if (inVehicle || surfing)
     {
@@ -215,12 +237,13 @@ PlayerVelocityService::VerifyOutcome PlayerVelocityService::sample(IPlayer &play
     else
     {
         // Пешком на земле: и горизонталь, и устойчивый подъём (airbreak).
-        if (horizontal > FOOT_HORIZONTAL_MAX)
+        const float footLimit = hopping ? FOOT_HOP_MAX : FOOT_HORIZONTAL_MAX;
+        if (horizontal > footLimit)
         {
             over = true;
-            what = "onfoot horizontal speed";
+            what = hopping ? "onfoot horizontal speed (hopping)" : "onfoot horizontal speed";
             value = horizontal;
-            limit = FOOT_HORIZONTAL_MAX;
+            limit = footLimit;
         }
         else if (vertical > FOOT_UP_MAX)
         {
@@ -233,19 +256,16 @@ PlayerVelocityService::VerifyOutcome PlayerVelocityService::sample(IPlayer &play
 
     if (!over)
     {
-        st.overSince = {};
+        st.overSeconds -= dt * OVER_DECAY;
+        if (st.overSeconds < 0.0f)
+            st.overSeconds = 0.0f;
         return outcome;
     }
 
-    if (st.overSince.time_since_epoch().count() == 0)
+    st.overSeconds += dt;
+    if (st.overSeconds >= OVER_SECONDS)
     {
-        st.overSince = now; // первый тик над лимитом — ждём, не всплеск ли
-        return outcome;
-    }
-
-    if (now - st.overSince >= OVER_DURATION)
-    {
-        st.overSince = now; // не зачитывать одно превышение каждый апдейт
+        st.overSeconds = 0.0f; // не зачитывать одно превышение каждый апдейт
         outcome.speedHack = true;
         outcome.detail = fmt::format("{} {:.1f} m/s (max {:.1f}) sustained", what, value, limit);
     }
@@ -261,6 +281,8 @@ const char *PlayerVelocityService::lastBranch(int playerId) const
     {
     case State::Branch::Foot:
         return "пеший";
+    case State::Branch::FootHop:
+        return "пеший (прыжки)";
     case State::Branch::Falling:
         return "падение";
     case State::Branch::Vehicle:
@@ -271,14 +293,11 @@ const char *PlayerVelocityService::lastBranch(int playerId) const
     return "нет данных";
 }
 
-int PlayerVelocityService::overMs(int playerId, TimePoint now) const
+int PlayerVelocityService::overMs(int playerId) const
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)
         return 0;
-    const TimePoint since = m_state[playerId].overSince;
-    if (since.time_since_epoch().count() == 0)
-        return 0; // скорость под лимитом — окно устойчивости сброшено
-    return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now - since).count());
+    return static_cast<int>(m_state[playerId].overSeconds * 1000.0f);
 }
 
 void PlayerVelocityService::reset(int playerId)

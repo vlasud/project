@@ -73,8 +73,75 @@ void AntiCheatTestSystem::notify(IPlayer &player, const std::string &text) const
 
 void AntiCheatTestSystem::showMenu(IPlayer &player)
 {
+    const std::string body =
+        fmt::format("Симуляции читов\t{} шт.\n"
+                    "Состояние: баллы и множитель\t{:.2f} / {:.2f}\n"
+                    "Веса нарушений\tнастроить\n"
+                    "Порог отключения\t{:.2f}\n"
+                    "Множитель после кика\t{:.2f}\n"
+                    "Мой множитель\t{:.2f}\n"
+                    "Множитель без админов\t{:.2f} ({})\n"
+                    "Сбросить счёт и журнал\t-\n"
+                    "Сбросить настройки к дефолтам\t-",
+                    static_cast<int>(Test::Count), m_antiCheatService.score(player.getID()),
+                    m_antiCheatService.threshold(), m_antiCheatService.threshold(),
+                    m_antiCheatService.kickedMultiplier(), m_antiCheatService.multiplier(player.getID()),
+                    m_antiCheatService.noAdminMultiplier(),
+                    m_antiCheatService.aggressive() ? "активен" : "спит");
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_TABLIST, "Анти-чит: панель разработчика", body, "Выбрать", "Закрыть"),
+        [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player || response != DialogResponse_Left)
+                return;
+            if (listItem < 0 || listItem >= static_cast<int>(MenuItem::Count))
+                return;
+
+            switch (static_cast<MenuItem>(listItem))
+            {
+            case MenuItem::Tests:
+                showTests(*player);
+                return;
+            case MenuItem::State:
+                showState(*player);
+                return;
+            case MenuItem::Weights:
+                showWeights(*player);
+                return;
+            case MenuItem::Threshold:
+                editThreshold(*player);
+                return;
+            case MenuItem::KickedMultiplier:
+                editKickedMultiplier(*player);
+                return;
+            case MenuItem::OwnMultiplier:
+                editOwnMultiplier(*player);
+                return;
+            case MenuItem::NoAdminMultiplier:
+                editNoAdminMultiplier(*player);
+                return;
+            case MenuItem::ResetScore:
+                m_antiCheatService.clear(playerId);
+                notify(*player, "Счёт и журнал очищены (множитель не тронут)");
+                showMenu(*player);
+                return;
+            case MenuItem::ResetTuning:
+                m_antiCheatService.resetTuning();
+                notify(*player, "Веса, порог и множитель после кика возвращены к дефолтам кода");
+                showMenu(*player);
+                return;
+            case MenuItem::Count:
+                return;
+            }
+        });
+}
+
+void AntiCheatTestSystem::showTests(IPlayer &player)
+{
     const std::string body = "Мгновенные развороты\tQuickTurn\n"
-                             "Бег 15 м/с (4 сек)\tSpeedHack\n"
+                             "Бег 16 м/с (5 сек)\tSpeedHack\n"
                              "Рывок на 500 м\tTeleportHack\n"
                              "Броня мимо сервиса\tHealthHack\n"
                              "Оружие мимо инвентаря\tWeaponHack\n"
@@ -95,6 +162,179 @@ void AntiCheatTestSystem::showMenu(IPlayer &player)
         });
 }
 
+void AntiCheatTestSystem::showState(IPlayer &player)
+{
+    const int playerId = player.getID();
+    const AntiCheatService::PlayerRecord &record = m_antiCheatService.get(playerId);
+    const float threshold = m_antiCheatService.threshold();
+
+    notify(player, fmt::format("Счёт сессии: {:.2f} из {:.2f} — до отключения {:.2f}", record.score, threshold,
+                               threshold > record.score ? threshold - record.score : 0.0f));
+    notify(player, fmt::format("Ваш множитель: {:.2f} (после кика ставится {:.2f}, хранится в БД)", record.multiplier,
+                               m_antiCheatService.kickedMultiplier()));
+    notify(player, fmt::format("Режим без админов: {} (надбавка {:.2f})",
+                               m_antiCheatService.aggressive() ? "АКТИВЕН" : "спит",
+                               m_antiCheatService.noAdminMultiplier()));
+    notify(player, fmt::format("Нарушений за сессию: {}", record.total));
+    for (std::size_t i = record.recent.size(); i > 0 && i > record.recent.size() - 3; --i)
+    {
+        const AntiCheatService::Violation &violation = record.recent[i - 1];
+        notify(player, fmt::format("  [{}] +{:.2f} — {}", AntiCheatService::name(violation.type),
+                                   m_antiCheatService.weight(violation.type) * record.multiplier, violation.detail));
+    }
+}
+
+void AntiCheatTestSystem::showWeights(IPlayer &player)
+{
+    std::string body;
+    for (std::size_t i = 0; i < static_cast<std::size_t>(AntiCheatService::ViolationType::Count); ++i)
+    {
+        const auto type = static_cast<AntiCheatService::ViolationType>(i);
+        const float weight = m_antiCheatService.weight(type);
+        // Сколько таких событий отключает игрока — то, ради чего вес и крутят.
+        const int events = weight > 0.0f ? static_cast<int>(std::ceil(m_antiCheatService.threshold() / weight)) : 0;
+        body += fmt::format("{}\t{:.2f}\t{} шт. до кика\n", AntiCheatService::name(type), weight, events);
+    }
+
+    m_dialogService.show(player,
+                         makeDialog(DialogStyle_TABLIST, "Веса нарушений", body, "Изменить", "Назад"),
+                         [this, playerId = player.getID()](DialogResponse response, int listItem, StringView)
+                         {
+                             IPlayer *player = m_core.getPlayers().get(playerId);
+                             if (!player)
+                                 return;
+                             if (response != DialogResponse_Left)
+                             {
+                                 showMenu(*player);
+                                 return;
+                             }
+                             if (listItem < 0 ||
+                                 listItem >= static_cast<int>(AntiCheatService::ViolationType::Count))
+                                 return;
+                             editWeight(*player, static_cast<AntiCheatService::ViolationType>(listItem));
+                         });
+}
+
+void AntiCheatTestSystem::editWeight(IPlayer &player, AntiCheatService::ViolationType type)
+{
+    // Значения вводятся в СОТЫХ: диалог ввода отдаёт целое, а веса дробные.
+    const std::string body = fmt::format("Вес нарушения {}\nСейчас: {:.2f}\n\nВведите новое значение в сотых\n"
+                                         "(100 = 1.00 — одно событие отключает; 25 = 0.25 — четыре события)",
+                                         AntiCheatService::name(type), m_antiCheatService.weight(type));
+
+    m_dialogService.showNumberInput(
+        player, makeDialog(DialogStyle_INPUT, "Вес нарушения", body, "Применить", "Назад"),
+        [this, playerId = player.getID(), type](DialogResponse response, std::int64_t value)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response == DialogResponse_Left)
+            {
+                m_antiCheatService.setWeight(type, static_cast<float>(value) / 100.0f);
+                notify(*player, fmt::format("Вес {} = {:.2f}", AntiCheatService::name(type),
+                                            m_antiCheatService.weight(type)));
+            }
+            showWeights(*player);
+        });
+}
+
+void AntiCheatTestSystem::editThreshold(IPlayer &player)
+{
+    const std::string body = fmt::format("Порог отключения\nСейчас: {:.2f}\n\nВведите значение в сотых\n"
+                                         "(100 = 1.00 — стандартный порог)",
+                                         m_antiCheatService.threshold());
+
+    m_dialogService.showNumberInput(player,
+                                    makeDialog(DialogStyle_INPUT, "Порог отключения", body, "Применить", "Назад"),
+                                    [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
+                                    {
+                                        IPlayer *player = m_core.getPlayers().get(playerId);
+                                        if (!player)
+                                            return;
+                                        if (response == DialogResponse_Left)
+                                        {
+                                            m_antiCheatService.setThreshold(static_cast<float>(value) / 100.0f);
+                                            notify(*player, fmt::format("Порог = {:.2f}",
+                                                                        m_antiCheatService.threshold()));
+                                        }
+                                        showMenu(*player);
+                                    });
+}
+
+void AntiCheatTestSystem::editKickedMultiplier(IPlayer &player)
+{
+    const std::string body = fmt::format("Множитель, который получает пойманный\nСейчас: {:.2f}\n\n"
+                                         "Введите значение в сотых (120 = 1.20)",
+                                         m_antiCheatService.kickedMultiplier());
+
+    m_dialogService.showNumberInput(player,
+                                    makeDialog(DialogStyle_INPUT, "Множитель после кика", body, "Применить", "Назад"),
+                                    [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
+                                    {
+                                        IPlayer *player = m_core.getPlayers().get(playerId);
+                                        if (!player)
+                                            return;
+                                        if (response == DialogResponse_Left)
+                                        {
+                                            m_antiCheatService.setKickedMultiplier(static_cast<float>(value) / 100.0f);
+                                            notify(*player, fmt::format("Множитель после кика = {:.2f}",
+                                                                        m_antiCheatService.kickedMultiplier()));
+                                        }
+                                        showMenu(*player);
+                                    });
+}
+
+void AntiCheatTestSystem::editOwnMultiplier(IPlayer &player)
+{
+    const std::string body = fmt::format("Ваш личный множитель\nСейчас: {:.2f}\n\n"
+                                         "Введите значение в сотых (100 = 1.00, 120 = 1.20).\n"
+                                         "Правка только в памяти сессии: в БД уходит\n"
+                                         "лишь подъём после реального кика.",
+                                         m_antiCheatService.multiplier(player.getID()));
+
+    m_dialogService.showNumberInput(player,
+                                    makeDialog(DialogStyle_INPUT, "Мой множитель", body, "Применить", "Назад"),
+                                    [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
+                                    {
+                                        IPlayer *player = m_core.getPlayers().get(playerId);
+                                        if (!player)
+                                            return;
+                                        if (response == DialogResponse_Left)
+                                        {
+                                            m_antiCheatService.setMultiplier(playerId, static_cast<float>(value) / 100.0f);
+                                            notify(*player, fmt::format("Ваш множитель = {:.2f}",
+                                                                        m_antiCheatService.multiplier(playerId)));
+                                        }
+                                        showMenu(*player);
+                                    });
+}
+
+void AntiCheatTestSystem::editNoAdminMultiplier(IPlayer &player)
+{
+    const std::string body =
+        fmt::format("Надбавка, пока онлайн нет залогиненных админов\nСейчас: {:.2f} ({})\n\n"
+                    "Введите значение в сотых (120 = 1.20, 100 = выключить).\n"
+                    "Считается в момент нарушения: зашёл админ — надбавка снята.",
+                    m_antiCheatService.noAdminMultiplier(), m_antiCheatService.aggressive() ? "активна" : "спит");
+
+    m_dialogService.showNumberInput(
+        player, makeDialog(DialogStyle_INPUT, "Множитель без админов", body, "Применить", "Назад"),
+        [this, playerId = player.getID()](DialogResponse response, std::int64_t value)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response == DialogResponse_Left)
+            {
+                m_antiCheatService.setNoAdminMultiplier(static_cast<float>(value) / 100.0f);
+                notify(*player,
+                       fmt::format("Множитель без админов = {:.2f}", m_antiCheatService.noAdminMultiplier()));
+            }
+            showMenu(*player);
+        });
+}
+
 void AntiCheatTestSystem::run(IPlayer &player, Test test)
 {
     const int playerId = player.getID();
@@ -105,9 +345,8 @@ void AntiCheatTestSystem::run(IPlayer &player, Test test)
         return;
     }
 
-    // Журнал чистим перед каждым тестом: иначе записи прошлых прогонов доберут
-    // порог кика и выбросят тестера на середине проверки.
-    m_antiCheatService.clear(playerId);
+    // Журнал НЕ чистим: счёт должен копиться от теста к тесту, иначе порог кика
+    // не проверить. Обнуление — отдельным пунктом меню.
 
     switch (test)
     {
@@ -259,8 +498,7 @@ bool AntiCheatTestSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
         notify(player, fmt::format("{:.1f} м/с | вертикаль {:+.1f} | ветка: {} | над лимитом: {} мс (нужно 2000)",
                                    m_velocityService.getHorizontalSpeed(playerId),
                                    m_velocityService.getVerticalSpeed(playerId),
-                                   m_velocityService.lastBranch(playerId),
-                                   m_velocityService.overMs(playerId, now)));
+                                   m_velocityService.lastBranch(playerId), m_velocityService.overMs(playerId)));
     }
     return true;
 }

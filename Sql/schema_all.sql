@@ -507,3 +507,27 @@ CREATE TABLE IF NOT EXISTS `player_weapon` (
     `ammo`       INT    NOT NULL DEFAULT 0,
     PRIMARY KEY (`account_id`, `weapon`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
+-- ============ anticheat_profile.sql ============
+
+-- Личный множитель анти-чита (AntiCheatSystem). Применить вручную к схеме
+-- геймода. Одна строка на аккаунт (PK): множитель — ЕДИНСТВЕННОЕ, что анти-чит
+-- хранит между сессиями. Сам счёт нарушений живёт только в памяти сессии и
+-- обнуляется при выходе.
+--
+-- multiplier — во сколько раз быстрее этот игрок набирает счёт до отключения:
+-- 1.0 у обычного игрока, у пойманного выше (значение задаёт
+-- AntiCheatService::kickedMultiplier, по умолчанию 1.2). Пишется write-through в
+-- момент назначения кика, UPSERT'ом с GREATEST — понизить множитель случайной
+-- перезаписью нельзя, только правкой БД вручную.
+--
+-- kicks — сколько раз анти-чит отключал этот аккаунт (счётчик для разбора
+-- жалоб). updated_at — время последнего кика.
+CREATE TABLE IF NOT EXISTS `anticheat_profile` (
+    `account_id` BIGINT   NOT NULL,
+    `multiplier` FLOAT    NOT NULL DEFAULT 1.0,
+    `kicks`      INT      NOT NULL DEFAULT 0,
+    `updated_at` DATETIME NULL,
+    PRIMARY KEY (`account_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;

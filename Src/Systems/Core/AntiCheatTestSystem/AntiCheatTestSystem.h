@@ -37,7 +37,22 @@ class AntiCheatTestSystem : public BaseSystem, public PlayerUpdateEventHandler
     bool onPlayerUpdate(IPlayer &player, TimePoint now) override;
 
   private:
-    // Порядок совпадает с порядком пунктов меню.
+    // Пункты корневого меню (порядок совпадает с порядком строк).
+    enum class MenuItem : std::uint8_t
+    {
+        Tests,
+        State,
+        Weights,
+        Threshold,
+        KickedMultiplier,
+        OwnMultiplier,
+        NoAdminMultiplier,
+        ResetScore,
+        ResetTuning,
+        Count,
+    };
+
+    // Порядок совпадает с порядком пунктов меню симуляций.
     enum class Test : std::uint8_t
     {
         QuickTurn,
@@ -51,7 +66,15 @@ class AntiCheatTestSystem : public BaseSystem, public PlayerUpdateEventHandler
         Count,
     };
 
-    void showMenu(IPlayer &player);
+    void showMenu(IPlayer &player);      // корневое меню панели
+    void showTests(IPlayer &player);     // список симуляций
+    void showState(IPlayer &player);     // счёт, множитель, порог
+    void showWeights(IPlayer &player);   // список весов по типам нарушений
+    void editWeight(IPlayer &player, AntiCheatService::ViolationType type);
+    void editThreshold(IPlayer &player);
+    void editKickedMultiplier(IPlayer &player);
+    void editOwnMultiplier(IPlayer &player);
+    void editNoAdminMultiplier(IPlayer &player);
     void run(IPlayer &player, Test test);
 
     // Развороты — цепочка: каждый шаг планирует следующий через setTimeout, пока не
