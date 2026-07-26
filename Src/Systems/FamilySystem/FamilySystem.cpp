@@ -69,8 +69,11 @@ const char *resultError(FamilyService::Result result)
 std::string formatDate(long long unixTime)
 {
     const std::time_t time = static_cast<std::time_t>(unixTime);
-    if (const std::tm *tm = std::gmtime(&time))
-        return fmt::format("{:02}.{:02}.{}", tm->tm_mday, tm->tm_mon + 1, tm->tm_year + 1900);
+    // gmtime_s, а не gmtime: последний пишет в общий статический буфер, который
+    // параллельный вызов с другого потока перетирает.
+    std::tm utc{};
+    if (gmtime_s(&utc, &time) == 0)
+        return fmt::format("{:02}.{:02}.{}", utc.tm_mday, utc.tm_mon + 1, utc.tm_year + 1900);
     return "?";
 }
 } // namespace

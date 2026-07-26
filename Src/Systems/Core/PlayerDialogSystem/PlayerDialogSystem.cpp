@@ -5,7 +5,7 @@
 PlayerDialogSystem::PlayerDialogSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_playerDialogService(serviceRegister.getService<PlayerDialogService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void PlayerDialogSystem::initialize(IComponentList *components)
@@ -16,7 +16,7 @@ void PlayerDialogSystem::initialize(IComponentList *components)
         LogManager::log(Error, "PlayerDialogSystem: IDialogsComponent is missing, dialogs are disabled");
         return;
     }
-    dialogComponent->getEventDispatcher().addEventHandler(this);
+    listen(dialogComponent->getEventDispatcher(), this);
 }
 
 void PlayerDialogSystem::onDialogResponse(IPlayer &player, int dialogId, DialogResponse response, int listItem,

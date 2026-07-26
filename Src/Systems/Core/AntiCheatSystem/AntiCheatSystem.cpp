@@ -95,7 +95,7 @@ AntiCheatSystem::AntiCheatSystem(ICore &core, const ServiceRegister &serviceRegi
       m_timerService(serviceRegister.getService<TimerService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     // Дефолты весов/порога — до первой записи: сервис создаётся раньше систем и
     // сам таблицу не заполняет.

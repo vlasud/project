@@ -15,7 +15,7 @@ VehicleNameSystem::VehicleNameSystem(ICore &core, const ServiceRegister &service
     : BaseSystem(core, serviceRegister), m_vehicleService(serviceRegister.getService<VehicleService>()),
       m_screenNotice(serviceRegister.getService<ScreenNoticeService>())
 {
-    core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerChangeDispatcher(), this);
 }
 
 void VehicleNameSystem::onPlayerStateChange(IPlayer &player, PlayerState newState, PlayerState oldState)

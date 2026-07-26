@@ -5,7 +5,7 @@ VehicleWaypointSystem::VehicleWaypointSystem(ICore &core, const ServiceRegister 
       m_waypointService(serviceRegister.getService<VehicleWaypointService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     m_waypointService.bind(serviceRegister.getService<CheckpointService>());
 

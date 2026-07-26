@@ -108,7 +108,8 @@ void FactionService::registerPermission(int factionId, PermissionMask mask, std:
     Faction *faction = findFaction(factionId);
     if (!faction || name.empty() || mask == 0 || (mask & ((1ull << FIRST_CUSTOM_BIT) - 1)) != 0)
     {
-        LogManager::log(Error, fmt::format("FactionService: invalid permission registration for faction {}", factionId));
+        LogManager::log(Error,
+                        fmt::format("FactionService: invalid permission registration for faction {}", factionId));
         return;
     }
     faction->customPermissions.push_back({mask, std::move(name)});
@@ -288,6 +289,10 @@ bool FactionService::setMember(IPlayer &player, int factionId, std::int64_t rank
                 dbSession.rollback();
                 throw;
             }
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::setMember failed: " + error);
         });
 
     // Назначение лидером уже-члена фракцию не меняет — событие не о чем.
@@ -317,6 +322,10 @@ bool FactionService::removeMember(IPlayer &player)
                 .where("account_id = :account")
                 .bind("account", accountId)
                 .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::removeMember failed: " + error);
         });
 
     notifyChange(player, oldFactionId, NO_FACTION);
@@ -339,6 +348,10 @@ bool FactionService::setMemberRank(IPlayer &player, std::int64_t rankId)
                 .where("account_id = :account")
                 .bind("account", accountId)
                 .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::setMemberRank failed: " + error);
         });
     return true;
 }
@@ -359,6 +372,10 @@ bool FactionService::setMemberSalary(IPlayer &player, std::int64_t salary)
                 .where("account_id = :account")
                 .bind("account", accountId)
                 .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::setMemberSalary failed: " + error);
         });
     return true;
 }
@@ -390,6 +407,10 @@ bool FactionService::setMemberSkin(IPlayer &player, int skin)
                 .where("account_id = :account")
                 .bind("account", accountId)
                 .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::setMemberSkin failed: " + error);
         });
     return true;
 }
@@ -449,6 +470,10 @@ bool FactionService::editRankScope(int factionId, std::int64_t rankId, int subor
                     .bind("rank", rankId)
                     .bind("faction", subordinateId)
                     .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::editRankScope failed: " + error);
         });
     return true;
 }
@@ -511,6 +536,10 @@ bool FactionService::appointLeader(IPlayer &target, int factionId, std::int64_t 
                 .where("faction_id = :faction")
                 .bind("faction", factionId)
                 .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::appointLeader failed: " + error);
         });
 
     return setMember(target, factionId, rankId, true, salary);
@@ -568,6 +597,10 @@ bool FactionService::appointLeaderByAccount(AccountId accountId, int factionId, 
                 dbSession.rollback();
                 throw;
             }
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::appointLeaderByAccount failed: " + error);
         });
 
     if (onlinePlayer)
@@ -601,6 +634,10 @@ bool FactionService::dismissLeader(IPlayer &target)
                 .where("account_id = :account")
                 .bind("account", accountId)
                 .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::dismissLeader failed: " + error);
         });
     return true;
 }
@@ -681,8 +718,8 @@ void FactionService::writeBudget(int factionId, std::int64_t budget)
         },
         [factionId](const std::string &error)
         {
-            LogManager::log(Error,
-                            fmt::format("FactionService: failed to persist budget of faction {}: {}", factionId, error));
+            LogManager::log(
+                Error, fmt::format("FactionService: failed to persist budget of faction {}: {}", factionId, error));
         });
 }
 
@@ -708,6 +745,10 @@ const FactionService::Rank *FactionService::createRank(int factionId, const std:
                 .insert("id", "faction_id", "name", "permissions", "is_default")
                 .values(rank.id, factionId, rank.name, static_cast<std::int64_t>(rank.permissions), 0)
                 .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::createRank failed: " + error);
         });
     return &faction->ranks.back();
 }
@@ -721,7 +762,13 @@ bool FactionService::editRankName(int factionId, std::int64_t rankId, const std:
     rank->name = name;
     DatabaseManager::throwQuery(
         [rankId, name](mysqlx::Schema schema)
-        { schema.getTable("faction_rank").update().set("name", name).where("id = :id").bind("id", rankId).execute(); });
+        {
+            schema.getTable("faction_rank").update().set("name", name).where("id = :id").bind("id", rankId).execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::editRankName failed: " + error);
+        });
     return true;
 }
 
@@ -750,6 +797,10 @@ bool FactionService::editRankPermission(int factionId, std::int64_t rankId, Perm
                 .where("id = :id")
                 .bind("id", rankId)
                 .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::editRankPermission failed: " + error);
         });
     return true;
 }
@@ -762,7 +813,11 @@ bool FactionService::deleteRank(int factionId, std::int64_t rankId)
         return false; // «Без ранга» не удаляется — фракция без рангов невозможна
 
     // Запасной ранг ищем после исключения удаляемого.
-    std::erase_if(faction->ranks, [rankId](const Rank &rank) { return rank.id == rankId; });
+    std::erase_if(faction->ranks,
+                  [rankId](const Rank &rank)
+                  {
+                      return rank.id == rankId;
+                  });
     const Rank *fallback = defaultRank(factionId);
 
     // Онлайн-члены удалённого ранга — на стартовый.
@@ -797,6 +852,10 @@ bool FactionService::deleteRank(int factionId, std::int64_t rankId)
                 dbSession.rollback();
                 throw;
             }
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "FactionService::deleteRank failed: " + error);
         });
     return true;
 }
@@ -834,8 +893,8 @@ void FactionService::loadRanks(std::vector<std::pair<int, Rank>> ranks)
         if (!faction)
         {
             // Фракцию убрали из кода, ранги в БД остались — не наша строка.
-            LogManager::log(Warning, fmt::format("FactionService: rank {} of unregistered faction {}, skipped",
-                                                 rank.id, factionId));
+            LogManager::log(Warning, fmt::format("FactionService: rank {} of unregistered faction {}, skipped", rank.id,
+                                                 factionId));
             continue;
         }
         faction->ranks.push_back(std::move(rank));
@@ -848,8 +907,11 @@ void FactionService::loadRanks(std::vector<std::pair<int, Rank>> ranks)
     // новая фракция в коде получает его автоматически, без ручного INSERT.
     for (Faction &faction : m_factions)
     {
-        const bool hasDefault =
-            std::any_of(faction.ranks.begin(), faction.ranks.end(), [](const Rank &rank) { return rank.isDefault; });
+        const bool hasDefault = std::any_of(faction.ranks.begin(), faction.ranks.end(),
+                                            [](const Rank &rank)
+                                            {
+                                                return rank.isDefault;
+                                            });
         if (hasDefault)
             continue;
 
@@ -866,6 +928,10 @@ void FactionService::loadRanks(std::vector<std::pair<int, Rank>> ranks)
                     .insert("id", "faction_id", "name", "permissions", "is_default")
                     .values(rank.id, factionId, rank.name, 0, 1)
                     .execute();
+            },
+            [](const std::string &error)
+            {
+                LogManager::log(Error, "FactionService::loadRanks failed: " + error);
             });
         LogManager::log(Message, fmt::format("FactionService: created default rank for faction {}", faction.id));
     }

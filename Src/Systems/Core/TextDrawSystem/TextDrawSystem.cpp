@@ -4,7 +4,7 @@
 TextDrawSystem::TextDrawSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_textDrawService(serviceRegister.getService<TextDrawService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void TextDrawSystem::initialize(IComponentList *components)
@@ -17,7 +17,7 @@ void TextDrawSystem::initialize(IComponentList *components)
     }
 
     m_textDrawService.initialize(textDraws);
-    textDraws->getEventDispatcher().addEventHandler(this);
+    listen(textDraws->getEventDispatcher(), this);
 }
 
 void TextDrawSystem::onPlayerClickTextDraw(IPlayer &player, ITextDraw &textDraw)

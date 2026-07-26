@@ -110,5 +110,7 @@ void ClassSelectionService::handleSpawn(IPlayer &player)
 
 void ClassSelectionService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_slots[playerId] = Slot{};
 }

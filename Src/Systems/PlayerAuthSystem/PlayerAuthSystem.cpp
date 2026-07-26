@@ -45,9 +45,9 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
       m_personalSkinService(serviceRegister.getService<PlayerPersonalSkinService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerChangeDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
 
     // Late-применение персиста: если логин-спавн (applyPersistedEquipment)
     // прошёл раньше, чем async-загрузка PlayerMoneyPersistService/

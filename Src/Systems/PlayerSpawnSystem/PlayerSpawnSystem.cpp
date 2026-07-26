@@ -7,8 +7,8 @@
 PlayerSpawnSystem::PlayerSpawnSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_spawnService(serviceRegister.getService<PlayerSpawnService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
 
     m_spawnService.initialize(&serviceRegister.getService<PlayerLocationService>(),
                               &serviceRegister.getService<PlayerSkinService>());

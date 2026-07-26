@@ -24,7 +24,7 @@ NicknameSystem::NicknameSystem(ICore &core, const ServiceRegister &serviceRegist
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_timerService(serviceRegister.getService<TimerService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void NicknameSystem::reject(IPlayer &player, const std::string &reason)

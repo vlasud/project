@@ -216,11 +216,15 @@ void CameraService::stop(IPlayer &player, bool restoreCamera)
 
 bool CameraService::isPlaying(int playerId) const
 {
+    if (!validPlayerId(playerId))
+        return false;
     return m_slots[playerId].playing;
 }
 
 int CameraService::segmentIndex(int playerId) const
 {
+    if (!validPlayerId(playerId))
+        return -1;
     return m_slots[playerId].segment;
 }
 
@@ -235,6 +239,8 @@ void CameraService::initialize(ICore *core, TimerService *timers, PlayerConnecti
 
 void CameraService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     // Пер-плеерный таймер TimerService уже погасил при дисконнекте.
     m_slots[playerId] = Slot{};
 }

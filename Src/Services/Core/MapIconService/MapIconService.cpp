@@ -91,6 +91,8 @@ void MapIconService::clearForPlayer(IPlayer &player)
 
 int MapIconService::personalCount(int playerId) const
 {
+    if (!validPlayerId(playerId))
+        return 0;
     const auto &used = m_used[playerId];
     return static_cast<int>(std::count(used.begin(), used.end(), true));
 }
@@ -106,6 +108,8 @@ void MapIconService::initialize(StreamerService *streamer)
 
 void MapIconService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     // Клиентское состояние умерло вместе с подключением — чистим только слоты.
     m_used[playerId].fill(false);
 }

@@ -14,8 +14,8 @@ PlayerCommandSystem::PlayerCommandSystem(ICore &core, const ServiceRegister &ser
       m_adminService(serviceRegister.getService<AdminService>()),
       m_factionService(serviceRegister.getService<FactionService>())
 {
-    core.getPlayers().getPlayerTextDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerTextDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     // Общий резолвер прав: команды декларируют PermissionSpec, здесь — единственная
     // трансляция в серверные факты. AdminLevel гейтится getEffectiveLevel (0 до

@@ -242,6 +242,8 @@ void WorldService::handleSpawn(IPlayer &player)
 
 void WorldService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_weatherOverride[playerId] = false;
 }
 
@@ -263,19 +265,21 @@ void WorldService::advanceMinute()
 
 void WorldService::applyRealTime()
 {
-    // Локальное время машины сервера; localtime — только главный поток (static-
-    // буфер), значения копируются сразу. Перевод системных часов/DST не требует
+    // Локальное время машины сервера. Перевод системных часов/DST не требует
     // обработки: следующий тик прочитает актуальное время и просто перескочит на
     // него (скачок освещения на час при DST — приемлем).
     int hour = m_hour;
     int minute = m_minute;
     int second = 0;
     const std::time_t now = std::time(nullptr);
-    if (const std::tm *local = std::localtime(&now))
+    // localtime_s, а не localtime: последний отдаёт указатель на общий статический
+    // буфер, и параллельный вызов с воркера БД перетёр бы результат под руками.
+    std::tm local{};
+    if (localtime_s(&local, &now) == 0)
     {
-        hour = std::clamp(local->tm_hour, 0, 23);
-        minute = std::clamp(local->tm_min, 0, 59);
-        second = local->tm_sec;
+        hour = std::clamp(local.tm_hour, 0, 23);
+        minute = std::clamp(local.tm_min, 0, 59);
+        second = local.tm_sec;
     }
 
     // Как advanceMinute: InitGame-час ядру — только при СМЕНЕ часа (setWorldTime

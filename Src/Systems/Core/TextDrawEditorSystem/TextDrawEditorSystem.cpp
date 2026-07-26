@@ -133,8 +133,8 @@ TextDrawEditorSystem::TextDrawEditorSystem(ICore &core, const ServiceRegister &s
       m_commandService(serviceRegister.getService<PlayerCommandService>()),
       m_textDrawService(serviceRegister.getService<TextDrawService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
 
     m_commandService.add("td", {},
                          [this](IPlayer &player, const PlayerCommandService::CommandArgs &)

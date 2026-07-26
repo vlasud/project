@@ -40,11 +40,15 @@ const char *plural(long long n, const char *one, const char *few, const char *ma
 
 bool PlayerActivityService::isPaused(int playerId) const
 {
+    if (!validPlayerId(playerId))
+        return false;
     return m_slots[playerId].paused;
 }
 
 Milliseconds PlayerActivityService::pausedFor(int playerId, TimePoint now) const
 {
+    if (!validPlayerId(playerId))
+        return Milliseconds(0);
     const Slot &slot = m_slots[playerId];
     if (!slot.paused)
     {
@@ -131,6 +135,8 @@ void PlayerActivityService::sweep(TimePoint now)
 
 void PlayerActivityService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     hideLabel(m_slots[playerId]);
     m_slots[playerId] = Slot{};
 }

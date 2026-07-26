@@ -39,11 +39,11 @@ PlayerHealthSystem::PlayerHealthSystem(ICore &core, const ServiceRegister &servi
       m_antiCheatService(serviceRegister.getService<AntiCheatService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerDamageDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerShotDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
+    listen(core.getPlayers().getPlayerDamageDispatcher(), this);
+    listen(core.getPlayers().getPlayerShotDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     // Серверная смерть — единая точка для игровой логики (респаун, киллы,
     // статистика). Срабатывает и без клиентского onPlayerDeath.

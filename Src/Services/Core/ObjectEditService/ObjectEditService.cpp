@@ -49,6 +49,8 @@ void ObjectEditService::end(IPlayer &player)
 
 bool ObjectEditService::isEditing(int playerId) const
 {
+    if (!validPlayerId(playerId))
+        return false;
     return m_slots[playerId].editObjectId >= 0;
 }
 
@@ -94,5 +96,7 @@ void ObjectEditService::handleSelected(IPlayer &player, IObject &object, int mod
 
 void ObjectEditService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_slots[playerId] = Slot{};
 }

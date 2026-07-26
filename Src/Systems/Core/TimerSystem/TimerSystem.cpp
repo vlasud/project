@@ -4,7 +4,7 @@
 TimerSystem::TimerSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_timerService(serviceRegister.getService<TimerService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void TimerSystem::initialize(IComponentList *components)

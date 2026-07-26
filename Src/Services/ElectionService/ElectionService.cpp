@@ -84,6 +84,10 @@ const ElectionService::Party *ElectionService::createParty(AccountId leader, con
                 .insert("id", "name", "description", "leader_account_id", "leader_name")
                 .values(party.id, party.name, party.description, party.leader, party.leaderName)
                 .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "ElectionService::createParty failed: " + error);
         });
     return &m_parties.back();
 }
@@ -114,8 +118,15 @@ bool ElectionService::start(Minutes duration)
         party.votes = 0;
 
     writeState();
-    DatabaseManager::throwQuery([](mysqlx::Schema schema)
-                                { schema.getSession().sql("DELETE FROM election_vote").execute(); });
+    DatabaseManager::throwQuery(
+        [](mysqlx::Schema schema)
+        {
+            schema.getSession().sql("DELETE FROM election_vote").execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "ElectionService::start failed: " + error);
+        });
     return true;
 }
 
@@ -138,7 +149,13 @@ ElectionService::VoteStatus ElectionService::vote(AccountId accountId, std::int6
     ++party->votes;
     DatabaseManager::throwQuery(
         [accountId, partyId](mysqlx::Schema schema)
-        { schema.getTable("election_vote").insert("account_id", "party_id").values(accountId, partyId).execute(); });
+        {
+            schema.getTable("election_vote").insert("account_id", "party_id").values(accountId, partyId).execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "ElectionService::vote failed: " + error);
+        });
     return VoteStatus::Ok;
 }
 
@@ -172,6 +189,10 @@ void ElectionService::writeState()
             mysqlx::Table table = schema.getTable("election");
             table.remove().where("id = 1").execute();
             table.insert("id", "active", "ends_at").values(1, active ? 1 : 0, endsAt).execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "ElectionService::writeState failed: " + error);
         });
 }
 

@@ -19,8 +19,8 @@ LocationDebugSystem::LocationDebugSystem(ICore &core, const ServiceRegister &ser
       m_velocityService(serviceRegister.getService<PlayerVelocityService>()),
       m_antiCheatService(serviceRegister.getService<AntiCheatService>())
 {
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 

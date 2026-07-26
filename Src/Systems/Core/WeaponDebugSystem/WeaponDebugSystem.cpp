@@ -23,8 +23,8 @@ constexpr Milliseconds GT_TIME{2000};
 WeaponDebugSystem::WeaponDebugSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_gameTextService(serviceRegister.getService<GameTextService>())
 {
-    core.getPlayers().getPlayerShotDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerShotDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     serviceRegister.getService<PlayerCommandService>().add(
         "rof", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { toggle(player); },

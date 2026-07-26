@@ -108,6 +108,8 @@ void CheckpointService::clearForPlayer(IPlayer &player)
 
 bool CheckpointService::hasPersonal(int playerId) const
 {
+    if (!validPlayerId(playerId))
+        return false;
     return m_slots[playerId].personal;
 }
 
@@ -338,6 +340,8 @@ void CheckpointService::handleRaceLeave(IPlayer &player)
 
 void CheckpointService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_slots[playerId] = Slot{};
 }
 

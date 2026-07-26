@@ -85,8 +85,8 @@ GangZoneEditorSystem::GangZoneEditorSystem(ICore &core, const ServiceRegister &s
       m_timerService(serviceRegister.getService<TimerService>()),
       m_gangZoneService(serviceRegister.getService<GangZoneService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
 
     m_commandService.add("gzone", {},
                          [this](IPlayer &player, const PlayerCommandService::CommandArgs &)

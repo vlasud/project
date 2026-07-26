@@ -6,9 +6,9 @@
 ClassSelectionSystem::ClassSelectionSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_classSelectionService(serviceRegister.getService<ClassSelectionService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerDamageDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
+    listen(core.getPlayers().getPlayerDamageDispatcher(), this);
 
     m_classSelectionService.initialize(&serviceRegister.getService<AntiCheatService>());
 }
@@ -21,7 +21,7 @@ void ClassSelectionSystem::initialize(IComponentList *components)
         LogManager::log(Error, "ClassSelectionSystem: IClassesComponent is missing");
         return;
     }
-    classes->getEventDispatcher().addEventHandler(this);
+    listen(classes->getEventDispatcher(), this);
 }
 
 bool ClassSelectionSystem::onPlayerRequestClass(IPlayer &player, unsigned int classId)

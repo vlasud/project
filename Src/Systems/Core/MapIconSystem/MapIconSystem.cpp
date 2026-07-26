@@ -5,7 +5,7 @@
 MapIconSystem::MapIconSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_mapIconService(serviceRegister.getService<MapIconService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     m_mapIconService.initialize(&serviceRegister.getService<StreamerService>());
 }

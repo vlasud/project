@@ -39,7 +39,7 @@ MenuSystem::MenuSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_reportService(serviceRegister.getService<ReportService>()),
       m_chatService(serviceRegister.getService<PlayerChatService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     m_commandService.add("mn", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showMenu(player); },
                          {}, "меню игрока: информация, связь с администрацией, помощь",

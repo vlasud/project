@@ -5,7 +5,7 @@
 AttachmentSystem::AttachmentSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_attachmentService(serviceRegister.getService<AttachmentService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void AttachmentSystem::initialize(IComponentList *components)
@@ -16,7 +16,7 @@ void AttachmentSystem::initialize(IComponentList *components)
         LogManager::log(Error, "AttachmentSystem: IObjectsComponent is missing, attachments editing is disabled");
         return;
     }
-    objects->getEventDispatcher().addEventHandler(this);
+    listen(objects->getEventDispatcher(), this);
 }
 
 void AttachmentSystem::onPlayerAttachedObjectEdited(IPlayer &player, int index, bool saved,

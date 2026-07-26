@@ -12,9 +12,9 @@ StreamerSystem::StreamerSystem(ICore &core, const ServiceRegister &serviceRegist
       m_streamerService(serviceRegister.getService<StreamerService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getEventDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getEventDispatcher(), this);
 }
 
 void StreamerSystem::initialize(IComponentList *components)

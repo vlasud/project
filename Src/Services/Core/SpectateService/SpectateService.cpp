@@ -62,11 +62,15 @@ void SpectateService::stop(IPlayer &spectator)
 
 bool SpectateService::isSpectating(int playerId) const
 {
+    if (!validPlayerId(playerId))
+        return false;
     return m_slots[playerId].active;
 }
 
 int SpectateService::spectateTargetPlayer(int playerId) const
 {
+    if (!validPlayerId(playerId))
+        return -1;
     const Slot &slot = m_slots[playerId];
     return (slot.active && !slot.vehicleTarget) ? slot.targetId : -1;
 }
@@ -185,6 +189,8 @@ void SpectateService::handleSpawn(IPlayer &player)
 
 void SpectateService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_slots[playerId] = Slot{};
 
     // Он мог быть чьей-то целью — наблюдателей останавливаем с TargetLost.

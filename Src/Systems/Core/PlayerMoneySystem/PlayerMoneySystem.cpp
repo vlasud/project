@@ -4,8 +4,8 @@ PlayerMoneySystem::PlayerMoneySystem(ICore &core, const ServiceRegister &service
     : BaseSystem(core, serviceRegister), m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
       m_antiCheatService(serviceRegister.getService<AntiCheatService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
 }
 
 void PlayerMoneySystem::onPlayerSpawn(IPlayer &player)

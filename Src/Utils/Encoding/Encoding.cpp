@@ -85,8 +85,10 @@ static const std::array<unsigned char, 0x10000> &getCp1251Lut()
 
         for (int i = 0; i < 32; ++i)
         {
-            t[0x0410 + i] = 0xC0 + i;
-            t[0x0430 + i] = 0xE0 + i;
+            // Явное сужение: значения заведомо в диапазоне байта (0xC0..0xDF и
+            // 0xE0..0xFF), но арифметика int'овая — без каста это предупреждение.
+            t[0x0410 + i] = static_cast<unsigned char>(0xC0 + i);
+            t[0x0430 + i] = static_cast<unsigned char>(0xE0 + i);
         }
 
         return t;

@@ -58,7 +58,7 @@ AntiCheatTestSystem::AntiCheatTestSystem(ICore &core, const ServiceRegister &ser
       m_velocityService(serviceRegister.getService<PlayerVelocityService>())
 {
     // Разгон работает на приходе синка — подписка обязательна.
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
 
     serviceRegister.getService<PlayerCommandService>().add(
         "actest", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showMenu(player); },
@@ -367,10 +367,10 @@ void AntiCheatTestSystem::run(IPlayer &player, Test test)
     {
         m_running[playerId] = true;
         const TimePoint now = std::chrono::steady_clock::now();
-        SpeedTest &test = m_speed[playerId];
-        test.until = now + SPEED_DURATION;
-        test.lastPush = now;
-        test.lastReport = now;
+        SpeedTest &speedTest = m_speed[playerId]; // не test: он бы скрыл параметр функции
+        speedTest.until = now + SPEED_DURATION;
+        speedTest.lastPush = now;
+        speedTest.lastReport = now;
         notify(player, "Тащу вперёд со скоростью 16 м/с (около 80 метров) — ожидается SpeedHack");
         return;
     }

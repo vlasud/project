@@ -29,8 +29,8 @@ GridDebugSystem::GridDebugSystem(ICore &core, const ServiceRegister &serviceRegi
       m_streamerService(serviceRegister.getService<StreamerService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 

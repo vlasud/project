@@ -13,7 +13,7 @@ const Colour DEBUG_COLOUR{120, 220, 255};
 PlayerSessionSystem::PlayerSessionSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_sessionService(serviceRegister.getService<PlayerSessionService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     serviceRegister.getService<PlayerCommandService>().add(
         "session", {},

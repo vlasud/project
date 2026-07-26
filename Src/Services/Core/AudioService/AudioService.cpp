@@ -132,6 +132,8 @@ void AudioService::stopStream(IPlayer &player)
 
 bool AudioService::isStreaming(int playerId) const
 {
+    if (!validPlayerId(playerId))
+        return false;
     return !m_streams[playerId].empty();
 }
 
@@ -149,6 +151,8 @@ void AudioService::initialize(ICore *core)
 
 void AudioService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_streams[playerId].clear();
 }
 

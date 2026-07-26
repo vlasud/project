@@ -6,10 +6,10 @@ PlayerLocationSystem::PlayerLocationSystem(ICore &core, const ServiceRegister &s
     : BaseSystem(core, serviceRegister), m_locationService(serviceRegister.getService<PlayerLocationService>()),
       m_antiCheatService(serviceRegister.getService<AntiCheatService>())
 {
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
+    listen(core.getPlayers().getPlayerChangeDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 bool PlayerLocationSystem::onPlayerUpdate(IPlayer &player, TimePoint now)

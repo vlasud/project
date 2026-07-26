@@ -9,10 +9,10 @@ PlayerStateSystem::PlayerStateSystem(ICore &core, const ServiceRegister &service
 {
     m_stateService.bind(serviceRegister.getService<PlayerLocationService>());
 
-    core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerChangeDispatcher(), this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void PlayerStateSystem::onPlayerStateChange(IPlayer &player, PlayerState newState, PlayerState oldState)

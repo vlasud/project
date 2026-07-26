@@ -548,6 +548,8 @@ void StreamerService::sweepPickups(TimePoint now)
 
 void StreamerService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     // Клиентские сущности умирают вместе с соединением — чистим только учёт.
     m_players[playerId] = PerPlayer{};
 }

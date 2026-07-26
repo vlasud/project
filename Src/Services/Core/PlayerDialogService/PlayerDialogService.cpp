@@ -147,6 +147,8 @@ void PlayerDialogService::handleResponse(IPlayer &player, int dialogId, DialogRe
 
 void PlayerDialogService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     // serial не сбрасываем: он продолжает защищать от запоздалых ответов прошлого подключения.
     Slot &slot = m_slots[playerId];
     slot.activeId = -1;

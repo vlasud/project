@@ -5,7 +5,7 @@
 ObjectEditSystem::ObjectEditSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_objectEditService(serviceRegister.getService<ObjectEditService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void ObjectEditSystem::initialize(IComponentList *components)
@@ -16,7 +16,7 @@ void ObjectEditSystem::initialize(IComponentList *components)
         LogManager::log(Error, "ObjectEditSystem: IObjectsComponent is missing, object editing is disabled");
         return;
     }
-    objects->getEventDispatcher().addEventHandler(this);
+    listen(objects->getEventDispatcher(), this);
 }
 
 void ObjectEditSystem::onObjectEdited(IPlayer &player, IObject &object, ObjectEditResponse response, Vector3 offset,

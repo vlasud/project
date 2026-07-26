@@ -412,6 +412,8 @@ bool TextDrawService::handleCancelSelection(IPlayer &player)
 
 void TextDrawService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     // Per-player текстдравы умирают вместе с пулом игрока — чистим только наше.
     m_slots[playerId].clickHandlers.clear();
     m_slots[playerId].cancelHandler = nullptr;

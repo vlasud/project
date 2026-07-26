@@ -35,13 +35,17 @@ bool parseIntFull(StringView token, int &out)
 std::size_t PlayerCommandService::CiHash::operator()(StringView s) const noexcept
 {
     // FNV-1a по нижнему регистру: хэш не зависит от регистра ввода.
-    std::size_t h = 14695981039346656037ull;
+    //
+    // Считаем строго в uint64: на 32-битной сборке (наша) size_t — 32 бита, и
+    // 64-битные константы FNV молча усекались, давая не FNV-1a, а произвольный
+    // его обрезок. Сужаем только результат.
+    std::uint64_t h = 14695981039346656037ull;
     for (char c : s)
     {
         h ^= static_cast<unsigned char>(asciiLower(c));
         h *= 1099511628211ull;
     }
-    return h;
+    return static_cast<std::size_t>(h);
 }
 
 bool PlayerCommandService::CiEqual::operator()(StringView a, StringView b) const noexcept

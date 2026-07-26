@@ -33,6 +33,8 @@ void PlayerKeyService::unsubscribe(int subscriptionId)
 
 bool PlayerKeyService::isPressed(int playerId, std::uint32_t key) const
 {
+    if (!validPlayerId(playerId))
+        return false;
     return (m_lastKeys[playerId] & key) == key;
 }
 
@@ -74,6 +76,8 @@ void PlayerKeyService::handleKeyStateChange(IPlayer &player, std::uint32_t newKe
 
 void PlayerKeyService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_lastKeys[playerId] = 0;
     m_lastPress[playerId].clear();
 }

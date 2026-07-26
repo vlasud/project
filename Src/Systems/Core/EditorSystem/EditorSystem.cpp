@@ -301,8 +301,8 @@ EditorSystem::EditorSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_vehicleService(serviceRegister.getService<VehicleService>()),
       m_objectEditService(serviceRegister.getService<ObjectEditService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
 
     m_commandService.add("editor", {},
                          [this](IPlayer &player, const PlayerCommandService::CommandArgs &)

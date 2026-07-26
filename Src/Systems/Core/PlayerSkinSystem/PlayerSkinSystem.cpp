@@ -3,8 +3,8 @@
 PlayerSkinSystem::PlayerSkinSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_skinService(serviceRegister.getService<PlayerSkinService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
 }
 
 void PlayerSkinSystem::onPlayerConnect(IPlayer &player)

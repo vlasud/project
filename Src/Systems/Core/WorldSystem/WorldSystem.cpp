@@ -3,8 +3,8 @@
 WorldSystem::WorldSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_worldService(serviceRegister.getService<WorldService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
 
     m_worldService.initialize(&core, &serviceRegister.getService<TimerService>());
 

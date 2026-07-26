@@ -8,7 +8,7 @@
 PickupSystem::PickupSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_pickupService(serviceRegister.getService<PickupService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     m_pickupService.initialize(&serviceRegister.getService<StreamerService>(),
                                &serviceRegister.getService<PlayerLocationService>(),
@@ -23,7 +23,7 @@ void PickupSystem::initialize(IComponentList *components)
         LogManager::log(Error, "PickupSystem: IPickupsComponent is missing, pickups are disabled");
         return;
     }
-    pickups->getEventDispatcher().addEventHandler(this);
+    listen(pickups->getEventDispatcher(), this);
 }
 
 void PickupSystem::onPlayerPickUpPickup(IPlayer &player, IPickup &pickup)

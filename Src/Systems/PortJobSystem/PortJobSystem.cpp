@@ -113,7 +113,7 @@ PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister
 
     // Респавн: чекпоинт источника переставляем на onPlayerSpawn (персональный
     // чекпоинт CheckpointService после смерти-респавна сам не перепоказывается).
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
 }
 
 void PortJobSystem::initialize(IComponentList * /*components*/)

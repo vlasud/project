@@ -5,7 +5,7 @@
 ServerLogoSystem::ServerLogoSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_textDrawService(serviceRegister.getService<TextDrawService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void ServerLogoSystem::initialize(IComponentList *components)

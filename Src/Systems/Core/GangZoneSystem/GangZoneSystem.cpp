@@ -4,7 +4,7 @@
 GangZoneSystem::GangZoneSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_gangZoneService(serviceRegister.getService<GangZoneService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void GangZoneSystem::initialize(IComponentList *components)

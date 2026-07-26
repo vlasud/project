@@ -16,7 +16,7 @@ void MovingObjectSystem::initialize(IComponentList *components)
         return;
     }
     m_movingObjectService.initialize(objects);
-    objects->getEventDispatcher().addEventHandler(this);
+    listen(objects->getEventDispatcher(), this);
 }
 
 void MovingObjectSystem::onMoved(IObject &object)

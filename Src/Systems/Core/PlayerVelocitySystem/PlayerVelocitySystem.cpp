@@ -8,8 +8,8 @@ PlayerVelocitySystem::PlayerVelocitySystem(ICore &core, const ServiceRegister &s
 {
     m_velocityService.bind(serviceRegister.getService<PlayerLocationService>());
 
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 bool PlayerVelocitySystem::onPlayerUpdate(IPlayer &player, TimePoint now)

@@ -10,10 +10,10 @@ PlayerWeaponSystem::PlayerWeaponSystem(ICore &core, const ServiceRegister &servi
       m_velocityService(serviceRegister.getService<PlayerVelocityService>()),
       m_weaponProficiencyService(serviceRegister.getService<WeaponProficiencyService>())
 {
-    core.getPlayers().getPlayerShotDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerShotDispatcher(), this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 namespace

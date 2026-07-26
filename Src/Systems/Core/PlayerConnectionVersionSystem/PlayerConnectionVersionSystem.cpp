@@ -4,7 +4,7 @@ PlayerConnectionVersionSystem::PlayerConnectionVersionSystem(ICore &core, const 
     : BaseSystem(core, serviceRegister),
       m_playerConnectionVersionService(serviceRegister.getService<PlayerConnectionVersionService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void PlayerConnectionVersionSystem::onPlayerConnect(IPlayer &player)

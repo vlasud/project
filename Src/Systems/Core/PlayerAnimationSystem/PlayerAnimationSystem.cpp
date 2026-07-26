@@ -4,8 +4,8 @@ PlayerAnimationSystem::PlayerAnimationSystem(ICore &core, const ServiceRegister 
     : BaseSystem(core, serviceRegister), m_animationService(serviceRegister.getService<PlayerAnimationService>()),
       m_antiCheatService(serviceRegister.getService<AntiCheatService>())
 {
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 bool PlayerAnimationSystem::onPlayerUpdate(IPlayer &player, TimePoint now)

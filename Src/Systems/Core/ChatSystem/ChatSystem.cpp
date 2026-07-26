@@ -44,8 +44,8 @@ ChatSystemSystem::ChatSystemSystem(ICore &core, const ServiceRegister &serviceRe
       m_animationService(serviceRegister.getService<PlayerAnimationService>()),
       m_stateService(serviceRegister.getService<PlayerStateService>())
 {
-    core.getPlayers().getPlayerTextDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerTextDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
     m_listeners.reserve(64);
 
     // Команды модерации чата — требуют админ-уровень (проверка через PermissionSpec::admin).

@@ -7,7 +7,7 @@ DeathPenaltySystem::DeathPenaltySystem(ICore &core, const ServiceRegister &servi
       m_timerService(serviceRegister.getService<TimerService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>())
 {
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
 
     // Смерть серверно-авторитетна. Штраф здесь НЕ включаем (отсчёт от респавна) —
     // фиксируем ДОЛГ по аккаунту, чтобы выход до респавна не отменил штраф. Кэп и

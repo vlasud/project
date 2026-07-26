@@ -18,6 +18,10 @@ void BankService::deposit(AccountId accountId, std::int64_t amount)
                      "ON DUPLICATE KEY UPDATE balance = balance + VALUES(balance)")
                 .bind(accountId, amount)
                 .execute();
+        },
+        [](const std::string &error)
+        {
+            LogManager::log(Error, "BankService::deposit failed: " + error);
         });
 }
 
@@ -67,7 +71,10 @@ void BankService::creditFactionSalaries(int factionId, std::int64_t budgetCap,
                 throw; // errorCallback залогирует; бюджет в памяти не тронут (кредит=0)
             }
         },
-        [callback = std::move(callback)](std::int64_t creditedTotal) { callback(creditedTotal); },
+        [callback = std::move(callback)](std::int64_t creditedTotal)
+        {
+            callback(creditedTotal);
+        },
         [errorCallback = std::move(errorCallback)](const std::string &error)
         {
             // Сбой транзакции (rollback): деньги не зачислены, бюджет не тронут.
@@ -91,6 +98,12 @@ void BankService::getBalance(AccountId accountId, std::function<void(std::int64_
             mysqlx::Row row = result.fetchOne();
             return row ? row.get(0).get<std::int64_t>() : std::int64_t{0};
         },
-        [callback = std::move(callback)](std::int64_t balance) { callback(balance); },
-        [](const std::string &) { LogManager::log(Error, "BankService: failed to read balance"); });
+        [callback = std::move(callback)](std::int64_t balance)
+        {
+            callback(balance);
+        },
+        [](const std::string &)
+        {
+            LogManager::log(Error, "BankService: failed to read balance");
+        });
 }

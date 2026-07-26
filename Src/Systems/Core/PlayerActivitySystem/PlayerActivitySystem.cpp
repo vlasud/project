@@ -7,8 +7,8 @@ PlayerActivitySystem::PlayerActivitySystem(ICore &core, const ServiceRegister &s
     : BaseSystem(core, serviceRegister), m_activityService(serviceRegister.getService<PlayerActivityService>()),
       m_timerService(serviceRegister.getService<TimerService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
 }
 
 void PlayerActivitySystem::initialize(IComponentList *components)

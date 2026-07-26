@@ -7,8 +7,8 @@ CheckpointSystem::CheckpointSystem(ICore &core, const ServiceRegister &serviceRe
     : BaseSystem(core, serviceRegister), m_checkpointService(serviceRegister.getService<CheckpointService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
 
     m_checkpointService.initialize(&m_locationService, &serviceRegister.getService<AntiCheatService>());
 }
@@ -21,7 +21,7 @@ void CheckpointSystem::initialize(IComponentList *components)
         LogManager::log(Error, "CheckpointSystem: ICheckpointsComponent is missing, checkpoints are disabled");
         return;
     }
-    checkpoints->getEventDispatcher().addEventHandler(this);
+    listen(checkpoints->getEventDispatcher(), this);
 }
 
 bool CheckpointSystem::onPlayerUpdate(IPlayer &player, TimePoint now)

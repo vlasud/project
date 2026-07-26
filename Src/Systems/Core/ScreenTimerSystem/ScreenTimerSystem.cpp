@@ -6,7 +6,7 @@ ScreenTimerSystem::ScreenTimerSystem(ICore &core, const ServiceRegister &service
     : BaseSystem(core, serviceRegister), m_screenTimer(serviceRegister.getService<ScreenTimerService>())
 {
     m_screenTimer.initialize(&serviceRegister.getService<TextDrawService>());
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void ScreenTimerSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)

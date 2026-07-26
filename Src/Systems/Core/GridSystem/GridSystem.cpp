@@ -9,9 +9,9 @@ GridSystem::GridSystem(ICore &core, const ServiceRegister &serviceRegister)
     m_playerHandles.fill(GridService::INVALID_HANDLE);
     m_vehicleHandles.fill(GridService::INVALID_HANDLE);
 
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void GridSystem::initialize(IComponentList *components)

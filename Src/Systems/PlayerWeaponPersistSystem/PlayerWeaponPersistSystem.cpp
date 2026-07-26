@@ -13,7 +13,7 @@ PlayerWeaponPersistSystem::PlayerWeaponPersistSystem(ICore &core, const ServiceR
       m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     m_sessionService.subscribeStart([this](IPlayer &player, const PlayerSessionService::Session &session)
                                     { loadWeapons(player, session); });

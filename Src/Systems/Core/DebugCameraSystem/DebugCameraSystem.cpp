@@ -54,8 +54,8 @@ DebugCameraSystem::DebugCameraSystem(ICore &core, const ServiceRegister &service
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
       m_cameraService(serviceRegister.getService<CameraService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
 
     m_commandService.add("camera", {},
                          [this](IPlayer &player, const PlayerCommandService::CommandArgs &)

@@ -24,9 +24,9 @@ VehicleSystem::VehicleSystem(ICore &core, const ServiceRegister &serviceRegister
       m_antiCheatService(serviceRegister.getService<AntiCheatService>()),
       m_timerService(serviceRegister.getService<TimerService>())
 {
-    core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerChangeDispatcher(), this);
+    listen(core.getPlayers().getPlayerUpdateDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void VehicleSystem::initialize(IComponentList *components)
@@ -42,7 +42,7 @@ void VehicleSystem::initialize(IComponentList *components)
     // Подписка на выстрелы именно здесь (initialize выполняется после всех
     // конструкторов): мы оказываемся в диспатчере ПОСЛЕ PlayerWeaponSystem —
     // фейковый выстрел из невыданного оружия отброшен до нас и урона не нанесёт.
-    m_core.getPlayers().getPlayerShotDispatcher().addEventHandler(this);
+    listen(m_core.getPlayers().getPlayerShotDispatcher(), this);
 
     // Секундный проход по пулу — по таймеру (после bind: пул машин готов), не
     // per-tick: дренаж топлива + тушение машин без водителя (их HP пишут принятые

@@ -3,7 +3,7 @@
 AudioSystem::AudioSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_audioService(serviceRegister.getService<AudioService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     m_audioService.initialize(&core);
 }

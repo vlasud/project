@@ -105,7 +105,7 @@ AttachmentEditorSystem::AttachmentEditorSystem(ICore &core, const ServiceRegiste
       m_commandService(serviceRegister.getService<PlayerCommandService>()),
       m_attachmentService(serviceRegister.getService<AttachmentService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     // Admin-гейт — на диспетче команды (как в прочих дев-редакторах проекта);
     // обработчики диалогов его не перепроверяют. Принятый риск: если дева разжаловали

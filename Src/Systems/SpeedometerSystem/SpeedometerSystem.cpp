@@ -60,8 +60,8 @@ SpeedometerSystem::SpeedometerSystem(ICore &core, const ServiceRegister &service
       m_vehicleService(serviceRegister.getService<VehicleService>()),
       m_timerService(serviceRegister.getService<TimerService>())
 {
-    core.getPlayers().getPlayerChangeDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerChangeDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void SpeedometerSystem::initialize(IComponentList *components)

@@ -9,7 +9,7 @@ PlayerPersonalSkinSystem::PlayerPersonalSkinSystem(ICore &core, const ServiceReg
       m_personalSkinService(serviceRegister.getService<PlayerPersonalSkinService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     // Персист ЛИЧНОГО скина (источник правды о гражданском скине аккаунта), а не
     // текущего применённого — тот мог быть органным. Идемпотентный UPDATE по

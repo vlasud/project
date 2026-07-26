@@ -22,12 +22,28 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/Src")
 
 # nlohmann/json — header-only single-header в ThirdParty/nlohmann; подключается как
 # #include <nlohmann/json.hpp> (корень include — ThirdParty, неймспейс nlohmann/).
-target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/ThirdParty")
+# SYSTEM: предупреждения из чужих заголовков не наши и только прятали бы свои.
+target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/ThirdParty")
+
+# Предупреждения компилятора — на своём коде по максимуму. Без них молча проходят
+# знаковые сравнения, неинициализированные члены, потерянные возвраты и срезка.
+# /WX (warnings as errors) НЕ включаем: сборка не должна падать из-за нового
+# предупреждения в обновлённом тулчейне — но список должен оставаться пустым.
+#
+# C4100 (неиспользуемый формальный параметр) выключен осознанно: подавляющее
+# большинство таких мест — обязательные override'ы обработчиков SDK, где сигнатуру
+# диктует интерфейс (onPlayerDisconnect(player, reason) и т.п.). Убирать имена
+# параметров ради тишины — потерять документацию сигнатуры.
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /W4 /permissive- /wd4100)
+else()
+    target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC OMP-SDK fmt::fmt)
 
 set(MYSQL_CONNECTOR_DIR "${CMAKE_SOURCE_DIR}/ThirdParty/mysql-connector-c++-8.0.33-win32")
-target_include_directories(${PROJECT_NAME} PRIVATE
+target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
     "${MYSQL_CONNECTOR_DIR}/include"
     "${MYSQL_CONNECTOR_DIR}/include/mysql"
 )
@@ -45,7 +61,7 @@ else()
 endif()
 
 set(LIBSODIUM_CONNECTOR_DIR "${CMAKE_SOURCE_DIR}/ThirdParty/libsodium-1.0.22")
-target_include_directories(${PROJECT_NAME} PRIVATE
+target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
     "${LIBSODIUM_CONNECTOR_DIR}/include"
 )
 target_link_libraries(${PROJECT_NAME} PRIVATE

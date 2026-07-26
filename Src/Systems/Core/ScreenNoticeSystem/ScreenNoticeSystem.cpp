@@ -7,7 +7,7 @@ ScreenNoticeSystem::ScreenNoticeSystem(ICore &core, const ServiceRegister &servi
     : BaseSystem(core, serviceRegister), m_screenNotice(serviceRegister.getService<ScreenNoticeService>())
 {
     m_screenNotice.initialize(&serviceRegister.getService<TextDrawService>(), &serviceRegister.getService<TimerService>());
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 }
 
 void ScreenNoticeSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)

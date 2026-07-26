@@ -29,7 +29,7 @@ WeaponProficiencySystem::WeaponProficiencySystem(ICore &core, const ServiceRegis
       m_weaponSkillService(serviceRegister.getService<WeaponSkillService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
 
     m_sessionService.subscribeStart(
         [this](IPlayer &player, const PlayerSessionService::Session &session)

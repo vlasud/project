@@ -13,8 +13,8 @@ SpectateSystem::SpectateSystem(ICore &core, const ServiceRegister &serviceRegist
     : BaseSystem(core, serviceRegister), m_spectateService(serviceRegister.getService<SpectateService>()),
       m_timerService(serviceRegister.getService<TimerService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
 
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 

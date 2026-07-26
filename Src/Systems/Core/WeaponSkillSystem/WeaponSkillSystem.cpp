@@ -18,8 +18,8 @@ WeaponSkillSystem::WeaponSkillSystem(ICore &core, const ServiceRegister &service
     : BaseSystem(core, serviceRegister), m_weaponSkillService(serviceRegister.getService<WeaponSkillService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>())
 {
-    core.getPlayers().getPlayerConnectDispatcher().addEventHandler(this);
-    core.getPlayers().getPlayerSpawnDispatcher().addEventHandler(this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
 
     // Дев-тулза: одна команда -> диалог-меню (серверная правда + максимум/сброс).
     // Гейт прав обязателен: maxOut/reset навыков — privilege escalation без него.
