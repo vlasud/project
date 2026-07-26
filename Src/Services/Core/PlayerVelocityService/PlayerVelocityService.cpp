@@ -21,8 +21,15 @@ constexpr float FALL_HORIZONTAL_MAX = 110.0f;
 // Транспорт: самые быстрые самолёты ~75-80 м/с; лимит ловит 2x-спидхак.
 constexpr float VEHICLE_MAX = 120.0f;
 
-// Порог «игрок падает»: вертикальная скорость вниз быстрее этого значения.
-constexpr float FALLING_VZ = -2.0f;
+// Порог «игрок падает»: вертикальная скорость вниз быстрее этого значения. Ветка
+// падения снимает пеший лимит горизонтали, поэтому порог должен отделять СВОБОДНОЕ
+// падение, а не любой спуск.
+//
+// Прежние -2 м/с этого не делали: бег со скоростью 16 м/с под уклон всего в 8°
+// даёт -2.2 м/с — и спидхакер, бегущий с горки, уходил в ветку с лимитом 110 м/с,
+// то есть не ловился вовсе. Свободное падение набирает 10 м/с примерно за секунду,
+// а бег под уклон столько не даёт.
+constexpr float FALLING_VZ = -10.0f;
 
 // Сколько скорость должна продержаться над лимитом, чтобы это было нарушением.
 // Покрывает легальные всплески: выход из машины на ходу, отброс взрывом,
@@ -179,6 +186,9 @@ PlayerVelocityService::VerifyOutcome PlayerVelocityService::sample(IPlayer &play
     float value = 0.0f;
     float limit = 0.0f;
 
+    st.branch = (inVehicle || surfing) ? State::Branch::Vehicle
+                                       : (falling ? State::Branch::Falling : State::Branch::Foot);
+
     if (inVehicle || surfing)
     {
         // Транспорт и сёрф: единый щедрый лимит полной скорости.
@@ -241,6 +251,34 @@ PlayerVelocityService::VerifyOutcome PlayerVelocityService::sample(IPlayer &play
     }
 
     return outcome;
+}
+
+const char *PlayerVelocityService::lastBranch(int playerId) const
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return "нет данных";
+    switch (m_state[playerId].branch)
+    {
+    case State::Branch::Foot:
+        return "пеший";
+    case State::Branch::Falling:
+        return "падение";
+    case State::Branch::Vehicle:
+        return "транспорт/сёрф";
+    case State::Branch::None:
+        break;
+    }
+    return "нет данных";
+}
+
+int PlayerVelocityService::overMs(int playerId, TimePoint now) const
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return 0;
+    const TimePoint since = m_state[playerId].overSince;
+    if (since.time_since_epoch().count() == 0)
+        return 0; // скорость под лимитом — окно устойчивости сброшено
+    return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now - since).count());
 }
 
 void PlayerVelocityService::reset(int playerId)

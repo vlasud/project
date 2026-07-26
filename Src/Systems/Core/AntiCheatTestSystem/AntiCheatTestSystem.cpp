@@ -18,12 +18,18 @@ const Colour DEBUG_COLOUR{120, 220, 255};
 constexpr Milliseconds TURN_STEP{80};
 constexpr int TURN_STEPS = 14;
 
-// Бег: 1.5 м каждые 100 мс — это 15 м/с, выше лимита скорости пешком, но в
-// пределах лимита достижимости позиции (иначе поймает не тот детектор).
-// Длительность с запасом над окном устойчивости.
-constexpr Milliseconds RUN_STEP{100};
-constexpr int RUN_STEPS = 40;
-constexpr float RUN_DISTANCE = 1.5f;
+// Разгон. Два способа, которые НЕ работают, и почему:
+//  * setVelocity пешему — игра гасит импульс до скорости бега, сервер видит 5-7 м/с;
+//  * телепорты по своему таймеру — клиент не успевает их применять и шлёт назад
+//    старую точку, дельта позиции пилит около нуля.
+// Работает третий: сдвигать позицию на приходе синка, отсчитывая от только что
+// принятой клиентской точки — такой сдвиг клиент накапливает.
+constexpr float SPEED_TARGET = 16.0f; // м/с при лимите 9
+constexpr Seconds SPEED_DURATION{5};  // вдвое больше окна устойчивости
+constexpr Milliseconds SPEED_REPORT{500};
+// Ограничение шага: при разрыве синков (лаг, пауза) dt большой, и один сдвиг стал
+// бы прыжком через полкарты — его поймал бы детектор телепорта вместо скорости.
+constexpr float SPEED_MAX_STEP = 1.5f;
 
 // Рывок позиции: заметно дальше любого легального перемещения за тик.
 constexpr float JUMP_DISTANCE = 500.0f;
@@ -48,8 +54,12 @@ AntiCheatTestSystem::AntiCheatTestSystem(ICore &core, const ServiceRegister &ser
     : BaseSystem(core, serviceRegister), m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_timerService(serviceRegister.getService<TimerService>()),
       m_antiCheatService(serviceRegister.getService<AntiCheatService>()),
-      m_weaponService(serviceRegister.getService<PlayerWeaponService>())
+      m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
+      m_velocityService(serviceRegister.getService<PlayerVelocityService>())
 {
+    // Разгон работает на приходе синка — подписка обязательна.
+    core.getPlayers().getPlayerUpdateDispatcher().addEventHandler(this);
+
     serviceRegister.getService<PlayerCommandService>().add(
         "actest", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showMenu(player); },
         PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "панель проверки детекторов анти-чита",
@@ -108,10 +118,23 @@ void AntiCheatTestSystem::run(IPlayer &player, Test test)
         return;
 
     case Test::SpeedHack:
+        // В транспорте лимит скорости другой (120 м/с) — тест пешего ускорителя
+        // там просто ничего не покажет.
+        if (player.getState() != PlayerState_OnFoot)
+        {
+            notify(player, "Выйдите из транспорта: тест проверяет пеший лимит скорости");
+            return;
+        }
+    {
         m_running[playerId] = true;
-        notify(player, "Тащу вперёд со скоростью 15 м/с — ожидается SpeedHack");
-        stepRun(playerId, RUN_STEPS);
+        const TimePoint now = std::chrono::steady_clock::now();
+        SpeedTest &test = m_speed[playerId];
+        test.until = now + SPEED_DURATION;
+        test.lastPush = now;
+        test.lastReport = now;
+        notify(player, "Тащу вперёд со скоростью 16 м/с (около 80 метров) — ожидается SpeedHack");
         return;
+    }
 
     case Test::TeleportHack:
     {
@@ -202,26 +225,44 @@ void AntiCheatTestSystem::stepTurn(int playerId, int stepsLeft)
     m_timerService.setTimeout(TURN_STEP, [this, playerId, stepsLeft]() { stepTurn(playerId, stepsLeft - 1); });
 }
 
-void AntiCheatTestSystem::stepRun(int playerId, int stepsLeft)
+bool AntiCheatTestSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
 {
-    IPlayer *player = m_core.getPlayers().get(playerId);
-    if (!player)
+    const int playerId = player.getID();
+    SpeedTest &test = m_speed[playerId];
+    if (test.until.time_since_epoch().count() == 0)
     {
-        m_running[playerId] = false;
-        return;
+        return true; // разгон не запускали
     }
-    if (stepsLeft <= 0)
+
+    if (now >= test.until)
     {
+        test = SpeedTest{};
         finish(playerId);
-        return;
+        return true;
     }
 
-    // Сдвиг мимо сервиса позиции: каждый шаг в пределах достижимого за тик (чтобы
-    // сработал детектор скорости, а не телепорта), но темп держится выше лимита.
-    const Vector3 position = player->getPosition() + facing(player->getRotation().ToEuler().z) * RUN_DISTANCE;
-    player->setPosition(position);
+    // Шаг = целевая скорость * фактический интервал между синками: так серверная
+    // скорость (дельта принятых позиций) выходит ровно на SPEED_TARGET.
+    const float dt = std::chrono::duration<float>(now - test.lastPush).count();
+    test.lastPush = now;
+    const float step = std::min(SPEED_TARGET * dt, SPEED_MAX_STEP);
+    player.setPosition(player.getPosition() + facing(player.getRotation().ToEuler().z) * step);
 
-    m_timerService.setTimeout(RUN_STEP, [this, playerId, stepsLeft]() { stepRun(playerId, stepsLeft - 1); });
+    // Диагностика: раз в полсекунды показываем, что видит СЕРВЕР. Без неё
+    // «нарушения нет» неотличимо от «детект сломан» — как и вышло в первый раз.
+    if (now - test.lastReport >= SPEED_REPORT)
+    {
+        test.lastReport = now;
+        // Показываем всё, от чего зависит вердикт: скорость, вертикаль (уводит в ветку
+        // падения), выбранную ветку лимитов и накопленное время над лимитом. По этим
+        // четырём числам видно, где именно теряется нарушение.
+        notify(player, fmt::format("{:.1f} м/с | вертикаль {:+.1f} | ветка: {} | над лимитом: {} мс (нужно 2000)",
+                                   m_velocityService.getHorizontalSpeed(playerId),
+                                   m_velocityService.getVerticalSpeed(playerId),
+                                   m_velocityService.lastBranch(playerId),
+                                   m_velocityService.overMs(playerId, now)));
+    }
+    return true;
 }
 
 void AntiCheatTestSystem::finish(int playerId)

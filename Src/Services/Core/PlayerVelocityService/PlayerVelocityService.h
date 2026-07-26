@@ -49,6 +49,13 @@ class PlayerVelocityService final : public IService
         std::string detail;
     };
 
+    // --- дев-диагностика (AntiCheatTestSystem) ---
+    // Какая ветка лимитов выбрана на последнем сэмпле и сколько миллисекунд скорость
+    // держится над лимитом. Без этого «скорость высокая, а нарушения нет» неразрешимо:
+    // ветка падения/сёрфа снимает пеший лимит, а окно устойчивости может сбрасываться.
+    const char *lastBranch(int playerId) const;
+    int overMs(int playerId, TimePoint now) const;
+
     // --- вызывается PlayerVelocitySystem ---
     VerifyOutcome sample(IPlayer &player, TimePoint now); // каждый апдейт игрока
     void reset(int playerId);
@@ -68,6 +75,14 @@ class PlayerVelocityService final : public IService
         float lastYaw = 0.0f;
         TimePoint snapWindowStart;
         std::uint8_t snapCount = 0;
+        // Ветка лимитов последнего сэмпла — только для дев-диагностики.
+        enum class Branch : std::uint8_t
+        {
+            None,
+            Foot,
+            Falling,
+            Vehicle,
+        } branch = Branch::None;
     };
 
     PlayerLocationService *m_location = nullptr;
