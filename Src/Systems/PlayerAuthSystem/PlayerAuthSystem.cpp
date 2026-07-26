@@ -79,6 +79,13 @@ PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRe
 
 void PlayerAuthSystem::onPlayerConnect(IPlayer &player)
 {
+    // Боты (NPC) авторизацию не проходят: аккаунта у них нет, диалог показать
+    // некому, а таймеры авторизации вышибли бы их из игры.
+    if (player.isBot())
+    {
+        return;
+    }
+
     if (m_authService.getAuthState(player.getID()) != PlayerAuthService::EAuthState::UNKNOWN)
     {
         player.sendClientMessage(Colour::White(),

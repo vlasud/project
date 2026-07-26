@@ -233,6 +233,17 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
 
     const Vector3 reported = player.getPosition();
 
+    // Ботов (NPC) двигает сам сервер: их перемещения штатно выглядят как рывки, и
+    // откатывать тут нечего — коррекция только заставила бы бота воевать с
+    // валидатором. Проверки ниже при этом выполняются полностью (их стоимость
+    // остаётся видна в замерах нагрузки), но вместо откáта позиция принимается.
+    const bool isBot = player.isBot();
+    const auto acceptBotPosition = [&]()
+    {
+        st.position = reported;
+        ++st.discontinuity; // непрерывность прервана — производные не считаем по рывку
+    };
+
     // Не-конечная клиентская позиция (NaN/Inf) НИКОГДА не доходит до st.position:
     // ниже cellCoord делает static_cast<int> из координат — на NaN/Inf это UB.
     // Отклоняем на ВСЕХ путях (байпас/грейс/обычная проверка) ДО любой записи,
@@ -289,8 +300,7 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
         return outcome;
     }
 
-    const bool resumedFromPause =
-        st.lastUpdate.time_since_epoch().count() != 0 && (now - st.lastUpdate) >= PAUSE_GAP;
+    const bool resumedFromPause = st.lastUpdate.time_since_epoch().count() != 0 && (now - st.lastUpdate) >= PAUSE_GAP;
     // Реальное время разрыва — для расчёта достижимого смещения в транспорте на паузе.
     // Отдельно от dt: dt клампится к 1с (анти-спидхак), а нам нужен фактический разрыв.
     const float pauseSeconds = std::chrono::duration<float>(now - st.lastUpdate).count();
@@ -345,6 +355,11 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
                 ++st.discontinuity;
                 return outcome;
             }
+            if (isBot)
+            {
+                acceptBotPosition();
+                return outcome;
+            }
             forceTo(player, st.position, now);
             outcome.teleportHack = true;
             outcome.detail = fmt::format("teleport during pause in vehicle: {:.0f}m (max {:.0f}m over {:.1f}s)",
@@ -360,6 +375,11 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
             ++st.discontinuity;
             return outcome;
         }
+        if (isBot)
+        {
+            acceptBotPosition();
+            return outcome;
+        }
         forceTo(player, st.position, now);
         outcome.teleportHack = true;
         outcome.detail = fmt::format("teleport during pause: {:.0f}m", glm::distance(st.position, reported));
@@ -368,6 +388,11 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
 
     if (!inWorldBounds(reported))
     {
+        if (isBot)
+        {
+            acceptBotPosition();
+            return outcome;
+        }
         forceTo(player, st.position, now);
         outcome.teleportHack = true;
         outcome.detail = fmt::format("out of world bounds: {:.0f} {:.0f} {:.0f}", reported.x, reported.y, reported.z);
@@ -376,15 +401,20 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
 
     // Проверка достижимости: расстояние с прошлого апдейта против лимита скорости.
     const float dist = glm::distance(st.position, reported);
-    const float maxSpeed =
-        (playerState == PlayerState_Driver || playerState == PlayerState_Passenger) ? VEHICLE_MAX_SPEED
-                                                                                    : FOOT_MAX_SPEED;
+    const float maxSpeed = (playerState == PlayerState_Driver || playerState == PlayerState_Passenger)
+                               ? VEHICLE_MAX_SPEED
+                               : FOOT_MAX_SPEED;
     const float allowed = maxSpeed * dt + DIST_SLACK;
 
     if (dist > allowed)
     {
         // Телепорт-хак: откатываем на последнюю принятую позицию (через механизм
         // телепорта — клиенту нужно время доехать до отката).
+        if (isBot)
+        {
+            acceptBotPosition();
+            return outcome;
+        }
         forceTo(player, st.position, now);
         outcome.teleportHack = true;
         outcome.detail = fmt::format("moved {:.0f}m in {:.2f}s (max {:.0f}m)", dist, dt, allowed);

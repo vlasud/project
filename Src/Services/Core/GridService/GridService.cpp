@@ -25,6 +25,7 @@ GridService::Handle GridService::add(GridEntityType type, std::int32_t id, const
 
     m_slots[handle] = {cellIdx, static_cast<std::int32_t>(cell.size())};
     cell.push_back({position.x, position.y, position.z, id, handle, type});
+    ++m_entityCount;
     return handle;
 }
 
@@ -70,6 +71,7 @@ void GridService::remove(Handle handle)
     slot.cell = -1;
     slot.indexInCell = -1;
     m_freeSlots.push_back(handle);
+    --m_entityCount;
 }
 
 void GridService::removeFromCell(std::int32_t cellIdx, std::int32_t indexInCell)

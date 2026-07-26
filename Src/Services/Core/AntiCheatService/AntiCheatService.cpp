@@ -96,6 +96,12 @@ void AntiCheatService::record(int playerId, ViolationType type, std::string deta
     if (playerId < 0 || playerId >= MAX_PLAYERS || type == ViolationType::Count)
         return;
 
+    // Боты (NPC) под детекторы не подпадают: сервер сам двигает их рывками, и это
+    // штатно выглядит как телепорт или спидхак. Проверка одна на запись — записи
+    // редкие, на горячий путь это не влияет.
+    if (m_botCheck && m_botCheck(playerId))
+        return;
+
     PlayerRecord &record = m_records[playerId];
     // Счёт сессии: вес нарушения с личным множителем игрока (выше единицы у тех,
     // кого анти-чит уже ловил) и с надбавкой за отсутствие админов онлайн.
@@ -204,6 +210,11 @@ void AntiCheatService::setNoAdminMultiplier(float value)
 void AntiCheatService::setAdminPresenceCheck(AdminPresenceCheck check)
 {
     m_adminPresence = std::move(check);
+}
+
+void AntiCheatService::setBotCheck(BotCheck check)
+{
+    m_botCheck = std::move(check);
 }
 
 bool AntiCheatService::aggressive() const

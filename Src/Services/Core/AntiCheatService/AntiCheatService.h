@@ -96,6 +96,12 @@ class AntiCheatService final : public IService
     void setAdminPresenceCheck(AdminPresenceCheck check);
     bool aggressive() const; // сейчас ли действует надбавка
 
+    // Предикат «это бот (NPC)». Боты двигаются серверными командами — рывками,
+    // мимо клиентской физики, — и штатно выглядят для детекторов как телепорт или
+    // спидхак. Ловить их бессмысленно: клиента, который мог бы читерить, там нет.
+    using BotCheck = std::function<bool(int playerId)>;
+    void setBotCheck(BotCheck check);
+
     // --- счёт и множитель игрока ---
     float score(int playerId) const;
     void resetScore(int playerId);
@@ -129,4 +135,5 @@ class AntiCheatService final : public IService
     float m_kickedMultiplier = 1.2f;
     float m_noAdminMultiplier = 1.2f;
     AdminPresenceCheck m_adminPresence;
+    BotCheck m_botCheck;
 };

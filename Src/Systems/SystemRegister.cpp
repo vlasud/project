@@ -4,6 +4,9 @@
 #include "Systems/AutosaveSystem/AutosaveSystem.h"
 #include "Systems/Core/AntiCheatSystem/AntiCheatSystem.h"
 #include "Systems/Core/AntiCheatTestSystem/AntiCheatTestSystem.h"
+#ifdef GAMEMODE_BENCHMARK
+#include "Systems/Core/BenchmarkSystem/BenchmarkSystem.h"
+#endif
 #include "Systems/Core/AttachmentEditorSystem/AttachmentEditorSystem.h"
 #include "Systems/Core/AttachmentSystem/AttachmentSystem.h"
 #include "Systems/Core/AudioSystem/AudioSystem.h"
@@ -221,6 +224,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // Дев-панель проверки детекторов (/actest): только читает сервисы и регистрирует
     // команду, на порядок работы анти-чита не влияет.
     m_systems.push_back(std::make_unique<AntiCheatTestSystem>(core, serviceRegister));
+#ifdef GAMEMODE_BENCHMARK
+    // Дев-бенчмарк (/bench): только читает сервисы и меряет время, на игровую
+    // логику не влияет.
+    m_systems.push_back(std::make_unique<BenchmarkSystem>(core, serviceRegister));
+#endif
     m_systems.push_back(std::make_unique<PlayerAnimationSystem>(core, serviceRegister));
     // WeaponSystem раньше HealthSystem: фейковый выстрел (оружие без выдачи)
     // отбрасывается до регистрации bullet sync в health — не легализует give-damage.

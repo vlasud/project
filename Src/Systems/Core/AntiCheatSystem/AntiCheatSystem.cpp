@@ -107,6 +107,15 @@ AntiCheatSystem::AntiCheatSystem(ICore &core, const ServiceRegister &serviceRegi
     // ровно на входе/выходе админа.
     m_antiCheatService.setAdminPresenceCheck([this]() { return anyAdminOnline(); });
 
+    // Боты двигаются серверными командами и для детекторов выглядят как читеры;
+    // отсеиваем их в одной точке, а не в каждом детекторе по отдельности.
+    m_antiCheatService.setBotCheck(
+        [this](int playerId)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            return player && player->isBot();
+        });
+
     m_sessionService.subscribeStart([this](IPlayer &player, const PlayerSessionService::Session &session)
                                     { loadProfile(player, session); });
 

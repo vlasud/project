@@ -75,6 +75,13 @@ class GridService final : public IService
     void move(Handle handle, const Vector3 &position);
     void remove(Handle handle);
 
+    // Сколько сущностей сейчас в сетке. Нужно дев-замерам: цена обхода радиуса
+    // зависит от наполнения, и без этого числа два прогона не сравнить.
+    std::size_t entityCount() const
+    {
+        return m_entityCount;
+    }
+
     // --- запросы ---
     // Зовёт visit(GridEntityType, int32 id, float distSq) для каждой сущности в
     // радиусе (3D-расстояние). Самый быстрый путь — ноль аллокаций и копий.
@@ -164,5 +171,6 @@ class GridService final : public IService
 
     std::array<std::vector<Entry>, CELL_COUNT> m_cells;
     std::vector<Slot> m_slots;
+    std::size_t m_entityCount = 0; // живых сущностей в сетке (для дев-замеров)
     std::vector<Handle> m_freeSlots;
 };

@@ -159,8 +159,14 @@ PlayerVelocityService::VerifyOutcome PlayerVelocityService::sample(IPlayer &play
 
     // --- мгновенные развороты модели (quick turn) ---
     // Только пешком: угол в транспорте ведёт машина, а на сёрфе — платформа.
-    const float yaw = player.getRotation().ToEuler().z;
-    if (playerState == PlayerState_OnFoot && std::isfinite(yaw))
+    // Кватернион разворачиваем в углы ТОЛЬКО для пешего: ToEuler считает atan2/asin
+    // и стоит заметно дороже остальной части сэмпла, а для водителей результат
+    // всё равно не используется.
+    if (playerState != PlayerState_OnFoot)
+    {
+        st.hasYaw = false;
+    }
+    else if (const float yaw = player.getRotation().ToEuler().z; std::isfinite(yaw))
     {
         if (st.hasYaw && angleDelta(yaw, st.lastYaw) >= SNAP_ANGLE && rawDt <= SNAP_MAX_DT)
         {

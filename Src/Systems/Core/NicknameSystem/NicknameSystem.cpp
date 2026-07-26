@@ -62,6 +62,14 @@ void NicknameSystem::reject(IPlayer &player, const std::string &reason)
 
 void NicknameSystem::onPlayerConnect(IPlayer &player)
 {
+    // Боты (NPC) под ник-политику не подпадают: у них нет клиента, который увидит
+    // диалог и сменит ник, а кик по таймеру просто убил бы их посреди работы —
+    // например, нагрузочного прогона.
+    if (player.isBot())
+    {
+        return;
+    }
+
     const NicknameService::Verdict verdict = m_nicknameService.validate(player.getName());
     if (verdict != NicknameService::Verdict::Ok)
     {
