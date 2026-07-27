@@ -323,21 +323,20 @@ void ElectionSystem::showPartyConfirm(IPlayer &player, const std::string &name, 
             if (!session)
                 return;
 
-            if (m_moneyService.getMoney(playerId) < static_cast<unsigned long long>(ElectionService::PARTY_COST))
+            // Сначала списание, затем создание; не вышло (гонка по имени/второй
+            // партии за время диалогов) — возврат взноса.
+            if (!m_moneyService.take(*player, static_cast<unsigned long long>(ElectionService::PARTY_COST)))
             {
                 player->sendClientMessage(ERROR_COLOUR,
                                           u(fmt::format("Недостаточно наличных: нужно ${}", ElectionService::PARTY_COST)));
                 return;
             }
 
-            // Сначала списание, затем создание; не вышло (гонка по имени/второй
-            // партии за время диалогов) — возврат взноса.
-            m_moneyService.setMoney(*player, m_moneyService.getMoney(playerId) - ElectionService::PARTY_COST);
             const ElectionService::Party *party =
                 m_electionService.createParty(session->accountId, player->getName().to_string(), name, description);
             if (!party)
             {
-                m_moneyService.setMoney(*player, m_moneyService.getMoney(playerId) + ElectionService::PARTY_COST);
+                m_moneyService.giveMoney(*player, static_cast<unsigned long long>(ElectionService::PARTY_COST));
                 player->sendClientMessage(ERROR_COLOUR, u("Не вышло зарегистрировать партию, взнос возвращён"));
                 return;
             }

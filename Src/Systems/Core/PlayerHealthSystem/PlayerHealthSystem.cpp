@@ -24,6 +24,15 @@ constexpr float FIRE_BURST = 3.0f;
 // шлёт в один момент, но это разные пакеты — даём запас на их рассинхрон.
 constexpr std::chrono::milliseconds SHOT_WINDOW{2000};
 
+// Урон от окружения (падение, огонь, утопление, взрыв) сообщает сам клиент, и в
+// ядре этот путь не валидируется ВООБЩЕ: ни оружие, ни величина. Поэтому потолок и
+// темп ставим здесь. Падение с максимальной высоты забирает около 100 HP, поэтому
+// разовый урон выше этого — заявление, которое игра выдать не могла.
+constexpr float MAX_ENVIRONMENT_DAMAGE = 110.0f;
+// Токен-бакет темпа: окружение бьёт редкими событиями, а не потоком.
+constexpr float ENVIRONMENT_BURST = 3.0f;
+constexpr std::chrono::milliseconds ENVIRONMENT_INTERVAL{700};
+
 // Осадка стейта для carshot: смену «в машине -> пешком» сервер узнаёт из следующего
 // синка, поэтому хит сразу после высадки не считаем стрельбой из салона.
 constexpr std::chrono::milliseconds STATE_SETTLE{1500};
@@ -210,10 +219,54 @@ void PlayerHealthSystem::onPlayerTakeDamage(IPlayer &player, IPlayer *from, floa
     // P2P-урон уже применён через onPlayerGiveDamage от атакующего — здесь повторно
     // не применяем, иначе урон удвоится. Берём только урон без источника (падение,
     // огонь, утопление, столкновение) — для него give-события не существует.
-    if (from == nullptr)
+    if (from != nullptr)
     {
-        m_healthService.applyDamage(player, amount);
+        return;
     }
+
+    // Этот канал целиком на слове клиента: ядро на ветке «без источника» не
+    // проверяет ни оружие, ни величину урона (проверка веса стоит только когда
+    // источник — другой игрок). Без валидации отсюда можно было убить себя одним
+    // пакетом в любой момент — сорвать арест, отменить киллеру фраг, телепортнуться
+    // на респавн — и, спамя мелкий урон, держать окно синхронизации HP вечно
+    // открытым, глуша детектор HealthHack.
+    const int playerId = player.getID();
+    const TimePoint timeNow = now();
+    const auto reject = [&](std::string detail)
+    {
+        m_antiCheatService.record(playerId, AntiCheatService::ViolationType::DamageHack, std::move(detail), timeNow);
+    };
+
+    if (!std::isfinite(amount) || amount <= 0.0f)
+    {
+        reject(fmt::format("non-finite environment damage {}", amount));
+        return;
+    }
+    if (amount > MAX_ENVIRONMENT_DAMAGE)
+    {
+        reject(fmt::format("environment damage {:.1f} > max {:.1f} (weapon {})", amount, MAX_ENVIRONMENT_DAMAGE,
+                           weapon));
+        return;
+    }
+
+    AttackState &attack = m_attack[playerId];
+    if (attack.environmentRefill.time_since_epoch().count() != 0)
+    {
+        const float elapsedMs = std::chrono::duration<float, std::milli>(timeNow - attack.environmentRefill).count();
+        attack.environmentTokens +=
+            elapsedMs / static_cast<float>(std::chrono::duration_cast<std::chrono::milliseconds>(ENVIRONMENT_INTERVAL).count());
+        if (attack.environmentTokens > ENVIRONMENT_BURST)
+            attack.environmentTokens = ENVIRONMENT_BURST;
+    }
+    attack.environmentRefill = timeNow;
+    if (attack.environmentTokens < 1.0f)
+    {
+        reject(fmt::format("environment damage rate exceeded (weapon {})", weapon));
+        return;
+    }
+    attack.environmentTokens -= 1.0f;
+
+    m_healthService.applyDamage(player, amount);
 }
 
 void PlayerHealthSystem::onPlayerDisconnect(IPlayer &player, PeerDisconnectReason reason)

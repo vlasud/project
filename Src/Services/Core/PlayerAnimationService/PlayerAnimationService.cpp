@@ -132,5 +132,7 @@ PlayerAnimationService::VerifyOutcome PlayerAnimationService::verify(IPlayer &pl
 
 void PlayerAnimationService::reset(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_state[playerId] = State{};
 }

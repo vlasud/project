@@ -542,6 +542,8 @@ void PlayerWeaponService::onSpawn(IPlayer &player)
 
 void PlayerWeaponService::reset(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_state[playerId] = State{};
 }
 

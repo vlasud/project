@@ -131,6 +131,8 @@ void AttachmentService::detachAll(IPlayer &player)
 
 bool AttachmentService::isAttached(int playerId, int slot) const
 {
+    if (!validPlayerId(playerId))
+        return false;
     return slot >= 0 && slot < MAX_SLOTS && m_state[playerId].used[slot];
 }
 
@@ -217,6 +219,8 @@ void AttachmentService::handleEdited(IPlayer &player, int slot, bool saved, cons
 
 void AttachmentService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     // Клиентское состояние умерло вместе с подключением — чистим только учёт.
     m_state[playerId] = State{};
 }

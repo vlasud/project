@@ -318,14 +318,13 @@ void HaulerJobSystem::onStartWork(IPlayer &player)
     // Невозвратный вступительный взнос НАЛИЧНЫМИ: проверка + списание атомарно и ДО
     // перевода в работники. Взнос — денежный сток, назад не возвращается.
     const unsigned long long cash = m_moneyService.getMoney(playerId);
-    if (cash < static_cast<unsigned long long>(HAULER_JOB_ENTRY_FEE))
+    if (!m_moneyService.take(player, static_cast<unsigned long long>(HAULER_JOB_ENTRY_FEE)))
     {
         player.sendClientMessage(
             ERROR_COLOUR,
             u(fmt::format("Недостаточно наличных: вступительный взнос ${} (у вас ${})", HAULER_JOB_ENTRY_FEE, cash)));
         return;
     }
-    m_moneyService.setMoney(player, cash - static_cast<unsigned long long>(HAULER_JOB_ENTRY_FEE));
     player.sendClientMessage(INFO_COLOUR,
                              u(fmt::format("Вступительный взнос ${} списан (не возвращается)", HAULER_JOB_ENTRY_FEE)));
 

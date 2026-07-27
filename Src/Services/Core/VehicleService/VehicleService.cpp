@@ -107,6 +107,17 @@ bool isValidComponent(int model, int component)
 }
 } // namespace
 
+VehicleService::~VehicleService()
+{
+    if (m_vehicles)
+    {
+        if (m_vehicleEvents)
+            m_vehicles->getEventDispatcher().removeEventHandler(m_vehicleEvents);
+        if (m_poolEvents)
+            m_vehicles->getPoolEventDispatcher().removeEventHandler(m_poolEvents);
+    }
+}
+
 void VehicleService::bind(IVehiclesComponent *vehicles, PlayerLocationService &location, GridService &grid,
                           VehicleEventHandler &vehicleEvents, PoolEventHandler<IVehicle> &poolEvents)
 {
@@ -115,6 +126,8 @@ void VehicleService::bind(IVehiclesComponent *vehicles, PlayerLocationService &l
     m_grid = &grid;
     if (m_vehicles)
     {
+        m_vehicleEvents = &vehicleEvents;
+        m_poolEvents = &poolEvents;
         m_vehicles->getEventDispatcher().addEventHandler(&vehicleEvents);
         m_vehicles->getPoolEventDispatcher().addEventHandler(&poolEvents);
     }

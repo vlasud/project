@@ -125,6 +125,11 @@ class VehicleService final : public IService
     // grid — пространственный индекс (anyVehicleNear спрашивает соседей машин у него,
     // а не проходом по пулу). Все сервисы сконструированы до фазы initialize, так что
     // grid уже валиден, даже если GridService в реестре идёт после VehicleService.
+    // Подписки на компонент машин снимаются здесь: компонент может пережить
+    // геймод, и его диспатчер иначе остался бы с указателями на разрушенные
+    // обработчики (краш на остановке сервера).
+    ~VehicleService();
+
     void bind(IVehiclesComponent *vehicles, PlayerLocationService &location, GridService &grid,
               VehicleEventHandler &vehicleEvents, PoolEventHandler<IVehicle> &poolEvents);
 
@@ -644,6 +649,9 @@ class VehicleService final : public IService
                        TimePoint timeNow) const;
 
     IVehiclesComponent *m_vehicles = nullptr;
+    // Кого мы подписали в диспатчеры компонента — чтобы снять в деструкторе.
+    VehicleEventHandler *m_vehicleEvents = nullptr;
+    PoolEventHandler<IVehicle> *m_poolEvents = nullptr;
     PlayerLocationService *m_location = nullptr;
     GridService *m_grid = nullptr; // пространственный индекс машин (anyVehicleNear)
 

@@ -42,11 +42,25 @@ constexpr float ARRIVE_MAX = 30.0f;
 constexpr float ARRIVE_MIN = 5.0f;
 constexpr float ARRIVE_FRACTION = 0.4f;
 
-// Пешком после паузы позиция не должна была измениться (на паузе клиент заморожен).
-// Допуск щедрый — на рассинхрон и редкие толчки. Только для пешего: в транспорте
-// машину за время разрыва (Esc-пауза или сетевой лаг) могло легально унести, поэтому
-// там допуск считается по достижимости VEHICLE_MAX_SPEED × время разрыва, а не отсюда.
-constexpr float PAUSE_MOVE_TOLERANCE = 100.0f;
+// Пешком после паузы позиция не должна была измениться (на паузе клиент заморожен),
+// поэтому допуск маленький — только на рассинхрон последнего синка и толчки. Прежние
+// 100 м инварианту не соответствовали и давали блинк-телепорт сквозь стены: клиент
+// сам решает, когда «паузиться», а замолчав на PAUSE_GAP, получал бесплатный прыжок.
+// В транспорте машину за время разрыва могло легально унести — там допуск считается
+// по достижимости VEHICLE_MAX_SPEED × время разрыва, а не отсюда.
+constexpr float PAUSE_MOVE_TOLERANCE = 6.0f;
+
+// Паузы — исключение из проверок, а признак паузы вычисляется из молчания клиента,
+// то есть управляется им же. Поэтому исключение выдаётся по бюджету: честный игрок
+// сворачивает игру редко, а дросселирующий синки чит упирается в лимит и дальше
+// проверяется как обычно.
+constexpr int PAUSE_BUDGET = 3;
+constexpr std::chrono::seconds PAUSE_BUDGET_WINDOW{120};
+
+// Смещение, ниже которого пауза не считается разрывом непрерывности: производную
+// скорости рвать незачем, а иначе клиент дросселированием синков глушил бы детектор
+// скорости — каждый сэмпл сбрасывался бы как «после телепорта».
+constexpr float PAUSE_CONTINUITY_EPS = 1.0f;
 
 // Потолок «времени разрыва» для расчёта допустимого смещения в транспорте на
 // паузе: лаг редко длиннее, а долгая Esc-пауза машину не двигает (dist≈0 и так
@@ -339,6 +353,19 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
     // В транспорте за это время машину могло легально унести, пеший — заморожен.
     if (resumedFromPause)
     {
+        // Бюджет: окно скользит, исключения тратятся. Исчерпан — паузу больше не
+        // признаём и проверяем достижимость обычным путём (ниже), как будто разрыва
+        // не было. Честному игроку трёх пауз за две минуты хватает с запасом.
+        if (now - st.pauseWindowStart > PAUSE_BUDGET_WINDOW)
+        {
+            st.pauseWindowStart = now;
+            st.pauseBudget = 0;
+        }
+        ++st.pauseBudget;
+    }
+
+    if (resumedFromPause && st.pauseBudget <= PAUSE_BUDGET)
+    {
         // В транспорте машина за время разрыва могла легально уехать: при сетевом
         // лаге клиент-водитель продолжает движение, пассажира везёт водитель.
         // Допуск — по машинной скорости за ФАКТИЧЕСКОЕ время разрыва (с потолком).
@@ -369,10 +396,17 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
         }
 
         // Пеший на паузе заморожен — позиция после возврата должна совпасть с принятой.
-        if (glm::distance(st.position, reported) <= PAUSE_MOVE_TOLERANCE)
+        // Границы мира проверяем и здесь: иначе серией пауз принятую позицию можно
+        // увести за пределы карты, куда обычный путь её не пустил бы.
+        const float pauseShift = glm::distance(st.position, reported);
+        if (inWorldBounds(reported) && pauseShift <= PAUSE_MOVE_TOLERANCE)
         {
             st.position = reported;
-            ++st.discontinuity;
+            // Непрерывность рвём только при заметном смещении: пауза без движения
+            // не должна обнулять сэмпл скорости (иначе детектор скорости глушится
+            // дросселированием синков).
+            if (pauseShift > PAUSE_CONTINUITY_EPS)
+                ++st.discontinuity;
             return outcome;
         }
         if (isBot)
@@ -427,5 +461,7 @@ PlayerLocationService::VerifyOutcome PlayerLocationService::verify(IPlayer &play
 
 void PlayerLocationService::reset(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_state[playerId] = State{};
 }

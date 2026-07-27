@@ -109,5 +109,7 @@ int PlayerChatService::muteSecondsLeft(int playerId) const
 
 void PlayerChatService::reset(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_state[playerId] = State{};
 }

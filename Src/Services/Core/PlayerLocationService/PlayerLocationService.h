@@ -103,7 +103,10 @@ class PlayerLocationService final : public IService
                                     // запоздавшие пакеты со старой позицией
                                     // засчитываются как «прибыл» при коротком откате
 
-        TimePoint lastUpdate;            // для dt и детекта паузы
+        TimePoint lastUpdate;
+        // Бюджет пауз: сколько исключений выдано и когда открылось окно.
+        int pauseBudget = 0;
+        TimePoint pauseWindowStart;            // для dt и детекта паузы
         std::uint32_t discontinuity = 0; // счётчик разрывов непрерывности позиции
     };
 

@@ -27,6 +27,7 @@ class GameMode : public IComponent, public CoreEventHandler
         ThreadPool::initialize(std::thread::hardware_concurrency() - 1);
         DatabaseManager::initialize();
 
+        m_core = core;
         core->getEventDispatcher().addEventHandler(this);
 
         m_serviceRegister.registerServices();
@@ -46,6 +47,12 @@ class GameMode : public IComponent, public CoreEventHandler
         // выгрузке компонента → std::terminate. Заодно дорабатывается очередь
         // задач (записи в БД) и выполняются их колбэки.
         ThreadPool::shutdown();
+
+        // Ядро переживает выгрузку геймода: оставленный в его диспатчере указатель
+        // на нас — вызов onTick по освобождённой памяти.
+        if (m_core)
+            m_core->getEventDispatcher().removeEventHandler(this);
+
         delete this;
     };
 
@@ -65,6 +72,7 @@ class GameMode : public IComponent, public CoreEventHandler
     }
 
   private:
+    ICore *m_core = nullptr;
     ServiceRegister m_serviceRegister;
     SystemRegister m_systemRegister;
 };

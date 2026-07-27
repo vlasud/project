@@ -26,6 +26,35 @@ const ColourBand COLOUR_BANDS[] = {
     {CHAT_RADIUS * CHAT_RADIUS, Colour::FromRGBA(0xA9A9A9FF)},
 };
 
+// Чистка готовой строки чата перед отправкой. Текст и ник приходят от клиента:
+// цветокоды ({RRGGBB}, ~r~) клиент парсит при рендере сам, поэтому игрок иначе
+// перекрасил бы чужую строку или подделал её вид; управляющие байты рвут
+// client message. Работаем побайтово на месте: чат идёт в cp1251 (однобайтовая),
+// все заменяемые символы — ASCII, кириллицу не задеваем.
+void sanitizeChatLine(char *data, std::size_t size)
+{
+    for (std::size_t i = 0; i < size; ++i)
+    {
+        const unsigned char c = static_cast<unsigned char>(data[i]);
+        switch (c)
+        {
+        case '{':
+            data[i] = '(';
+            break;
+        case '}':
+            data[i] = ')';
+            break;
+        case '~':
+            data[i] = '-';
+            break;
+        default:
+            if (c < 0x20 || c == 0x7F)
+                data[i] = ' ';
+            break;
+        }
+    }
+}
+
 Colour colourForDistance(float distSq)
 {
     for (const ColourBand &band : COLOUR_BANDS)
@@ -128,7 +157,9 @@ bool ChatSystemSystem::onPlayerText(IPlayer &player, StringView message)
     char buffer[CHAT_BUFFER_SIZE] = {0};
     const auto formatted = fmt::format_to_n(buffer, CHAT_BUFFER_SIZE - 1, "- {} : {}[{}]", message, player.getName(),
                                             playerId);
-    const StringView line(buffer, formatted.size < CHAT_BUFFER_SIZE - 1 ? formatted.size : CHAT_BUFFER_SIZE - 1);
+    const std::size_t lineSize = formatted.size < CHAT_BUFFER_SIZE - 1 ? formatted.size : CHAT_BUFFER_SIZE - 1;
+    sanitizeChatLine(buffer, lineSize);
+    const StringView line(buffer, lineSize);
 
     for (const GridService::Result &listener : m_listeners)
     {

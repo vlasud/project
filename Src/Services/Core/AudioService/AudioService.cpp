@@ -139,6 +139,9 @@ bool AudioService::isStreaming(int playerId) const
 
 const std::string &AudioService::currentStream(int playerId) const
 {
+    static const std::string empty;
+    if (!validPlayerId(playerId))
+        return empty;
     return m_streams[playerId];
 }
 

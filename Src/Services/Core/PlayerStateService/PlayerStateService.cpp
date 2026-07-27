@@ -329,5 +329,7 @@ void PlayerStateService::onSpawn(IPlayer &player)
 
 void PlayerStateService::reset(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_state[playerId] = State{};
 }

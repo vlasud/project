@@ -242,6 +242,8 @@ bool PlayerHealthService::isAlive(int playerId) const
 
 void PlayerHealthService::onSpawn(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     State &st = m_state[playerId];
     st.alive = true;
     st.dying = false;
@@ -306,6 +308,18 @@ PlayerHealthService::VerifyOutcome PlayerHealthService::verify(IPlayer &player, 
     {
         st.lastChange = timeNow;
         st.confirmed = false;
+        // Пауза даёт окно на синхронизацию, но НЕ право заявить больше серверного:
+        // признак паузы вычисляется из молчания клиента, то есть управляется им же,
+        // и раньше дросселирование синков полностью отключало этот валидатор.
+        // Нарушение не пишем (пауза легальна), но рост откатываем.
+        const float pausedHealth = player.getHealth();
+        const float pausedArmour = player.getArmour();
+        if (!std::isfinite(pausedHealth) || !std::isfinite(pausedArmour) ||
+            (pausedHealth + pausedArmour) > (st.health + st.armour) + EPS)
+        {
+            player.setHealth(st.health);
+            player.setArmour(st.armour);
+        }
         return outcome;
     }
 

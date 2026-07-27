@@ -145,5 +145,7 @@ void PickupService::handlePickUp(IPlayer &player, IPickup &pickup, TimePoint now
 
 void PickupService::resetPlayer(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_lastPickUp[playerId].clear();
 }

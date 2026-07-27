@@ -46,8 +46,7 @@ PaymentSystem::PaymentSystem(ICore &core, const ServiceRegister &serviceRegister
 
             // Баланс — серверный (НЕ клиентский IPlayer::getMoney): клиенту про
             // деньги не верим.
-            const unsigned long long payerBalance = m_moneyService.getMoney(payerId);
-            if (payerBalance < amount)
+            if (!m_moneyService.canAfford(payerId, amount))
             {
                 player.sendClientMessage(PAY_COLOUR, u("Недостаточно денег"));
                 return;
@@ -78,9 +77,15 @@ PaymentSystem::PaymentSystem(ICore &core, const ServiceRegister &serviceRegister
                 return;
             }
 
-            // Списание и зачисление абсолютным setMoney в одном обработчике —
-            // перевод синхронный и атомарный, HUD обоих участников = новый баланс.
-            m_moneyService.setMoney(player, payerBalance - amount);
+            // Списание и зачисление в одном обработчике — перевод синхронный и
+            // атомарный, HUD обоих участников = новый баланс. take() ещё раз
+            // проверяет баланс: между canAfford выше и этой точкой ничего не
+            // выполнялось, но списание без проверки в сервис не пускается.
+            if (!m_moneyService.take(player, amount))
+            {
+                player.sendClientMessage(PAY_COLOUR, u("Недостаточно денег"));
+                return;
+            }
             m_moneyService.setMoney(*target, targetBalance + amount);
 
             // Прерываемая анимация передачи: игрок выходит из неё движением, сервер

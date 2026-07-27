@@ -308,5 +308,7 @@ int PlayerVelocityService::overMs(int playerId) const
 
 void PlayerVelocityService::reset(int playerId)
 {
+    if (!validPlayerId(playerId))
+        return;
     m_state[playerId] = State{};
 }

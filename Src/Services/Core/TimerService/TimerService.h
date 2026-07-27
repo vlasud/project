@@ -29,6 +29,11 @@ class TimerService final : public IService
     friend TimerSystem;
 
   public:
+    // Компонент таймеров может пережить геймод: порядок выгрузки компонентов ядром
+    // не определён. Деструктор гасит наши таймеры и закрывает обратный путь, иначе
+    // free() чужого таймера позвал бы handleFree на уже разрушенной мапе.
+    ~TimerService();
+
     struct Handle
     {
         int id = 0; // 0 — пустой хэндл
@@ -68,7 +73,8 @@ class TimerService final : public IService
     struct Entry
     {
         ITimer *timer = nullptr;
-        int playerId = -1; // -1 — таймер не привязан к игроку
+        HandlerImpl *handler = nullptr; // владеет компонент; нужен для detach в деструкторе
+        int playerId = -1;              // -1 — таймер не привязан к игроку
         Callback callback;
         PlayerCallback playerCallback;
     };
@@ -89,4 +95,5 @@ class TimerService final : public IService
     // его std::function не разрушается во время собственного вызова.
     std::unordered_map<int, Entry> m_entries;
     int m_nextId = 0;
+    bool m_shuttingDown = false; // в разрушении: handleTimeout/handleFree ничего не трогают
 };

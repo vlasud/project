@@ -19,6 +19,14 @@ class PlayerMoneyService final : public IService
     void setMoney(IPlayer &player, unsigned long long amount);  // абсолютная установка
     void giveMoney(IPlayer &player, unsigned long long amount); // прибавить к балансу
 
+    // Хватает ли баланса на списание. Спрашивать ТОЛЬКО так: баланс беззнаковый,
+    // и «getMoney() - цена» при недостаче даёт не минус, а астрономическую сумму.
+    bool canAfford(int playerId, unsigned long long amount) const;
+
+    // Списание: при нехватке денег возвращает false и НЕ трогает баланс. Проверка
+    // и вычитание внутри — снаружи невозможно ошибиться с порядком.
+    [[nodiscard]] bool take(IPlayer &player, unsigned long long amount);
+
     // Заново отправить серверный баланс на клиент, НЕ меняя его. Нужно на спавне:
     // GTA-клиент при смерти сам списывает $100 (госпиталь single-player GTA:SA), и
     // без ре-синхрона HUD остаётся ниже серверной правды до следующей операции.

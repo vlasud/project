@@ -8,18 +8,28 @@
 class TimerService::HandlerImpl final : public TimerTimeOutHandler
 {
   public:
-    HandlerImpl(TimerService &service, int id) : m_service(service), m_id(id)
+    HandlerImpl(TimerService &service, int id) : m_service(&service), m_id(id)
     {
+    }
+
+    // Обработчиком владеет компонент, а он переживает геймод: обратный путь к
+    // сервису обрывается его деструктором (detach), иначе освобождение таймера
+    // после выгрузки позвало бы метод разрушенного объекта.
+    void detach()
+    {
+        m_service = nullptr;
     }
 
     void timeout(ITimer &) override
     {
-        m_service.handleTimeout(m_id);
+        if (m_service)
+            m_service->handleTimeout(m_id);
     }
 
     void free(ITimer &) override
     {
-        m_service.handleFree(m_id);
+        if (m_service)
+            m_service->handleFree(m_id);
         delete this;
     }
 
@@ -27,7 +37,7 @@ class TimerService::HandlerImpl final : public TimerTimeOutHandler
     friend TimerService;        // только для delete при неудачном create
     ~HandlerImpl() = default;   // удаляется через free()
 
-    TimerService &m_service;
+    TimerService *m_service;
     const int m_id;
 };
 
@@ -93,6 +103,26 @@ Milliseconds TimerService::remaining(Handle handle) const
 
 // ------------------------------------------------------------------ private
 
+TimerService::~TimerService()
+{
+    // Сначала флаг и отвязка обработчиков, потом kill: kill() ведёт к free() у
+    // компонента, а тот шёл бы обратно в handleFree — то есть в разрушаемую мапу.
+    // Компонент таймеров может освободить таймер и позже нас, поэтому отвязка
+    // обработчиков обязательна: флаг читать было бы уже не у кого.
+    m_shuttingDown = true;
+    for (auto &[id, entry] : m_entries)
+    {
+        if (entry.handler)
+        {
+            entry.handler->detach();
+        }
+        if (entry.timer && entry.timer->running())
+        {
+            entry.timer->kill();
+        }
+    }
+}
+
 void TimerService::initialize(ICore *core, ITimersComponent *timers)
 {
     m_core = core;
@@ -135,6 +165,7 @@ TimerService::Handle TimerService::createTimer(Milliseconds initial, Millisecond
 
     Entry entry;
     entry.timer = timer;
+    entry.handler = handler;
     entry.playerId = playerId;
     entry.callback = std::move(callback);
     entry.playerCallback = std::move(playerCallback);
@@ -145,6 +176,8 @@ TimerService::Handle TimerService::createTimer(Milliseconds initial, Millisecond
 
 void TimerService::handleTimeout(int id)
 {
+    if (m_shuttingDown)
+        return;
     auto it = m_entries.find(id);
     if (it == m_entries.end())
     {
@@ -181,5 +214,7 @@ void TimerService::handleTimeout(int id)
 
 void TimerService::handleFree(int id)
 {
+    if (m_shuttingDown)
+        return; // мапа уже разрушается — стирать в ней нечего
     m_entries.erase(id);
 }

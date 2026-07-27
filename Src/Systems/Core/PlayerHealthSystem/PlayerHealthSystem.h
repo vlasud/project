@@ -57,6 +57,10 @@ class PlayerHealthSystem : public BaseSystem,
         // одного синка, и выстрел сразу после неё легален.
         PlayerState lastState = PlayerState_None;
         TimePoint stateSince;
+        // Урон от окружения (падение, огонь, вода) идёт по слову клиента и раньше
+        // не проверялся вообще — токен-бакет ограничивает его темп.
+        float environmentTokens = 3.0f;
+        TimePoint environmentRefill;
     };
 
     // Проверка правдоподобия хита; при фейке пишет DamageHack и возвращает false.
