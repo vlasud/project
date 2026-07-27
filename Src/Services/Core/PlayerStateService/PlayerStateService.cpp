@@ -21,6 +21,12 @@ constexpr float ENTER_MAX_DIST = 30.0f;
 // Сколько живёт санкция серверной операции до её потребления переходом.
 constexpr std::chrono::milliseconds SANCTION_WINDOW{3000};
 
+// Сколько ПРИНЯТЫХ апдейтов ждём выполнения высадки, прежде чем забрать машину.
+// Считаем апдейты, а не время: пауза клиента, лаг и подгрузка не двигают счётчик,
+// поэтому честный игрок, который просто молчал, под эскалацию не попадает. При
+// штатных 30 синках в секунду это примерно две секунды активной игры.
+constexpr std::uint16_t EJECT_UPDATES = 60;
+
 // Грейс синхронизации экшена после серверной установки/переустановки.
 constexpr std::chrono::milliseconds ACTION_GRACE{1500};
 
@@ -60,6 +66,17 @@ void PlayerStateService::putInVehicle(IPlayer &player, IVehicle &vehicle, int se
 void PlayerStateService::removeFromVehicle(IPlayer &player)
 {
     // Выход из ТС в OnFoot легален из любого состояния — санкция не нужна.
+    //
+    // Но сам RPC высадки клиент вправе не выполнить и остаться за рулём: ядро
+    // выводит состояние из его же синков, поэтому для сервера он останется
+    // водителем. Запоминаем ожидание — если игрок продолжит играть за рулём,
+    // машину у него заберут (см. verifyAction).
+    State &st = m_state[player.getID()];
+    IPlayerVehicleData *vehicleData = queryExtension<IPlayerVehicleData>(player);
+    IVehicle *vehicle = vehicleData ? vehicleData->getVehicle() : nullptr;
+    st.pendingEject = true;
+    st.ejectVehicleId = vehicle ? vehicle->getID() : -1;
+    st.ejectUpdates = 0;
     player.removeFromVehicle(false);
 }
 
@@ -149,9 +166,8 @@ PlayerStateService::StateOutcome PlayerStateService::onStateChange(IPlayer &play
         if (sinceEnter < MIN_ENTER)
         {
             outcome.stateHack = true;
-            outcome.detail = fmt::format(
-                "vehicle entry too fast: {}ms",
-                std::chrono::duration_cast<std::chrono::milliseconds>(sinceEnter).count());
+            outcome.detail = fmt::format("vehicle entry too fast: {}ms",
+                                         std::chrono::duration_cast<std::chrono::milliseconds>(sinceEnter).count());
             break;
         }
 
@@ -220,6 +236,27 @@ PlayerStateService::ActionOutcome PlayerStateService::verifyAction(IPlayer &play
     if (state != PlayerState_OnFoot && state != PlayerState_Driver && state != PlayerState_Passenger)
         return outcome;
 
+    // Высадка выполнена — ожидание закрыто.
+    if (st.pendingEject && state == PlayerState_OnFoot)
+    {
+        st.pendingEject = false;
+        st.ejectVehicleId = -1;
+        st.ejectUpdates = 0;
+    }
+    // Игрок продолжает активно играть за рулём после команды на высадку. Счётчик
+    // растёт только на ПРИНЯТЫХ апдейтах, поэтому лаг и пауза сюда не приводят.
+    else if (st.pendingEject && ++st.ejectUpdates >= EJECT_UPDATES)
+    {
+        st.pendingEject = false;
+        outcome.enforceEject = true;
+        outcome.ejectVehicleId = st.ejectVehicleId;
+        outcome.detail = fmt::format("ignored eject: still in vehicle {} after {} updates", st.ejectVehicleId,
+                                     static_cast<int>(EJECT_UPDATES));
+        st.ejectVehicleId = -1;
+        st.ejectUpdates = 0;
+        return outcome;
+    }
+
     const PlayerSpecialAction reported = player.getAction(); // заявление клиента
 
     if (st.actionEnforced)
@@ -236,8 +273,8 @@ PlayerStateService::ActionOutcome PlayerStateService::verifyAction(IPlayer &play
         player.setAction(st.serverAction);
         st.actionChange = timeNow;
         outcome.actionHack = true;
-        outcome.detail = fmt::format("escaped enforced action {} (reported {})",
-                                     static_cast<int>(st.serverAction), static_cast<int>(reported));
+        outcome.detail = fmt::format("escaped enforced action {} (reported {})", static_cast<int>(st.serverAction),
+                                     static_cast<int>(reported));
         return outcome;
     }
 
@@ -283,6 +320,11 @@ void PlayerStateService::onSpawn(IPlayer &player)
     st.actionEnforced = false;
     st.actionChange = now();
     st.pendingPut = false;
+    // Ожидание высадки не должно переживать спавн: после смерти и респавна игрок
+    // и так вне машины, а протухший флаг дал бы эскалацию на ровном месте.
+    st.pendingEject = false;
+    st.ejectVehicleId = -1;
+    st.ejectUpdates = 0;
 }
 
 void PlayerStateService::reset(int playerId)

@@ -21,6 +21,7 @@ float defaultWeight(AntiCheatService::ViolationType type)
     case AntiCheatService::ViolationType::WeaponHack:
     case AntiCheatService::ViolationType::SpecialActionHack:
     case AntiCheatService::ViolationType::SpawnHack:
+    case AntiCheatService::ViolationType::VehicleEjectEvasion:
         return 0.34f; // три события
     case AntiCheatService::ViolationType::DamageHack:
     case AntiCheatService::ViolationType::ShotHack:
@@ -83,6 +84,8 @@ const char *AntiCheatService::name(ViolationType type)
         return "CarShot";
     case ViolationType::QuickTurn:
         return "QuickTurn";
+    case ViolationType::VehicleEjectEvasion:
+        return "VehicleEjectEvasion";
     case ViolationType::Count:
         break;
     }

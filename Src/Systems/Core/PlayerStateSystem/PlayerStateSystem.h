@@ -2,6 +2,7 @@
 
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
+#include "Services/Core/VehicleService/VehicleService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 
@@ -24,4 +25,6 @@ class PlayerStateSystem : public BaseSystem,
   private:
     PlayerStateService &m_stateService;
     AntiCheatService &m_antiCheatService;
+    // Нужен для реального рычага: забрать машину у того, кто не выполнил высадку.
+    VehicleService &m_vehicleService;
 };

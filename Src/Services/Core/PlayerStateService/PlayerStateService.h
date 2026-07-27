@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Macro.h"
-#include "Services/IService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
+#include "Services/IService.h"
 #include "player.hpp"
 #include "types.hpp"
 #include <Server/Components/Vehicles/vehicles.hpp>
@@ -56,6 +56,12 @@ class PlayerStateService final : public IService
     struct ActionOutcome
     {
         bool actionHack = false;
+        // Игрок не выполнил серверную высадку и продолжает активно играть за рулём.
+        // Система должна применить РЕАЛЬНЫЙ рычаг — респавн машины: сам RPC высадки
+        // клиент вправе игнорировать, а вот машину у него из-под сиденья забирает
+        // сервер, и ядро после этого перестаёт принимать его driver-sync.
+        bool enforceEject = false;
+        int ejectVehicleId = -1;
         std::string detail;
     };
 
@@ -72,9 +78,9 @@ class PlayerStateService final : public IService
   private:
     struct State
     {
-        PlayerState state = PlayerState_None;                    // принятый стейт
-        PlayerSpecialAction action = SpecialAction_None;         // принятый экшен
-        PlayerSpecialAction serverAction = SpecialAction_None;   // последняя серверная выдача
+        PlayerState state = PlayerState_None;                  // принятый стейт
+        PlayerSpecialAction action = SpecialAction_None;       // принятый экшен
+        PlayerSpecialAction serverAction = SpecialAction_None; // последняя серверная выдача
         bool actionEnforced = false;
         TimePoint actionChange; // последняя серверная смена экшена (грейс синхронизации)
 
@@ -83,6 +89,12 @@ class PlayerStateService final : public IService
 
         bool pendingPut = false; // санкция putInVehicle
         TimePoint putAt;
+        // Ожидание высадки. Отсчёт в ПРИНЯТЫХ апдейтах, а не по часам: на паузе и
+        // при лаге апдейты не идут, мир клиента заморожен, и высадка физически не
+        // может продвинуться — по стенным часам это выглядело бы как игнор.
+        bool pendingEject = false;
+        int ejectVehicleId = -1;
+        std::uint16_t ejectUpdates = 0;
         bool pendingSpectate = false; // санкция setSpectating
         bool spectateTarget = false;  // в какую сторону
         TimePoint spectateAt;

@@ -39,6 +39,7 @@ class AntiCheatService final : public IService
         SpawnHack,             // запрос класса/спавна вне легального контекста (телепорт+хил респауном)
         CarShot,               // попадание из транспорта оружием, которым drive-by невозможен
         QuickTurn,             // серия мгновенных разворотов модели (CLEO quick turn)
+        VehicleEjectEvasion,   // не выполнил высадку — машину забрали принудительно
         Count,                 // размер таблицы весов, не нарушение
     };
 

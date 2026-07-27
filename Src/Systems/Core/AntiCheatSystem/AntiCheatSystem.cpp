@@ -69,6 +69,8 @@ const char *reasonText(AntiCheatService::ViolationType type)
         return "стрельба из транспорта недоступным оружием";
     case AntiCheatService::ViolationType::QuickTurn:
         return "мгновенные развороты персонажа";
+    case AntiCheatService::ViolationType::VehicleEjectEvasion:
+        return "отказ покинуть транспорт по команде сервера";
     }
     return "недопустимые действия клиента";
 }

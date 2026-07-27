@@ -5,7 +5,8 @@
 
 PlayerStateSystem::PlayerStateSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_stateService(serviceRegister.getService<PlayerStateService>()),
-      m_antiCheatService(serviceRegister.getService<AntiCheatService>())
+      m_antiCheatService(serviceRegister.getService<AntiCheatService>()),
+      m_vehicleService(serviceRegister.getService<VehicleService>())
 {
     m_stateService.bind(serviceRegister.getService<PlayerLocationService>());
 
@@ -21,8 +22,8 @@ void PlayerStateSystem::onPlayerStateChange(IPlayer &player, PlayerState newStat
     PlayerStateService::StateOutcome outcome = m_stateService.onStateChange(player, newState, oldState, now);
     if (outcome.stateHack)
     {
-        m_antiCheatService.record(player.getID(), AntiCheatService::ViolationType::StateHack,
-                                  std::move(outcome.detail), now);
+        m_antiCheatService.record(player.getID(), AntiCheatService::ViolationType::StateHack, std::move(outcome.detail),
+                                  now);
     }
 }
 
@@ -32,6 +33,19 @@ bool PlayerStateSystem::onPlayerUpdate(IPlayer &player, TimePoint now)
     if (outcome.actionHack)
     {
         m_antiCheatService.record(player.getID(), AntiCheatService::ViolationType::SpecialActionHack,
+                                  std::move(outcome.detail), now);
+    }
+    else if (outcome.enforceEject)
+    {
+        // Рычаг, который клиент отменить не может: машину респавнит СЕРВЕР, после
+        // чего ядро перестаёт принимать driver-sync для неё — игрок исчезает из
+        // машины для всех, независимо от того, что рисует его клиент. Сам RPC
+        // высадки такой гарантии не даёт (это тоже пакет, его можно игнорировать).
+        if (IVehicle *vehicle = m_vehicleService.get(outcome.ejectVehicleId))
+        {
+            m_vehicleService.respawn(*vehicle);
+        }
+        m_antiCheatService.record(player.getID(), AntiCheatService::ViolationType::VehicleEjectEvasion,
                                   std::move(outcome.detail), now);
     }
     return true;
