@@ -31,6 +31,52 @@ bool HaulerJobService::isWorking(int playerId) const
     return phaseOf(playerId) != Phase::NotWorking;
 }
 
+HaulerJobService::Role HaulerJobService::roleOf(int playerId) const
+{
+    if (!validId(playerId))
+    {
+        return Role::None;
+    }
+    return m_state[playerId].role;
+}
+
+int HaulerJobService::partnerOf(int playerId) const
+{
+    if (!validId(playerId))
+    {
+        return -1;
+    }
+    return m_state[playerId].partnerId;
+}
+
+int HaulerJobService::shiftOwnerOf(int playerId) const
+{
+    if (!validId(playerId))
+    {
+        return -1;
+    }
+    const State &state = m_state[playerId];
+    if (state.role == Role::Driver)
+    {
+        return holdsVehicle(state.phase) ? playerId : -1;
+    }
+    if (state.role == Role::Loader && validId(state.partnerId))
+    {
+        return state.partnerId;
+    }
+    return -1;
+}
+
+int HaulerJobService::carrierOf(int driverId) const
+{
+    if (!validId(driverId))
+    {
+        return -1;
+    }
+    const int partner = m_state[driverId].partnerId;
+    return validId(partner) ? partner : driverId;
+}
+
 int HaulerJobService::vehicleIdOf(int playerId) const
 {
     if (!validId(playerId))
@@ -192,14 +238,80 @@ HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId)
         m_spots[spot].reservedBy = playerId;
         state = State{};
         state.phase = Phase::Reserved;
+        state.role = Role::Driver;
         state.vehicleId = m_spots[spot].vehicleId;
         return {StartResult::Reserved, state.vehicleId, 0};
     }
 
     state = State{};
     state.phase = Phase::Queued;
+    state.role = Role::Driver;
     m_queue.push_back(playerId);
     return {StartResult::Queued, -1, static_cast<int>(m_queue.size())};
+}
+
+bool HaulerJobService::startLoader(int playerId)
+{
+    if (!validId(playerId))
+    {
+        return false;
+    }
+    State &state = m_state[playerId];
+    if (state.phase != Phase::NotWorking)
+    {
+        return false;
+    }
+    state = State{};
+    state.phase = Phase::Standby;
+    state.role = Role::Loader;
+    return true;
+}
+
+bool HaulerJobService::makePair(int driverId, int loaderId)
+{
+    if (!validId(driverId) || !validId(loaderId) || driverId == loaderId)
+    {
+        return false;
+    }
+    State &driver = m_state[driverId];
+    State &loader = m_state[loaderId];
+    // Водитель — с грузовиком (в очереди пары нет: обслуживать нечего) и без пары.
+    if (driver.role != Role::Driver || !holdsVehicle(driver.phase) || driver.partnerId >= 0)
+    {
+        return false;
+    }
+    // Грузчик — устроен грузчиком и свободен.
+    if (loader.role != Role::Loader || loader.phase != Phase::Standby || loader.partnerId >= 0)
+    {
+        return false;
+    }
+    driver.partnerId = loaderId;
+    loader.partnerId = driverId;
+    return true;
+}
+
+int HaulerJobService::breakPair(int playerId)
+{
+    if (!validId(playerId))
+    {
+        return -1;
+    }
+    const int partner = m_state[playerId].partnerId;
+    m_state[playerId].partnerId = -1;
+    if (validId(partner) && m_state[partner].partnerId == playerId)
+    {
+        m_state[partner].partnerId = -1;
+    }
+    return partner;
+}
+
+void HaulerJobService::clearCarry(int playerId)
+{
+    if (!validId(playerId))
+    {
+        return;
+    }
+    m_state[playerId].carrying = false;
 }
 
 void HaulerJobService::completeBoarding(int playerId)
@@ -302,34 +414,37 @@ void HaulerJobService::completeCycle(int playerId)
     state.carrying = false;
 }
 
-void HaulerJobService::beginCarry(int playerId)
+void HaulerJobService::beginCarry(int carrierId)
 {
-    if (!validId(playerId))
+    const int owner = shiftOwnerOf(carrierId);
+    if (owner < 0 || carrierOf(owner) != carrierId)
+    {
+        return; // не носильщик этой смены (водитель в паре коробки не берёт)
+    }
+    const Phase phase = m_state[owner].phase;
+    if (phase != Phase::Loading && phase != Phase::Unloading)
     {
         return;
     }
-    State &state = m_state[playerId];
-    if (state.phase != Phase::Loading && state.phase != Phase::Unloading)
-    {
-        return;
-    }
-    state.carrying = true;
+    m_state[carrierId].carrying = true;
 }
 
-int HaulerJobService::finishCarry(int playerId)
+int HaulerJobService::finishCarry(int carrierId)
 {
-    if (!validId(playerId))
+    const int owner = shiftOwnerOf(carrierId);
+    if (owner < 0 || carrierOf(owner) != carrierId)
     {
         return 0;
     }
-    State &state = m_state[playerId];
-    if (!state.carrying || (state.phase != Phase::Loading && state.phase != Phase::Unloading))
+    State &carrier = m_state[carrierId];
+    State &shift = m_state[owner];
+    if (!carrier.carrying || (shift.phase != Phase::Loading && shift.phase != Phase::Unloading))
     {
         return 0;
     }
-    state.carrying = false;
-    ++state.boxCount;
-    return state.boxCount;
+    carrier.carrying = false;
+    ++shift.boxCount; // прогресс плеча — у смены (водителя), а не у носильщика
+    return shift.boxCount;
 }
 
 void HaulerJobService::setStanding(int spot, int vehicleId)
@@ -370,6 +485,7 @@ HaulerJobService::Promotion HaulerJobService::promoteQueue()
     State &state = m_state[playerId];
     state = State{};
     state.phase = Phase::Reserved;
+    state.role = Role::Driver; // State{} стирает роль — восстанавливаем явно
     state.vehicleId = m_spots[spot].vehicleId;
     return {playerId, state.vehicleId};
 }
@@ -404,9 +520,11 @@ void HaulerJobService::requeueTail(int playerId, bool busKept)
     {
         return;
     }
+    breakPair(playerId); // грузовика нет — обслуживать грузчику нечего
     detachVehicle(playerId, busKept);
     removeFromQueue(playerId);
     m_state[playerId].phase = Phase::Queued;
+    m_state[playerId].role = Role::Driver;
     m_queue.push_back(playerId);
 }
 
@@ -416,6 +534,7 @@ void HaulerJobService::endShift(int playerId, bool busKept)
     {
         return;
     }
+    breakPair(playerId); // пара не переживает конец смены ни одной из сторон
     detachVehicle(playerId, busKept);
     removeFromQueue(playerId);
     m_state[playerId] = State{};

@@ -62,10 +62,21 @@ class HaulerJobSystem : public BaseSystem
   private:
     // --- пикап + диалог ---
     void onPickup(IPlayer &player);
-    void onStartWork(IPlayer &player);
+    void showRoleChoice(IPlayer &player); // «Начать работу» -> водитель или грузчик
+    void startAsDriver(IPlayer &player);
+    void startAsLoader(IPlayer &player);
     void onFinishWork(IPlayer &player);
     void onWithdrawMoney(IPlayer &player);
     void showInfo(IPlayer &player);
+
+    // --- пара «водитель + грузчик» ---
+    void onPairCommand(IPlayer &driver, int targetId); // /pair — приглашение
+    void onPairAccepted(int driverId, int loaderId);   // грузчик принял диалог
+    // Развести пару: обе стороны узнают, носильщик меняется. Зовётся из teardown
+    // любой из сторон (выход/смерть/увольнение) и при ручном разрыве.
+    void splitPair(int playerId, const std::string &noticeForPartner);
+    // Снять с игрока всё «носильщицкое» (коробка, анимация, carry, чекпоинт).
+    void clearCarryState(IPlayer &player);
 
     // --- лайфцикл сессии ---
     void loadWallet(IPlayer &player, const PlayerSessionService::Session &session);
@@ -77,6 +88,9 @@ class HaulerJobSystem : public BaseSystem
 
     // --- резерв/очередь ---
     void onReserved(IPlayer &player);
+    // Сел за руль своего грузовика: Reserved -> DriveOut, окно посадки закрыто,
+    // маркер грузовика снят, показан первый чекпоинт маршрута.
+    void completeBoarding(IPlayer &player);
     void pumpQueue();
     void notifyQueueShift();
 
@@ -106,20 +120,29 @@ class HaulerJobSystem : public BaseSystem
     void spawnPrestock(int spot);
     void tickActiveWorkers();
     void tickWorker(IPlayer &player);
+    void tickLoader(IPlayer &player); // грузчик: своей фазы нет, живёт фазой напарника
+    // Цель «взять коробку» на разгрузке следует за ЖИВЫМ грузовиком: в кабине её нет,
+    // на выходе ставится от текущей позиции. Общая для соло-водителя и грузчика.
+    void refreshUnloadSource(IPlayer &carrier);
 
     // --- увольнение/провал посадки ---
     void failBoarding(IPlayer &player);
     void dismiss(IPlayer &player, const std::string &reason, const Colour &colour);
+    void dismissShiftOwner(int ownerId, const std::string &reason); // уволить водителя смены по id
     void teardownShift(IPlayer &player);
 
     // --- helpers ---
     bool drivingOwnTruck(int playerId) const; // за рулём СВОЕГО грузовика
     bool truckOnSpot(int vid, int spot) const;
     bool spotClear(int spot) const;
-    // Позиция чекпоинта у ЗАДА грузовика игрока (от живой позиции/угла). false —
-    // грузовик пропал (вызывающий увольняет). Пересчитывается на каждую коробку.
-    bool backOfTruck(int playerId, Vector3 &out) const;
-    Vector3 randomWarehousePoint(); // случайная точка склада (PortJobService)
+    // Позиция чекпоинта у ЗАДА грузовика СМЕНЫ (от живой позиции/угла). Принимает id
+    // ВОДИТЕЛЯ смены (у грузчика своего грузовика нет). false — грузовик пропал.
+    bool backOfTruck(int shiftOwnerId, Vector3 &out) const;
+    // Начислить участнику плату за коробку/бонус: кошелёк (write-through) + попап.
+    void creditParticipant(int playerId, std::int64_t amount, const std::string &popup, Milliseconds popupTime);
+    // Случайная точка склада (PortJobService), не ближе MIN_CARRY_DISTANCE к awayFrom
+    // (заду грузовика) — коробку всегда нужно нести.
+    Vector3 randomWarehousePoint(const Vector3 &awayFrom);
     void clearCounters(int playerId);
 
     HaulerJobService &m_haulerJobService;

@@ -39,8 +39,18 @@ class HaulerJobService final : public IService
     // Чекпоинтов на каждом плече езды (задаются приводом; сервис лишь ведёт индекс
     // и знает длину для клампа перехода в пешую фазу на последней точке плеча).
     static constexpr int OUT_LENGTH = 13;  // езда-туда: 13 замеров, последний запускает погрузку
-    static constexpr int BACK_LENGTH = 7;  // езда-обратно: 7 замеров, последний запускает разгрузку
+    static constexpr int BACK_LENGTH = 8;  // езда-обратно: 8 точек, последняя запускает разгрузку
     static constexpr int BOXES_PER_LEG = 10; // коробок за плечо погрузки/разгрузки
+
+    // Роль в работе. Смену (грузовик, маршрут, фазу, счётчик коробок) ведёт ВОДИТЕЛЬ;
+    // грузчик своей фазы не имеет — он обслуживает смену напарника. Соло-водитель
+    // совмещает обе роли: и едет, и носит.
+    enum class Role
+    {
+        None,
+        Driver,
+        Loader
+    };
 
     enum class Phase
     {
@@ -50,10 +60,21 @@ class HaulerJobService final : public IService
         DriveOut,   // едет в порт по чекпоинтам туда (площадку не держит)
         Loading,    // пешком грузит коробки со склада порта в грузовик
         DriveBack,  // едет обратно на базу по чекпоинтам
-        Unloading   // пешком разгружает коробки на точку выгрузки базы
+        Unloading,  // пешком разгружает коробки на точку выгрузки базы
+        Standby     // грузчик: устроен и ждёт пары либо носит коробки в смене напарника
     };
 
     Phase phaseOf(int playerId) const;
+    Role roleOf(int playerId) const;
+    int partnerOf(int playerId) const; // напарник по паре; -1 — соло/без пары
+
+    // Водитель смены, которую обслуживает игрок: он сам (роль водителя с грузовиком)
+    // либо его напарник (роль грузчика). -1 — игрок не участвует в активной смене.
+    // Фаза, грузовик, driveIndex и boxCount читаются ПО ЭТОМУ id, а не по игроку.
+    int shiftOwnerOf(int playerId) const;
+    // Кто носит коробки в смене водителя: напарник-грузчик, иначе сам водитель.
+    // Пара делит труд — водитель в паре коробки не трогает.
+    int carrierOf(int driverId) const;
     bool isWorking(int playerId) const;        // phase != NotWorking
     int vehicleIdOf(int playerId) const;       // -1 — нет грузовика (очередь)
     int driveIndexOf(int playerId) const;      // индекс чекпоинта текущего плеча езды
@@ -92,6 +113,21 @@ class HaulerJobService final : public IService
 
     StartOutcome startWork(int playerId);
 
+    // Устроить ГРУЗЧИКОМ: NotWorking -> Standby, роль Loader. Ни грузовика, ни
+    // площадки, ни очереди — грузчик ждёт приглашения водителя. false — уже работает.
+    bool startLoader(int playerId);
+
+    // Связать водителя и грузчика. Отказ (false), если роли/фазы не те, кто-то уже
+    // в паре или это один и тот же игрок. Проверки здесь, чтобы привод не мог
+    // собрать пару в обход правил.
+    bool makePair(int driverId, int loaderId);
+    // Разорвать пару обеих сторон. Возвращает бывшего напарника (-1 — пары не было).
+    // Идемпотентно; вызывается из endShift/requeueTail, поэтому пара не переживает
+    // конец смены ни одной из сторон.
+    int breakPair(int playerId);
+    // Снять флаг «несёт коробку» (teardown напарника при распаде пары).
+    void clearCarry(int playerId);
+
     // Посадка завершена (первый чекпоинт туда подобран за рулём): Reserved ->
     // DriveOut, площадка освобождается (грузовик покинул депо). no-op вне Reserved.
     void completeBoarding(int playerId);
@@ -112,12 +148,13 @@ class HaulerJobService final : public IService
     // Цикл начинается заново. no-op вне Unloading.
     void completeCycle(int playerId);
 
-    // Взял коробку (вход в чекпоинт-источник пешей фазы): carrying false->true.
-    // no-op вне Loading/Unloading или если уже несёт.
-    void beginCarry(int playerId);
-    // Сдал коробку (вход в чекпоинт-приёмник): carrying true->false, ++boxCount.
+    // Взял коробку (вход в чекпоинт-источник пешей фазы): carrying false->true у
+    // НОСИЛЬЩИКА. no-op, если он не носильщик смены, вне Loading/Unloading или уже несёт.
+    void beginCarry(int carrierId);
+    // Сдал коробку (вход в чекпоинт-приёмник): carrying true->false у носильщика,
+    // ++boxCount в смене ВОДИТЕЛЯ (прогресс принадлежит рейсу, а не человеку).
     // Возвращает НОВЫЙ boxCount; 0 (no-op) — не нёс / вне Loading/Unloading.
-    int finishCarry(int playerId);
+    int finishCarry(int carrierId);
 
     // Пере-сток: привязать свежий pre-stock грузовик к пустой площадке.
     void setStanding(int spot, int vehicleId);
@@ -143,10 +180,12 @@ class HaulerJobService final : public IService
     struct State
     {
         Phase phase = Phase::NotWorking;
+        Role role = Role::None;
+        int partnerId = -1;   // вторая половина пары; -1 — соло/без пары
         int vehicleId = -1;   // закреплённый (Reserved) / ведомый (DriveOut..Unloading) грузовик
         int driveIndex = 0;   // индекс чекпоинта текущего плеча езды
-        int boxCount = 0;     // коробок сдано на текущем плече погрузки/разгрузки
-        bool carrying = false; // держит коробку (ждём сброса) в Loading/Unloading
+        int boxCount = 0;     // коробок сдано на текущем плече (ведёт ВОДИТЕЛЬ смены)
+        bool carrying = false; // держит коробку — флаг НОСИЛЬЩИКА, не смены
     };
     struct Spot
     {
