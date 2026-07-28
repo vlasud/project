@@ -53,6 +53,8 @@
 #include "Systems/HelpSystem/HelpSystem.h"
 #include "Systems/InventorySystem/InventorySystem.h"
 #include "Systems/MedkitSystem/MedkitSystem.h"
+#include "Systems/BusinessSystem/BusinessSystem.h"
+#include "Systems/Shop247System/Shop247System.h"
 #include "Systems/ToolkitSystem/ToolkitSystem.h"
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 #include "Systems/Core/MapIconSystem/MapIconSystem.h"
@@ -358,6 +360,14 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // /repair. Нужны GridSystem/VehicleSystem (поиск ближайшей машины и её починка) и
     // PlayerAnimationSystem — все зарегистрированы выше.
     m_systems.push_back(std::make_unique<ToolkitSystem>(core, serviceRegister));
+    // Магазин 24/7 — ТИП бизнеса: регистрирует себя в BusinessService в конструкторе.
+    // Обязан идти ДО BusinessSystem: тот на initialize грузит businesses.json и
+    // заводит точки, а для этого каталог типа уже должен быть в реестре. Предметы
+    // (аптечка/инструменты) зарегистрированы выше — магазин продаёт их по типам.
+    m_systems.push_back(std::make_unique<Shop247System>(core, serviceRegister));
+    // Общий привод бизнесов: дев-команда /business, точки входа/выхода, интерфейс
+    // «Бизнес», персист. После Pickup/MapIcon/CheckpointSystem (компоненты готовы).
+    m_systems.push_back(std::make_unique<BusinessSystem>(core, serviceRegister));
     // Семьи (player-created соц-группы, бизнес-фича вне Core): после
     // PlayerSessionSystem (подписки на старт/конец сессии резолвят онлайн-членство).
     // Сервисы команд/диалога/чата зарегистрированы раньше (Core). Источник правды

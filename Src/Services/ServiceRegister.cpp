@@ -5,6 +5,7 @@
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
 #include "Services/Core/AttachmentService/AttachmentService.h"
 #include "Services/BankService/BankService.h"
+#include "Services/BusinessService/BusinessService.h"
 #include "Services/BusJobService/BusJobService.h"
 #include "Services/BusWalletService/BusWalletService.h"
 #include "Services/HaulerJobService/HaulerJobService.h"
@@ -234,6 +235,10 @@ void ServiceRegister::registerServices()
     registerService<MedicJobService>();
     // Персистентный кошелёк заработка врача (write-through в БД, medic_wallet).
     registerService<MedicWalletService>();
+    // Бизнесы (принадлежащие игроку доходные точки). Без зависимостей; типы
+    // (24/7 и далее) регистрируют себя сами в конструкторах своих систем, персист
+    // businesses.json ведёт BusinessSystem.
+    registerService<BusinessService>();
     registerService<InventoryService>();
     registerService<PlayerAuthService>();
     // Админ-доступ (источник правды об уровне/пароле/логине). Без зависимостей;

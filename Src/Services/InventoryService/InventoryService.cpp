@@ -44,6 +44,19 @@ int InventoryService::maxStack(int itemType) const
     return def ? def->maxStack : 0;
 }
 
+const std::string &InventoryService::itemName(int itemType) const
+{
+    static const std::string empty;
+    for (const ItemDef &def : m_registry)
+    {
+        if (def.itemType == itemType)
+        {
+            return def.name;
+        }
+    }
+    return empty;
+}
+
 int InventoryService::add(int playerId, int itemType, int n)
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS || n <= 0)

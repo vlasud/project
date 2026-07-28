@@ -44,6 +44,9 @@ class InventoryService final : public IService
     void registerItem(int itemType, std::string name, int maxStack);
     const std::vector<ItemDef> &registeredItems() const;
     int maxStack(int itemType) const; // 0 — тип не зарегистрирован
+    // Имя зарегистрированного типа (utf-8); пусто — тип не зарегистрирован.
+    // Линейно по реестру (типов единицы), холодный путь — UI/диалоги.
+    const std::string &itemName(int itemType) const;
 
     // --- операции с предметами игрока ---
     // Добавить n штук, НЕ выше maxStack типа. Возвращает СКОЛЬКО реально добавлено
