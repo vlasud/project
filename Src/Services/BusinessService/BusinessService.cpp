@@ -112,6 +112,22 @@ std::vector<int> BusinessService::businessesOf(const std::string &ownerKey) cons
     return owned;
 }
 
+bool BusinessService::ownsBusiness(const std::string &ownerKey) const
+{
+    if (ownerKey.empty())
+    {
+        return false; // ничейный бизнес не «принадлежит» никому
+    }
+    for (const auto &[id, business] : m_businesses)
+    {
+        if (business.owner == ownerKey)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ------------------------------------------------------------------ операции
 
 const BusinessService::Business *BusinessService::createBusiness(Type type, const Vector3 &creatorPos,
@@ -152,6 +168,18 @@ bool BusinessService::removeBusiness(int id)
     return true;
 }
 
+bool BusinessService::setPrice(int id, std::int64_t price)
+{
+    const auto it = m_businesses.find(id);
+    if (it == m_businesses.end())
+    {
+        return false;
+    }
+    it->second.price = std::max<std::int64_t>(price, 0);
+    notifyChanged();
+    return true;
+}
+
 bool BusinessService::setOwner(int id, const std::string &ownerKey)
 {
     const auto it = m_businesses.find(id);
@@ -159,9 +187,39 @@ bool BusinessService::setOwner(int id, const std::string &ownerKey)
     {
         return false;
     }
+    const std::string oldKey = it->second.owner;
     it->second.owner = ownerKey;
-    notifyChanged();
+    // json владение НЕ хранит (оно в БД) — notifyChanged здесь не нужен; персист
+    // делает наблюдатель смены владельца.
+    for (const OwnerChangedObserver &observer : m_ownerChangedObservers)
+    {
+        observer(id, oldKey, ownerKey);
+    }
     return true;
+}
+
+bool BusinessService::setOwnerSilent(int id, const std::string &ownerKey)
+{
+    const auto it = m_businesses.find(id);
+    if (it == m_businesses.end())
+    {
+        return false;
+    }
+    it->second.owner = ownerKey;
+    return true;
+}
+
+void BusinessService::subscribeOwnerChanged(OwnerChangedObserver observer)
+{
+    if (observer)
+    {
+        m_ownerChangedObservers.push_back(std::move(observer));
+    }
+}
+
+void BusinessService::markOwnershipLoaded()
+{
+    m_ownershipLoaded = true;
 }
 
 bool BusinessService::addIncome(int id, std::int64_t income)
@@ -224,12 +282,19 @@ std::string BusinessService::serialize() const
         item["exit"] = {business.exit.x, business.exit.y, business.exit.z};
         item["exitAngle"] = business.exitAngle;
         item["vw"] = business.virtualWorld;
-        item["owner"] = business.owner;
         item["price"] = business.price;
         item["balance"] = business.balance;
+        // owner в json НЕ идёт: владение живёт в БД (business_owner), а Business::
+        // owner — лишь зеркало. Иначе два источника правды разъехались бы.
         array.push_back(std::move(item));
     }
-    return array.dump(2);
+
+    // Объект с секцией, а не голый массив: формат остался от сборки, когда рядом
+    // лежали торги (теперь они в auctions.json). Голый массив на загрузке тоже
+    // читается — файл может быть от ещё более старой сборки.
+    nlohmann::json root;
+    root["businesses"] = std::move(array);
+    return root.dump(2);
 }
 
 void BusinessService::loadBusiness(const Business &business)

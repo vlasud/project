@@ -53,6 +53,7 @@
 #include "Systems/HelpSystem/HelpSystem.h"
 #include "Systems/InventorySystem/InventorySystem.h"
 #include "Systems/MedkitSystem/MedkitSystem.h"
+#include "Systems/AuctionSystem/AuctionSystem.h"
 #include "Systems/BusinessSystem/BusinessSystem.h"
 #include "Systems/Shop247System/Shop247System.h"
 #include "Systems/ToolkitSystem/ToolkitSystem.h"
@@ -428,6 +429,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // сессии зарегистрированы раньше. Команды в конструкторе; диалог/чекпоинт/телепорт —
     // холодный путь (по команде), не per-tick.
     m_systems.push_back(std::make_unique<GpsSystem>(core, serviceRegister));
+    // AuctionSystem (/auc) после систем-владельцев аукционов (BusinessSystem
+    // регистрирует свою категорию в конструкторе) и после VehicleWaypointSystem —
+    // «отметить на GPS» ставит маркер тем же единым чекпоинт-слотом, что /gps.
+    m_systems.push_back(std::make_unique<AuctionSystem>(core, serviceRegister));
     // AutosaveSystem после всех save-подписчиков (Inventory/WeaponProficiency/
     // PersonalSkin) и PlayerSessionSystem: к его initialize() (где ставится таймер)
     // все персистеры уже подписались в своих конструкторах. Периодический автосейв

@@ -6,6 +6,7 @@
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerHealthService/PlayerHealthService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
+#include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "Services/Core/PlayerSavedLocationService/PlayerSavedLocationService.h"
 #include "Services/Core/PlayerSkinService/PlayerSkinService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
@@ -56,6 +57,7 @@ class AdminSystem : public BaseSystem
     void cmdSlap(IPlayer &actor, int targetId);
     void cmdGodMode(IPlayer &player); // /gm — тоггл бессмертия на себя (god mode)
     void cmdGiveWeapon(IPlayer &actor, int targetId, int weaponId, int ammo);
+    void cmdGiveMoney(IPlayer &actor, int targetId, int amount);
     void cmdAskin(IPlayer &actor, int targetId, int skin);   // временный скин сессии
     void cmdDevSkin(IPlayer &actor, int targetId, int skin); // личный скин: память + применить + write-through (durable сразу)
     // Личная закладка координат админа (на себя): /savepos — запомнить, /tppos — вернуться.
@@ -81,6 +83,7 @@ class AdminSystem : public BaseSystem
     PlayerLocationService &m_locationService; // легитимный для анти-чита перенос (/goto, /gethere, /slap, /tppos)
     PlayerHealthService &m_healthService;     // /sethp, /setarmour — грейс анти-чита HealthHack
     PlayerWeaponService &m_weaponService;     // /agun — грейс анти-чита WeaponHack
+    PlayerMoneyService &m_moneyService;       // /amoney — дев-выдача наличных
     PlayerSkinService &m_skinService;         // /askin — временный скин; /devskin — база (личный) вне фракции
     PlayerPersonalSkinService &m_personalSkinService; // /devskin — основной скин аккаунта
     PlayerSavedLocationService &m_savedLocationService; // /savepos, /tppos — личная закладка

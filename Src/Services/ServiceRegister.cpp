@@ -4,6 +4,7 @@
 #include "Services/BanService/BanService.h"
 #include "Services/Core/AntiCheatService/AntiCheatService.h"
 #include "Services/Core/AttachmentService/AttachmentService.h"
+#include "Services/AuctionService/AuctionService.h"
 #include "Services/BankService/BankService.h"
 #include "Services/BusinessService/BusinessService.h"
 #include "Services/BusJobService/BusJobService.h"
@@ -239,6 +240,9 @@ void ServiceRegister::registerServices()
     // (24/7 и далее) регистрируют себя сами в конструкторах своих систем, персист
     // businesses.json ведёт BusinessSystem.
     registerService<BusinessService>();
+    // Реестр аукционных категорий (/auc). Без зависимостей; категории (бизнесы и
+    // далее) регистрируют себя сами в конструкторах своих систем.
+    registerService<AuctionService>();
     registerService<InventoryService>();
     registerService<PlayerAuthService>();
     // Админ-доступ (источник правды об уровне/пароле/логине). Без зависимостей;

@@ -87,7 +87,7 @@ Vector3 HouseService::backOf(const Vector3 &position, float angleDegrees, float 
 }
 
 const HouseService::House *HouseService::createHouse(const Vector3 &creatorPos, float creatorAngle, int interiorIndex,
-                                                     int parkingCap)
+                                                     int parkingCap, std::int64_t price)
 {
     if (!catalogValid(interiorIndex))
     {
@@ -109,9 +109,21 @@ const HouseService::House *HouseService::createHouse(const Vector3 &creatorPos, 
     house.owner.clear(); // ничейный
     // Кламп капа в [MIN, MAX]: страховка даже если вызывающий уже проверил диапазон.
     house.parkingCap = std::clamp(parkingCap, MIN_PARKING_CAP, MAX_PARKING_CAP);
+    house.price = std::max<std::int64_t>(price, 0);
 
     const auto [it, inserted] = m_houses.emplace(house.id, std::move(house));
     return &it->second;
+}
+
+bool HouseService::setPrice(int id, std::int64_t price)
+{
+    const auto it = m_houses.find(id);
+    if (it == m_houses.end())
+    {
+        return false;
+    }
+    it->second.price = std::max<std::int64_t>(price, 0);
+    return true;
 }
 
 bool HouseService::removeHouse(int id)
@@ -215,6 +227,7 @@ std::string HouseService::serialize() const
         item["exitAngle"] = house.exitAngle;
         item["virtualWorld"] = house.virtualWorld;
         item["parkingCap"] = house.parkingCap;
+        item["price"] = house.price;
         array.push_back(std::move(item));
     }
     return array.dump(2);

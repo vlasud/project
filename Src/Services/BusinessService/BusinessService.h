@@ -21,11 +21,18 @@ struct IPlayer;
 // у всех бизнесов общее: кому принадлежит, где стоит и сколько накопил. Новый тип
 // бизнеса — своя система + одна регистрация, сервис и общее меню не правятся.
 //
-// ХРАНЕНИЕ: businesses.json рядом с сервером (как houses.json) — описание И
-// владение. Дома владение держат в БД, потому что там оно менялось задолго до
-// json-описания; у бизнесов покупка ещё не введена, поэтому отдельная таблица не
-// заводится: когда появится покупка за деньги, владение переедет в БД тем же
-// путём, что house_owner.
+// НИЧЕЙНЫЙ БИЗНЕС РАЗЫГРЫВАЕТСЯ АУКЦИОНОМ, и торги здесь НЕ живут: ставки, сроки
+// и возвраты ведёт общий AuctionService (см. Docs/Auction.md) — правила у всех
+// аукционов одинаковые, и второй копии этого кода в проекте нет. Отсюда торгам
+// отдают только категорию «Бизнесы»: как выглядит лот, кому его можно отдать
+// (ОДИН БИЗНЕС НА АККАУНТ, ownsBusiness) и как передать победителю (setOwner).
+//
+// ДВА РАЗНЫХ ИСТОЧНИКА ПРАВДЫ (как у домов, см. HouseService):
+//  * ОПИСАНИЕ бизнеса — businesses.json;
+//  * ВЛАДЕНИЕ (бизнес -> аккаунт) — БД (таблица business_owner, write-through).
+//    Business::owner — лишь in-memory зеркало: наполняется из БД на старте
+//    (BusinessSystem грузит business_owner ПОСЛЕ спавна точек) и на смене
+//    владельца. Запись в БД делает BusinessSystem по subscribeOwnerChanged.
 //
 // vw бизнеса — уникальный (VW_BASE + id), чтобы интерьеры разных точек не
 // пересекались; снаружи (вход/иконка) — основной мир (vw 0).
@@ -67,8 +74,9 @@ class BusinessService final : public IService
         Vector3 exit{};
         float exitAngle = 0.0f;
         int virtualWorld = 0;
-        std::string owner;      // ключ аккаунта (std::to_string(accountId)); "" — ничейный
-        std::int64_t price = 0; // цена покупки игроком (дев задаёт при создании)
+        std::string owner;      // ключ аккаунта (std::to_string(accountId)); "" — ничейный.
+                                // Зеркало БД (business_owner), а НЕ json.
+        std::int64_t price = 0;   // стартовая планка аукциона (дев задаёт при создании)
         std::int64_t balance = 0; // накопленный доход, ждёт снятия владельцем
     };
 
@@ -95,6 +103,17 @@ class BusinessService final : public IService
     }
     // Бизнесы игрока (ключ аккаунта). Пустой ключ — пусто. Линейно, холодный путь.
     std::vector<int> businessesOf(const std::string &ownerKey) const;
+    // Владеет ли аккаунт хоть каким-то бизнесом (один бизнес на аккаунт). Пустой
+    // ключ — всегда false. Линейно по бизнесам (десятки), холодный путь.
+    bool ownsBusiness(const std::string &ownerKey) const;
+
+    // Владение из БД легло в память (одноразовое стартовое событие). До этого
+    // зеркало неполно, поэтому итоги аукционов НЕ подводятся: «один бизнес на
+    // аккаунт» нечем проверить, а победитель — необратимая раздача.
+    bool isOwnershipLoaded() const
+    {
+        return m_ownershipLoaded;
+    }
 
     // --- операции (источник правды; персист делает BusinessSystem) ---
     // Создать бизнес в позиции создателя. Точка выхода — за спиной по его углу.
@@ -103,9 +122,19 @@ class BusinessService final : public IService
     const Business *createBusiness(Type type, const Vector3 &creatorPos, float creatorAngle, int interiorIndex,
                                    std::int64_t price);
     bool removeBusiness(int id);
-    // Сменить владельца в памяти. "" — снять владение. Персист (json) — на приводе,
-    // он подписан на subscribeChanged.
+    // Сменить стартовую планку торгов (дев-правка уже созданного бизнеса).
+    // Отрицательная клампится к нулю. false — бизнеса нет.
+    bool setPrice(int id, std::int64_t price);
+    // Сменить владельца в ПАМЯТИ (зеркало БД). "" — снять владение. false — бизнеса
+    // нет. Запись в business_owner делает привод по subscribeOwnerChanged — ЕДИНАЯ
+    // точка персиста владения для всех путей (итог аукциона, снос, выселение).
     bool setOwner(int id, const std::string &ownerKey);
+
+    // Наблюдатель смены владельца (после успешного setOwner): id, старый и новый
+    // ключ ("" — ничейный). Привод пишет БД и откатывает память при сбое.
+    using OwnerChangedObserver = std::function<void(int businessId, const std::string &oldKey,
+                                                    const std::string &newKey)>;
+    void subscribeOwnerChanged(OwnerChangedObserver observer);
     // Начислить доход в копилку бизнеса (income > 0). false — бизнеса нет.
     bool addIncome(int id, std::int64_t income);
     // Забрать всю копилку: возвращает снятую сумму (0 — пусто/нет бизнеса).
@@ -122,6 +151,11 @@ class BusinessService final : public IService
     // --- вызывается BusinessSystem ---
     void loadBusiness(const Business &business);
     void finalizeLoad();
+    // Владелец в памяти БЕЗ нотификации: загрузка зеркала из БД (иначе каждая
+    // строка спровоцировала бы write-through обратно) и откат при сбое записи
+    // (иначе рекурсия зациклила бы попытки при затяжном сбое БД).
+    bool setOwnerSilent(int id, const std::string &ownerKey);
+    void markOwnershipLoaded();
 
     struct TypeDef
     {
@@ -137,6 +171,8 @@ class BusinessService final : public IService
 
     std::unordered_map<int, Business> m_businesses;
     int m_nextId = 1;
+    bool m_ownershipLoaded = false; // зеркало business_owner легло в память
     TypeDef m_types[static_cast<std::size_t>(Type::Count)];
     std::vector<ChangedObserver> m_changedObservers;
+    std::vector<OwnerChangedObserver> m_ownerChangedObservers;
 };

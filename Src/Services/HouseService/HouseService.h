@@ -4,6 +4,7 @@
 #include "Services/IService.h"
 #include "types.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -59,6 +60,7 @@ class HouseService final : public IService
         std::string owner;       // ключ аккаунта (std::to_string(accountId)); "" — ничейный.
                                  // Зеркало БД (house_owner), а НЕ json — наполняется на старте/занятии.
         int parkingCap = DEFAULT_PARKING_CAP; // макс. припаркованных машин у дома (>=1)
+        std::int64_t price = 0;               // стартовая планка аукциона (дев задаёт при создании)
     };
 
     // Готовый интерьер: имя в дев-меню + interior id SA + фикс. точка спавна
@@ -116,12 +118,18 @@ class HouseService final : public IService
     // Создать дом в позиции создателя. creatorAngle — yaw создателя (градусы);
     // точка выхода считается за спиной по этому углу. interiorIndex обязан быть
     // валидным (вызывающий проверяет catalogValid). parkingCap клампится в
-    // [MIN_PARKING_CAP, MAX_PARKING_CAP] (защита даже при уже провалидированном вводе).
+    // [MIN_PARKING_CAP, MAX_PARKING_CAP] (защита даже при уже провалидированном вводе);
+    // price — стартовая планка аукциона, отрицательная клампится к нулю.
     // Возвращает указатель на созданный дом (живёт в m_houses) или nullptr при
     // невалидном индексе либо достигнутом лимите id (MAX_HOUSE_ID).
-    const House *createHouse(const Vector3 &creatorPos, float creatorAngle, int interiorIndex, int parkingCap);
+    const House *createHouse(const Vector3 &creatorPos, float creatorAngle, int interiorIndex, int parkingCap,
+                             std::int64_t price);
     // Удалить дом. false — дома нет (вызывающий снимает рантайм-хэндлы заранее).
     bool removeHouse(int id);
+    // Сменить стартовую планку торгов (дев-правка уже существующего дома).
+    // Отрицательная клампится к нулю. false — дома нет. Персист (houses.json) —
+    // на приводе, как и при создании.
+    bool setPrice(int id, std::int64_t price);
     // Выставить владельца дома в ПАМЯТИ (зеркало БД). ownerKey — ключ аккаунта
     // (std::to_string(accountId)); "" снимает владельца (ничейный). false — дома
     // нет. Запись владения в БД (house_owner) и пересоздание иконки делает

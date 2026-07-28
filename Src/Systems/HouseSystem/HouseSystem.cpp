@@ -46,10 +46,10 @@ constexpr PickupType PICKUP_TYPE = 1;        // подбор по касанию
 // 3D-текст у входа — игроцкий ориентир дома (виден всем у двери). Зелёный 90EE90
 // в пару к зелёной иконке (свободно); не белый (выгорает на песке) и не кислотный
 // 00FF00. Близкая дистанция отрисовки, чтобы лейблы не засоряли горизонт при
-// плотной застройке; 5 м + testLOS=true — текст виден только у самой двери и НЕ
-// проступает сквозь стены/объекты.
+// плотной застройке; 10 м + testLOS=true — текст читается только вблизи и НЕ
+// проступает сквозь стены/объекты (та же дистанция, что у бизнесов).
 const Colour HOUSE_LABEL_COLOUR{90, 238, 144}; // 90EE90
-constexpr float HOUSE_LABEL_DRAW_DISTANCE = 5.0f;
+constexpr float HOUSE_LABEL_DRAW_DISTANCE = 10.0f;
 constexpr bool HOUSE_LABEL_TEST_LOS = true;
 
 // Иконка дома на карте стримится только вблизи входа (не засоряет радар издалека):
@@ -64,6 +64,13 @@ constexpr std::chrono::milliseconds EXIT_GRACE{1500};
 // Смещение пикапа выхода от точки спавна внутри — чтобы появившийся игрок не стоял
 // прямо на нём (основной гард, грейс — вторичный).
 constexpr float EXIT_PICKUP_OFFSET = 2.0f;
+
+// Стабильный ключ категории в файле аукционов. Строка, а не индекс регистрации:
+// порядок систем правится, а ставки обязаны оставаться на своих лотах.
+const std::string AUCTION_KEY = "house";
+
+// Потолок стартовой цены: защита от опечатки дева.
+constexpr std::int64_t MAX_PRICE = 100000000;
 
 bool finite3(const Vector3 &v)
 {
@@ -108,7 +115,8 @@ HouseSystem::HouseSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_labelService(serviceRegister.getService<TextLabelService>()),
-      m_sessionService(serviceRegister.getService<PlayerSessionService>())
+      m_sessionService(serviceRegister.getService<PlayerSessionService>()),
+      m_auctionService(serviceRegister.getService<AuctionService>())
 {
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 
@@ -117,11 +125,37 @@ HouseSystem::HouseSystem(ICore &core, const ServiceRegister &serviceRegister)
                  PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "дома — дев-меню (создание/список/удаление)",
                  PlayerCommandService::HelpCategory::Hidden);
 
-    // Единая точка персиста владения: занятие (showClaimConfirm) и передача/
-    // выселение (HomeMenuSystem) идут через один и тот же наблюдатель.
-    m_serviceRegister.getService<HouseService>().subscribeOwnerChanged(
-        [this](int houseId, const std::string &oldKey, const std::string &newKey)
-        { onOwnerChanged(houseId, oldKey, newKey); });
+    // Единая точка персиста владения: итог аукциона и передача/выселение
+    // (HomeMenuSystem) идут через один и тот же наблюдатель.
+    HouseService &houses = m_serviceRegister.getService<HouseService>();
+    houses.subscribeOwnerChanged([this](int houseId, const std::string &oldKey, const std::string &newKey)
+                                 { onOwnerChanged(houseId, oldKey, newKey); });
+
+    // Категория «Дома» в общих торгах: саморегистрация. Сами торги (ставки, сроки,
+    // окна, деньги, /auc) ведёт AuctionService — отсюда только «как выглядит лот»,
+    // «кому можно отдать» и «как передать».
+    AuctionService::CategoryDef category;
+    category.key = AUCTION_KEY;
+    category.name = "Дома";
+    category.info = [this](int houseId, AuctionService::Lot &out) { return describeLot(houseId, out); };
+    // Сервис берём через регистр внутри колбэков (как везде в этой системе): ссылка
+    // из конструктора живёт только до его конца, а колбэки переживают его.
+    category.eligible = [this](const std::string &ownerKey)
+    {
+        return !m_serviceRegister.getService<HouseService>().ownsHouse(ownerKey); // один дом в одни руки
+    };
+    category.award = [this](int houseId, const std::string &ownerKey)
+    {
+        // setOwner дёрнет onOwnerChanged — тот и запишет владение в БД.
+        m_serviceRegister.getService<HouseService>().setOwner(houseId, ownerKey);
+    };
+    category.ready = [this]()
+    {
+        // Пока зеркало владения не пришло из БД, «один дом на аккаунт» проверять
+        // нечем, а раздача дома необратима.
+        return m_serviceRegister.getService<HouseService>().isOwnershipLoaded();
+    };
+    m_auctionService.registerCategory(std::move(category));
 }
 
 void HouseSystem::initialize(IComponentList * /*components*/)
@@ -262,11 +296,17 @@ void HouseSystem::onEntrancePickup(int houseId, IPlayer &player)
         return; // дом исчез между событиями — игнор
     }
 
-    // Ничейный дом -> предложить занять (не входим). Занятый -> молчаливый вход
-    // (контроль доступа/замки — будущее: любой занятый дом пускает внутрь).
+    // Ничейный дом -> торги (не входим): дом не занимается бесплатно, он
+    // разыгрывается на аукционе. Окно рисует AuctionSystem — оно общее для всех
+    // категорий лотов. Занятый -> молчаливый вход (контроль доступа/замки —
+    // будущее: любой занятый дом пускает внутрь).
     if (house->owner.empty())
     {
-        showClaimConfirm(player, houseId);
+        const int category = m_auctionService.categoryByKey(AUCTION_KEY);
+        if (category >= 0)
+        {
+            m_auctionService.openLot(player, static_cast<std::size_t>(category), houseId);
+        }
         return;
     }
 
@@ -276,65 +316,20 @@ void HouseSystem::onEntrancePickup(int houseId, IPlayer &player)
     m_exitGraceFrom[player.getID()] = std::chrono::steady_clock::now();
 }
 
-void HouseSystem::showClaimConfirm(IPlayer &player, int houseId)
+bool HouseSystem::describeLot(int houseId, AuctionService::Lot &out) const
 {
-    const std::string body =
-        fmt::format("Дом #{} сейчас ничей. Занять его?\nДом станет вашим — он закрепится за вами и сохранится "
-                    "после перезахода. Один дом на игрока.",
-                    houseId);
-
-    m_dialogService.show(
-        player, makeDialog(DialogStyle_MSGBOX, "Занять дом", body, "Занять", "Отмена"),
-        [this, playerId = player.getID(), houseId](DialogResponse response, int, StringView)
-        {
-            IPlayer *player = m_core.getPlayers().get(playerId);
-            if (!player || response != DialogResponse_Left)
-            {
-                return; // игрок вышел / отказался — ничего не делаем
-            }
-
-            // Владелец — серверный: accountId из сессии (не от клиента). Нет сессии —
-            // занимать некому (некуда привязать); молча выходим.
-            const PlayerSessionService::Session *session = m_sessionService.get(playerId);
-            if (!session || session->accountId == PlayerSessionService::NO_ACCOUNT)
-            {
-                return;
-            }
-            const PlayerSessionService::AccountId accountId = session->accountId;
-            const std::string ownerKey = std::to_string(accountId);
-
-            HouseService &service = m_serviceRegister.getService<HouseService>();
-            // Гейт старт-гонки «один дом на игрока»: пока владение из БД не легло в
-            // память, ownsHouse() врёт (вернёт false на ещё не подтянутые дома), и
-            // игрок мог бы занять второй дом до прихода зеркала. Откладываем занятие.
-            if (!service.isOwnershipLoaded())
-            {
-                player->sendClientMessage(ERROR_COLOUR, u("Дома ещё загружаются, попробуйте через момент"));
-                return;
-            }
-
-            // Перепроверка на момент СОГЛАСИЯ (диалогу не доверяем): дом ещё есть и
-            // ещё ничейный; игрок ещё не владеет домом (один дом на игрока).
-            const HouseService::House *house = service.getHouse(houseId);
-            if (!house || !house->owner.empty())
-            {
-                player->sendClientMessage(ERROR_COLOUR, u("Этот дом уже занят"));
-                return;
-            }
-            if (service.ownsHouse(ownerKey))
-            {
-                player->sendClientMessage(ERROR_COLOUR, u("У вас уже есть свой дом"));
-                return;
-            }
-
-            if (!service.setOwner(houseId, ownerKey)) // оптимистичная память; персист/иконку доводит onOwnerChanged
-            {
-                return; // дом исчез между проверкой и записью — игнор
-            }
-
-            player->sendClientMessage(
-                INFO_COLOUR, u(fmt::format("Дом #{} теперь ваш. Возвращайтесь сюда в любое время", houseId)));
-        });
+    const HouseService &service = m_serviceRegister.getService<HouseService>();
+    const HouseService::House *house = service.getHouse(houseId);
+    if (!house || !house->owner.empty())
+    {
+        return false; // снесён либо уже чей-то — торгов по нему нет
+    }
+    out.title = fmt::format("Дом #{}", houseId);
+    out.description = fmt::format("Интерьер: {}. Парковка: {} машин", service.catalog()[house->interiorIndex].name,
+                                  house->parkingCap);
+    out.position = house->entrance;
+    out.minPrice = house->price;
+    return true;
 }
 
 void HouseSystem::onOwnerChanged(int houseId, const std::string &oldKey, const std::string &newKey)
@@ -586,7 +581,39 @@ void HouseSystem::showCapInput(IPlayer &player, int interiorIndex)
                 showCapInput(*player, interiorIndex);
                 return;
             }
-            createHouseFor(*player, interiorIndex, static_cast<int>(value));
+            showPriceInput(*player, interiorIndex, static_cast<int>(value));
+        });
+}
+
+void HouseSystem::showPriceInput(IPlayer &player, int interiorIndex, int parkingCap)
+{
+    // Дом не продаётся напрямую — он разыгрывается на аукционе (см. Docs/Auction.md).
+    // Цена дева здесь — СТАРТОВАЯ ПЛАНКА торгов: ниже неё ставку не примут.
+    m_dialogService.showNumberInput(
+        player,
+        makeDialog(DialogStyle_INPUT, "Стартовая цена",
+                   "С какой суммы начинаются торги за этот дом?\nНиже неё ставку не примут. 0 — торги с $1.",
+                   "Создать", "Назад"),
+        [this, playerId = player.getID(), interiorIndex, parkingCap](DialogResponse response, std::int64_t value)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+            {
+                return; // дев вышел на вводе — цепочка обрывается
+            }
+            if (response != DialogResponse_Left)
+            {
+                showCapInput(*player, interiorIndex); // «Назад» — обратно к лимиту парковки
+                return;
+            }
+            if (value < 0 || value > MAX_PRICE)
+            {
+                player->sendClientMessage(DEBUG_COLOUR,
+                                          u(fmt::format("Цена — целое от 0 до {}. Попробуйте снова", MAX_PRICE)));
+                showPriceInput(*player, interiorIndex, parkingCap);
+                return;
+            }
+            createHouseFor(*player, interiorIndex, parkingCap, value);
         });
 }
 
@@ -686,16 +713,60 @@ void HouseSystem::showHouseMenu(IPlayer &player, int houseId)
             // Пункт 0 — «Лимит парковки» (информационная строка): без действия.
             switch (listItem)
             {
-            case 1: // телепорт ко входу (дев проходит через пикап и проверяет вход)
+            case 1: // стартовая цена торгов — правится и у уже созданного дома
+                showHousePriceEdit(*player, houseId);
+                break;
+            case 2: // телепорт ко входу (дев проходит через пикап и проверяет вход)
                 m_locationService.teleport(*player, house->entrance, 0, 0);
                 player->sendClientMessage(DEBUG_COLOUR, u(fmt::format("Телепорт ко входу дома #{}", houseId)));
                 break;
-            case 2:
+            case 3:
                 showDeleteConfirm(*player, houseId);
                 break;
             default:
                 break;
             }
+        });
+}
+
+void HouseSystem::showHousePriceEdit(IPlayer &player, int houseId)
+{
+    // Дома из старых houses.json стартуют торги с нуля — без этой правки их
+    // пришлось бы пересоздавать, чтобы задать планку.
+    m_dialogService.showNumberInput(
+        player,
+        makeDialog(DialogStyle_INPUT, fmt::format("Дом #{} — стартовая цена", houseId),
+                   "С какой суммы начинаются торги за этот дом?\nНиже неё ставку не примут. 0 — торги с $1.",
+                   "Сохранить", "Назад"),
+        [this, playerId = player.getID(), houseId](DialogResponse response, std::int64_t value)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+            {
+                return;
+            }
+            if (response != DialogResponse_Left)
+            {
+                showHouseMenu(*player, houseId);
+                return;
+            }
+            if (value < 0 || value > MAX_PRICE)
+            {
+                player->sendClientMessage(DEBUG_COLOUR,
+                                          u(fmt::format("Цена — целое от 0 до {}. Попробуйте снова", MAX_PRICE)));
+                showHousePriceEdit(*player, houseId);
+                return;
+            }
+            if (!m_serviceRegister.getService<HouseService>().setPrice(houseId, value))
+            {
+                player->sendClientMessage(DEBUG_COLOUR, u(fmt::format("Дом #{} не найден", houseId)));
+                showMain(*player);
+                return;
+            }
+            saveToFileAsync();
+            player->sendClientMessage(DEBUG_COLOUR,
+                                      u(fmt::format("Дом #{}: старт торгов теперь ${}", houseId, value)));
+            showHouseMenu(*player, houseId);
         });
 }
 
@@ -735,7 +806,7 @@ void HouseSystem::showDeleteConfirm(IPlayer &player, int houseId)
 
 // ------------------------------------------------------------------ операции дев-меню
 
-void HouseSystem::createHouseFor(IPlayer &player, int interiorIndex, int parkingCap)
+void HouseSystem::createHouseFor(IPlayer &player, int interiorIndex, int parkingCap, std::int64_t price)
 {
     if (!HouseService::catalogValid(interiorIndex))
     {
@@ -751,7 +822,7 @@ void HouseSystem::createHouseFor(IPlayer &player, int interiorIndex, int parking
     const float angle = player.getRotation().ToEuler().z; // yaw, градусы
 
     // parkingCap клампит сам createHouse — берём фактический (клампнутый) из house->parkingCap.
-    const HouseService::House *house = service.createHouse(pos, angle, interiorIndex, parkingCap);
+    const HouseService::House *house = service.createHouse(pos, angle, interiorIndex, parkingCap, price);
     if (!house)
     {
         // Индекс уже проверен выше — nullptr здесь означает достигнутый лимит id.
@@ -765,9 +836,9 @@ void HouseSystem::createHouseFor(IPlayer &player, int interiorIndex, int parking
     saveToFileAsync();
 
     player.sendClientMessage(
-        DEBUG_COLOUR, u(fmt::format("Дом #{} создан ({}). Лимит парковки — {}. Вход — на вашей позиции, "
-                                    "выход — за спиной",
-                                    house->id, name, house->parkingCap)));
+        DEBUG_COLOUR, u(fmt::format("Дом #{} создан ({}). Лимит парковки — {}, старт торгов — ${}. "
+                                    "Вход — на вашей позиции, выход — за спиной",
+                                    house->id, name, house->parkingCap, house->price)));
 }
 
 void HouseSystem::deleteHouse(IPlayer &player, int houseId)
@@ -780,6 +851,14 @@ void HouseSystem::deleteHouse(IPlayer &player, int houseId)
         return;
     }
 
+    // Ставки на этот дом — уже списанные деньги игроков: закрываем торги ДО
+    // стирания записи, общий сервис вернёт суммы владельцам ставок.
+    const int category = m_auctionService.categoryByKey(AUCTION_KEY);
+    if (category >= 0)
+    {
+        m_auctionService.closeLot(static_cast<std::size_t>(category), houseId,
+                                  fmt::format("Дом #{} снесён", houseId));
+    }
     // Снимаем рантайм-хэндлы ДО стирания из сервиса (нет утечки/двойного remove).
     despawnHouse(houseId);
     service.removeHouse(houseId);
@@ -1043,6 +1122,14 @@ std::vector<HouseService::House> HouseSystem::parse(const std::string &content, 
         {
             house.parkingCap = std::clamp(item["parkingCap"].get<int>(), HouseService::MIN_PARKING_CAP,
                                           HouseService::MAX_PARKING_CAP);
+        }
+
+        // price — необязательное поле (старые houses.json): отсутствует/мусор -> 0,
+        // отрицательное клампится. Это стартовая планка аукциона.
+        house.price = 0;
+        if (item.contains("price") && item["price"].is_number_integer())
+        {
+            house.price = std::max<std::int64_t>(item["price"].get<std::int64_t>(), 0);
         }
 
         // vw ВСЕГДА вычисляем (VW_BASE + id), как createHouse. Полю virtualWorld из

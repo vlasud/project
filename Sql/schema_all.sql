@@ -1,7 +1,10 @@
 -- =====================================================================
 -- Гейммод — полная схема БД (сводный файл всех миграций).
 -- Автособрано из Sql/*.sql на 2026-07-01. Применять к схеме гейммода.
--- Все таблицы CREATE TABLE IF NOT EXISTS (идемпотентно, порядок некритичен).
+-- Файл ИДЕМПОТЕНТЕН и гоняется целиком повторно: таблицы — CREATE TABLE IF NOT
+-- EXISTS, ALTER'ы — под проверкой information_schema (MySQL не знает IF NOT EXISTS
+-- в ADD COLUMN/ADD INDEX, а голый ALTER на применённой базе оборвал бы прогон).
+-- Порядок некритичен.
 -- ИСКЛЮЧЁН family_vehicle.sql — устарел, заменён parked_vehicle.sql (НЕ применять).
 -- =====================================================================
 
@@ -201,11 +204,22 @@ CREATE TABLE IF NOT EXISTS `hauler_wallet` (
 -- получили бы одинаковый 0 и индекс просто не создался бы (duplicate entry). NULL под
 -- UNIQUE разрешён в любом количестве — это и есть «номер ещё не выдан».
 --
--- MySQL НЕ поддерживает IF NOT EXISTS в ADD COLUMN/ADD INDEX (это синтаксис MariaDB):
--- если блок уже применяли, MySQL ответит «Duplicate column/key name» — это значит
--- «уже сделано», а не поломку.
-ALTER TABLE `player` ADD COLUMN `phone` BIGINT NULL DEFAULT NULL;
-ALTER TABLE `player` ADD UNIQUE INDEX `uk_player_phone` (`phone`);
+-- MySQL НЕ поддерживает IF NOT EXISTS в ADD COLUMN/ADD INDEX (это синтаксис MariaDB),
+-- а голый ALTER на уже применённой базе падает с «Duplicate column/key name» и
+-- ОБРЫВАЕТ прогон файла — всё, что ниже, остаётся несозданным. Поэтому проверяем
+-- наличие по information_schema и выполняем ALTER динамически: файл целиком
+-- идемпотентен и его можно гонять повторно.
+SET @has_phone := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'player' AND COLUMN_NAME = 'phone');
+SET @sql := IF(@has_phone > 0, 'DO 0', 'ALTER TABLE `player` ADD COLUMN `phone` BIGINT NULL DEFAULT NULL');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @has_phone_idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
+                       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'player'
+                         AND INDEX_NAME = 'uk_player_phone');
+SET @sql := IF(@has_phone_idx > 0, 'DO 0',
+               'ALTER TABLE `player` ADD UNIQUE INDEX `uk_player_phone` (`phone`)');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- Кошелёк заработка врача (работа-врач, Docs/MedicJob.md): write-through, забирается
 -- на пикапе больницы. Как bus_wallet/port_wallet/hauler_wallet.
@@ -557,5 +571,73 @@ CREATE TABLE IF NOT EXISTS `anticheat_profile` (
     `multiplier` FLOAT    NOT NULL DEFAULT 1.0,
     `kicks`      INT      NOT NULL DEFAULT 0,
     `updated_at` DATETIME NULL,
+    PRIMARY KEY (`account_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
+-- ============ business_owner.sql ============
+
+-- Владение бизнесами. Применить вручную к схеме геймода.
+-- Бизнесы (id, тип, интерьер, вход/выход, цена, копилка, ставки аукциона) —
+-- контент и торги, лежат в businesses.json. А вот «кто владеет бизнесом» —
+-- динамические данные АККАУНТА: в БД write-through (как владение домами
+-- house_owner), грузится на старте и применяется к уже заспавненным точкам.
+--
+-- business_id — бизнес из businesses.json (PK: один владелец на бизнес).
+-- account_id — аккаунт владельца (UNIQUE: ОДИН БИЗНЕС НА АККАУНТ, БД-бэкстоп к
+-- in-memory проверке ownsBusiness). claimed_at — unix-время получения бизнеса
+-- (диагностика). Запись владения — DELETE+INSERT в одной throwQuery (атомарно по
+-- business_id и account_id), снос бизнеса стирает строку владения (нет
+-- осиротевшего владения).
+CREATE TABLE IF NOT EXISTS `business_owner` (
+    `business_id` INT    NOT NULL,
+    `account_id`  BIGINT NOT NULL,
+    `claimed_at`  BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`business_id`),
+    UNIQUE KEY `uq_account` (`account_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
+-- ============ auction.sql ============
+
+-- Аукционы (AuctionService). Применить вручную к схеме геймода.
+-- Торги — ДИНАМИКА: деньги за ставку списываются в момент ставки, поэтому ставки
+-- обязаны переживать рестарт и живут только здесь. json-файлы фич (houses.json,
+-- businesses.json) — дев-КОНТЕНТ (описание точек), в проде они read-only.
+--
+-- category — СТАБИЛЬНЫЙ строковый ключ категории ("business", "house"), а не её
+-- индекс регистрации: порядок систем правится, а ставки обязаны оставаться на
+-- своих лотах. lot_id — id объекта внутри своей фичи (дом/бизнес).
+
+-- Срок торгов по лоту. Стартует с ПЕРВОЙ ставки, хранится абсолютным unix-временем
+-- (не таймером в памяти): отсчёт обязан идти и пока сервер лежит. Строка живёт
+-- ровно пока по лоту есть ставки — снимается вместе с последней.
+CREATE TABLE IF NOT EXISTS `auction_lot` (
+    `category` VARCHAR(32) NOT NULL,
+    `lot_id`   INT         NOT NULL,
+    `ends_at`  BIGINT      NOT NULL DEFAULT 0,
+    PRIMARY KEY (`category`, `lot_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- Ставки. Одна на аккаунт в пределах лота (PK): повышение ставки — UPDATE суммы,
+-- а не вторая строка. Снятие ставки/лота — DELETE; лот и его ставки снимаются
+-- ОДНОЙ транзакцией (лот без срока не дозреет, срок без ставок даст пустой итог).
+CREATE TABLE IF NOT EXISTS `auction_bid` (
+    `category`   VARCHAR(32) NOT NULL,
+    `lot_id`     INT         NOT NULL,
+    `account_id` BIGINT      NOT NULL,
+    `amount`     BIGINT      NOT NULL,
+    PRIMARY KEY (`category`, `lot_id`, `account_id`),
+    KEY `idx_account` (`account_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- Долги аукциона перед аккаунтом: невыданный возврат проигравшей ставки (игрок был
+-- офлайн в момент итогов — наличные сессионные, вручить некому) и однократная
+-- пометка «твою ставку перебили». Одна строка на аккаунт (PK); обнулившаяся строка
+-- удаляется.
+CREATE TABLE IF NOT EXISTS `auction_player` (
+    `account_id` BIGINT  NOT NULL,
+    `refund`     BIGINT  NOT NULL DEFAULT 0,
+    `outbid`     TINYINT NOT NULL DEFAULT 0,
     PRIMARY KEY (`account_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;

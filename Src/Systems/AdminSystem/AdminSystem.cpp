@@ -7,6 +7,7 @@
 #include "ThreadPool/ThreadPool.h"
 #include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
+#include "Utils/MoneyFormat/MoneyFormat.h"
 #include "network.hpp"
 #include "sodium/crypto_pwhash.h"
 #include <algorithm>
@@ -69,6 +70,11 @@ constexpr int MIN_VITAL = 0;
 constexpr int MAX_VITAL = 100;
 constexpr int MIN_GUN_ID = 0;
 constexpr int MAX_GUN_ID = 46;
+// /amoney: разумный коридор дев-выдачи. Верх — от опечатки (лишний ноль), низ
+// исключает «выдать 0» и отрицательные (команда именно ВЫДАЁТ).
+constexpr int MIN_GIVE_MONEY = 1;
+constexpr int MAX_GIVE_MONEY = 100000000;
+
 constexpr int MIN_AMMO = 1;
 constexpr int MAX_AMMO = 9999;
 
@@ -103,6 +109,7 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
       m_healthService(serviceRegister.getService<PlayerHealthService>()),
       m_weaponService(serviceRegister.getService<PlayerWeaponService>()),
+      m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
       m_skinService(serviceRegister.getService<PlayerSkinService>()),
       m_personalSkinService(serviceRegister.getService<PlayerPersonalSkinService>()),
       m_savedLocationService(serviceRegister.getService<PlayerSavedLocationService>()),
@@ -212,6 +219,16 @@ AdminSystem::AdminSystem(ICore &core, const ServiceRegister &serviceRegister)
                  [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
                  { cmdGiveWeapon(player, args.getInt(0), args.getInt(1), args.getInt(2)); },
                  PermissionSpec::admin(5), "выдать игроку оружие с патронами",
+                 PlayerCommandService::HelpCategory::Hidden);
+
+    // /amoney — выдать наличные (только Разработчик). Иерархии НЕТ: уровень 6 —
+    // вершина. Наличные персистятся общим персистом (player_money) на автосейве и
+    // конце сессии — отдельной записи здесь не нужно.
+    commands.add("amoney",
+                 {{PlayerCommandService::Param::Int, "id игрока"}, {PlayerCommandService::Param::Int, "деньги"}},
+                 [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+                 { cmdGiveMoney(player, args.getInt(0), args.getInt(1)); },
+                 PermissionSpec::admin(AdminService::DEVELOPER_LEVEL), "выдать игроку деньги",
                  PlayerCommandService::HelpCategory::Hidden);
 
     // /askin — временный скин сессии (уровень 4+). Иерархии НЕТ (косметика, не в БД).
@@ -762,6 +779,35 @@ void AdminSystem::cmdGodMode(IPlayer &player)
     // [A]. Поэтому НЕ logAdminAction (он шлёт и в [A]), а прямой LogManager.
     LogManager::log(Message, fmt::format("[ADMIN] {}[{}] god mode {}", player.getName().to_string(), player.getID(),
                                          on ? "on" : "off"));
+}
+
+void AdminSystem::cmdGiveMoney(IPlayer &actor, int targetId, int amount)
+{
+    IPlayer *target = m_core.getPlayers().get(targetId);
+    if (!target)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR, u("Игрок не найден"));
+        return;
+    }
+    // Потолок — от опечатки: серверный баланс беззнаковый и насыщается, но выдать
+    // «случайный миллиард» одним нулём лишним всё равно не должно быть можно.
+    if (amount < MIN_GIVE_MONEY || amount > MAX_GIVE_MONEY)
+    {
+        actor.sendClientMessage(ADMIN_COLOUR,
+                                u(fmt::format("Сумма должна быть от {} до {}", MIN_GIVE_MONEY, MAX_GIVE_MONEY)));
+        return;
+    }
+
+    const std::string actorName = actor.getName().to_string();
+    const std::string targetName = target->getName().to_string();
+
+    m_moneyService.giveMoney(*target, static_cast<unsigned long long>(amount));
+
+    target->sendClientMessage(ADMIN_COLOUR, u(fmt::format("Вам выдано {}", Money::text(amount))));
+    actor.sendClientMessage(ADMIN_COLOUR,
+                            u(fmt::format("Игроку {}[{}] выдано {}", targetName, targetId, Money::text(amount))));
+    logAdminAction(
+        fmt::format("{}[{}] выдал {}[{}] {}", actorName, actor.getID(), targetName, targetId, Money::text(amount)));
 }
 
 void AdminSystem::cmdGiveWeapon(IPlayer &actor, int targetId, int weaponId, int ammo)
