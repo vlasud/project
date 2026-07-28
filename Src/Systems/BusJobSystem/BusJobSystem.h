@@ -6,6 +6,7 @@
 #include "Services/JobDismissService/JobDismissService.h"
 #include "Services/JobWalletService/JobWalletService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
+#include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/NavigationLockService/NavigationLockService.h"
 #include "Services/Core/PickupService/PickupService.h"
@@ -100,6 +101,9 @@ class BusJobSystem : public BaseSystem
     // Реакция на закрепление автобуса за игроком (startWork/промоушен): показать
     // первый чекпоинт + запустить окно посадки. Автобус уже стоит — не спавним.
     void onReserved(IPlayer &player);
+    // Сел за руль поданного автобуса: Reserved -> Driving, открывается маршрут.
+    // Окно выезда при этом ПРОДОЛЖАЕТ идти — оно про освобождение площадки.
+    void completeBoarding(IPlayer &player);
     // Продвинуть очередь на все освободившиеся стоящие автобусы (пере-сток/снятый
     // резерв). Каждому продвинутому — onReserved; ждущим — сдвиг мест.
     void pumpQueue();
@@ -116,8 +120,11 @@ class BusJobSystem : public BaseSystem
     void onDepotTick();
     // Пере-сток: на каждой пустой физически чистой площадке заспавнить pre-stock
     // автобус; реконсиляция уничтоженного извне стоящего автобуса. O(SLOT_COUNT).
-    void restockDepot();
-    void spawnPrestock(int spot);
+    // Освободить площадки, с которых автобус уже уехал (или пропал): pre-stock в депо
+    // нет, площадку держит машина конкретного работника.
+    void releaseDepartedSpots();
+    // Подать работнику автобус на его площадку. false — не смогли (пул полон).
+    bool spawnForWorker(IPlayer &player);
     // Прогнать окна активных работников (Reserved/Driving) по онлайну.
     void tickActiveWorkers();
     void tickWorker(IPlayer &player);
@@ -159,6 +166,7 @@ class BusJobSystem : public BaseSystem
     ScreenNoticeService &m_screenNoticeService;
     ScreenTimerService &m_screenTimerService;
     MapIconService &m_mapIconService;
+    AudioService &m_audioService;
     VehicleWaypointService &m_waypointService; // красный чекпоинт-маркер на закреплённый автобус
     NavigationLockService &m_navLockService;   // лок навигации на всю смену (GPS недоступен)
 

@@ -115,27 +115,22 @@ int BusJobService::workerOfVehicle(int vehicleId) const
     return -1;
 }
 
-bool BusJobService::isFreeStandingVehicle(int vehicleId) const
+int BusJobService::holderOfSpot(int spot) const
 {
-    if (vehicleId < 0)
+    if (spot < 0 || spot >= SLOT_COUNT)
     {
-        return false;
+        return -1;
     }
-    for (int i = 0; i < SLOT_COUNT; ++i)
-    {
-        if (m_spots[i].vehicleId == vehicleId && m_spots[i].reservedBy < 0)
-        {
-            return true;
-        }
-    }
-    return false;
+    return m_spots[spot].reservedBy;
 }
 
-int BusJobService::firstFreeStandingSpot() const
+int BusJobService::firstFreeSpot(const SpotUsable &usable) const
 {
     for (int i = 0; i < SLOT_COUNT; ++i)
     {
-        if (m_spots[i].vehicleId >= 0 && m_spots[i].reservedBy < 0)
+        // Площадка годится, только если она И ничья, И физически пуста: занятую
+        // чужой машиной пропускаем — иначе выдали бы автобус в машину.
+        if (m_spots[i].reservedBy < 0 && m_spots[i].vehicleId < 0 && (!usable || usable(i)))
         {
             return i;
         }
@@ -152,7 +147,7 @@ void BusJobService::removeFromQueue(int playerId)
     }
 }
 
-BusJobService::StartOutcome BusJobService::startWork(int playerId)
+BusJobService::StartOutcome BusJobService::startWork(int playerId, const SpotUsable &usable)
 {
     if (!validId(playerId))
     {
@@ -164,18 +159,19 @@ BusJobService::StartOutcome BusJobService::startWork(int playerId)
         return {StartResult::AlreadyWorking};
     }
 
-    const int spot = firstFreeStandingSpot();
+    const int spot = firstFreeSpot(usable);
     if (spot >= 0)
     {
-        // Есть свободный стоящий автобус — закрепить его за игроком (не спавним, он уже стоит).
+        // Площадка закрепляется за игроком; автобус на неё подаёт привод (депо стоит
+        // пустым) и регистрирует через setStanding/setVehicle.
         m_spots[spot].reservedBy = playerId;
         state.phase = Phase::Reserved;
-        state.vehicleId = m_spots[spot].vehicleId;
+        state.vehicleId = -1;
         state.cpIndex = 0;
-        return {StartResult::Reserved, state.vehicleId, 0};
+        return {StartResult::Reserved, -1, 0};
     }
 
-    // Свободных стоящих автобусов нет — в конец FIFO.
+    // Свободных площадок нет — в конец FIFO.
     state.phase = Phase::Queued;
     state.vehicleId = -1;
     state.cpIndex = 0;
@@ -195,13 +191,8 @@ void BusJobService::completeBoarding(int playerId)
         return;
     }
     state.phase = Phase::Driving;
-    // Автобус покинул депо (стал личным едущим) — освободить его площадку, чтобы она
-    // пере-стокнулась, как только физически чиста. state.vehicleId остаётся у игрока.
-    const int spot = reservedSpotOf(playerId);
-    if (spot >= 0)
-    {
-        m_spots[spot] = Spot{};
-    }
+    // Площадку НЕ освобождаем: автобус всё ещё стоит на ней, пока работник не отъедет.
+    // Освободит releaseSpot по факту отъезда (привод следит в тике).
 }
 
 int BusJobService::advanceCheckpoint(int playerId)
@@ -221,29 +212,43 @@ void BusJobService::setStanding(int spot, int vehicleId)
     {
         return;
     }
+    // Площадка остаётся за работником (reservedBy не трогаем) — меняется только то,
+    // какой автобус на ней стоит.
     m_spots[spot].vehicleId = vehicleId;
-    m_spots[spot].reservedBy = -1;
 }
 
-void BusJobService::clearStanding(int spot)
+void BusJobService::setVehicle(int playerId, int vehicleId)
 {
-    if (spot < 0 || spot >= SLOT_COUNT)
+    if (!validId(playerId))
     {
         return;
     }
-    m_spots[spot] = Spot{};
+    m_state[playerId].vehicleId = vehicleId;
 }
 
-BusJobService::Promotion BusJobService::promoteQueue()
+void BusJobService::releaseSpot(int playerId)
+{
+    if (!validId(playerId))
+    {
+        return;
+    }
+    const int spot = reservedSpotOf(playerId);
+    if (spot >= 0)
+    {
+        m_spots[spot] = Spot{};
+    }
+}
+
+BusJobService::Promotion BusJobService::promoteQueue(const SpotUsable &usable)
 {
     if (m_queue.empty())
     {
         return {};
     }
-    const int spot = firstFreeStandingSpot();
+    const int spot = firstFreeSpot(usable);
     if (spot < 0)
     {
-        return {}; // свободных стоящих автобусов нет — двигать некуда
+        return {}; // свободных площадок нет — двигать некуда
     }
 
     const int playerId = m_queue.front();
@@ -257,47 +262,35 @@ BusJobService::Promotion BusJobService::promoteQueue()
     return {playerId, state.vehicleId};
 }
 
-void BusJobService::detachBus(int playerId, bool busKept)
+void BusJobService::detachBus(int playerId)
 {
-    // Reserved: у игрока закреплён автобус на площадке — либо оставить его pre-stock
-    // (busKept), либо освободить площадку. Driving: площадки нет (автобус личный
-    // едущий) — привод его деспавнит. Прочие фазы — площадки/автобуса нет.
-    const int spot = reservedSpotOf(playerId);
-    if (spot >= 0)
-    {
-        if (busKept)
-        {
-            m_spots[spot].reservedBy = -1; // автобус остаётся стоять свободным pre-stock
-        }
-        else
-        {
-            m_spots[spot] = Spot{}; // площадка пуста — пере-стокуется приводом
-        }
-    }
+    // Площадка всегда освобождается: pre-stock автобусов в депо нет, а личный автобус
+    // работника деспавнит привод.
+    releaseSpot(playerId);
     State &state = m_state[playerId];
     state.vehicleId = -1;
     state.cpIndex = 0;
 }
 
-void BusJobService::requeueTail(int playerId, bool busKept)
+void BusJobService::requeueTail(int playerId)
 {
     if (!validId(playerId))
     {
         return;
     }
-    detachBus(playerId, busKept);
+    detachBus(playerId);
     removeFromQueue(playerId);
     m_state[playerId].phase = Phase::Queued;
     m_queue.push_back(playerId);
 }
 
-void BusJobService::endShift(int playerId, bool busKept)
+void BusJobService::endShift(int playerId)
 {
     if (!validId(playerId))
     {
         return;
     }
-    detachBus(playerId, busKept);
+    detachBus(playerId);
     removeFromQueue(playerId);
     m_state[playerId] = State{}; // NotWorking + чистые поля
 }

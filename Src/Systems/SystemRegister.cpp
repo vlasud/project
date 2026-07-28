@@ -53,6 +53,7 @@
 #include "Systems/HelpSystem/HelpSystem.h"
 #include "Systems/InventorySystem/InventorySystem.h"
 #include "Systems/MedkitSystem/MedkitSystem.h"
+#include "Systems/ToolkitSystem/ToolkitSystem.h"
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 #include "Systems/Core/MapIconSystem/MapIconSystem.h"
 #include "Systems/MenuSystem/MenuSystem.h"
@@ -353,6 +354,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // в конструкторе и добавляет /healme. После InventorySystem логически
     // (порядок реестра типов от порядка систем не зависит — сервис уже сконструирован).
     m_systems.push_back(std::make_unique<MedkitSystem>(core, serviceRegister));
+    // Инструменты (второй предмет поверх вещей): регистрируют свой тип и добавляют
+    // /repair. Нужны GridSystem/VehicleSystem (поиск ближайшей машины и её починка) и
+    // PlayerAnimationSystem — все зарегистрированы выше.
+    m_systems.push_back(std::make_unique<ToolkitSystem>(core, serviceRegister));
     // Семьи (player-created соц-группы, бизнес-фича вне Core): после
     // PlayerSessionSystem (подписки на старт/конец сессии резолвят онлайн-членство).
     // Сервисы команд/диалога/чата зарегистрированы раньше (Core). Источник правды

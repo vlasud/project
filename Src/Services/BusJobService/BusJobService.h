@@ -4,6 +4,7 @@
 #include "Services/IService.h"
 #include <array>
 #include <deque>
+#include <functional>
 #include <vector>
 
 class BusJobSystem;
@@ -75,7 +76,8 @@ class BusJobService final : public IService
     int workerOfVehicle(int vehicleId) const;
     // Свободный (незарезервированный) стоящий автобус депо? Гейт: в pre-stock автобус
     // за руль пускаем только работника, оформившего смену (иначе — угон стоящего).
-    bool isFreeStandingVehicle(int vehicleId) const;
+    // Кто держит площадку (автобус подан ему и ещё стоит на ней), или -1.
+    int holderOfSpot(int spot) const;
 
   private:
     // --- вызывается ТОЛЬКО BusJobSystem (мутирующие переходы) ---
@@ -95,7 +97,12 @@ class BusJobService final : public IService
 
     // Начать работу: есть свободный стоящий автобус -> Reserved (закрепить его за
     // игроком); иначе Queued (хвост FIFO). Автобус НЕ спавнится — он уже стоит.
-    StartOutcome startWork(int playerId);
+    // usable(spot) — «на площадке физически свободно» (привод спрашивает мир: место
+    // могла занять чужая машина, а спавн внутрь неё — то, что видит игрок). Сервис о
+    // мире не знает, проверку приносит вызывающий.
+    using SpotUsable = std::function<bool(int spot)>;
+
+    StartOutcome startWork(int playerId, const SpotUsable &usable);
 
     // Посадка завершена (первый чекпоинт подобран за рулём): Reserved -> Driving,
     // площадка освобождается (автобус покинул депо, стал личным едущим). no-op вне
@@ -108,8 +115,12 @@ class BusJobService final : public IService
 
     // Пере-сток: привязать свежезаспавненный pre-stock автобус к пустой площадке.
     void setStanding(int spot, int vehicleId);
+    // Привязать поданный автобус к работнику (после успешного спавна).
+    void setVehicle(int playerId, int vehicleId);
+    // Освободить площадку: автобус уехал с неё либо пропал. Идемпотентно.
+    void releaseSpot(int playerId);
     // Освободить площадку (реконсиляция уничтоженного извне pre-stock автобуса).
-    void clearStanding(int spot);
+
 
     struct Promotion
     {
@@ -118,18 +129,18 @@ class BusJobService final : public IService
     };
     // Продвинуть голову очереди на свободный стоящий автобус (phase -> Reserved,
     // закрепить). {-1,-1} — очередь пуста или свободных стоящих автобусов нет.
-    Promotion promoteQueue();
+    Promotion promoteQueue(const SpotUsable &usable);
 
     // Провал посадки: снять резерв, работник в КОНЕЦ очереди (остаётся работником,
     // phase -> Queued). busKept=true — автобус остаётся стоять pre-stock на площадке
     // (привод его НЕ деспавнит); false — площадка освобождается (привод деспавнит
     // автобус). Дедуп на случай двойного вызова.
-    void requeueTail(int playerId, bool busKept);
+    void requeueTail(int playerId);
 
     // Завершить работу/увольнение: снять резерв площадки (busKept как в requeueTail
     // для Reserved; для Driving площадки нет), убрать из очереди, phase -> NotWorking,
     // обнулить состояние. Кошелёк НЕ трогает. Идемпотентно; bounds-safe.
-    void endShift(int playerId, bool busKept);
+    void endShift(int playerId);
 
     struct State
     {
@@ -144,8 +155,8 @@ class BusJobService final : public IService
         int reservedBy = -1; // playerId резерва или -1 (свободный pre-stock)
     };
 
-    int firstFreeStandingSpot() const;  // площадка со свободным стоящим автобусом или -1
-    void detachBus(int playerId, bool busKept); // отвязать автобус игрока от резерва/депо
+    int firstFreeSpot(const SpotUsable &usable) const; // ничья И физически пустая площадка, иначе -1
+    void detachBus(int playerId); // отвязать автобус игрока от резерва/депо
     void removeFromQueue(int playerId);         // выкинуть из FIFO (дедуп/увольнение)
 
     std::array<State, MAX_PLAYERS> m_state{};

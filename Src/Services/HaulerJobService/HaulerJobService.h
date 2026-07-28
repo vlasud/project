@@ -4,6 +4,7 @@
 #include "Services/IService.h"
 #include <array>
 #include <deque>
+#include <functional>
 #include <vector>
 
 class HaulerJobSystem;
@@ -43,7 +44,7 @@ class HaulerJobService final : public IService
     static constexpr int MAX_TRUCKS = 16;
     // Чекпоинтов на каждом плече езды (задаются приводом; сервис лишь ведёт индекс
     // и знает длину для клампа перехода в пешую фазу на последней точке плеча).
-    static constexpr int OUT_LENGTH = 13;  // езда-туда: 13 замеров, последний запускает погрузку
+    static constexpr int OUT_LENGTH = 14;  // езда-туда: 14 точек, последняя запускает погрузку
     static constexpr int BACK_LENGTH = 8;  // езда-обратно: 8 точек, последняя запускает разгрузку
     static constexpr int BOXES_PER_LEG = 10; // коробок за плечо погрузки/разгрузки
 
@@ -97,8 +98,8 @@ class HaulerJobService final : public IService
     // резервный/личный грузовик игрока. Опора на РЕАЛЬНЫЙ id грузовика, не на
     // owner-тег (Owner::Work занимают и автобусы, и дев-машины).
     int workerOfVehicle(int vehicleId) const;
-    // Свободный (незарезервированный) стоящий грузовик депо?
-    bool isFreeStandingVehicle(int vehicleId) const;
+    // Кто держит площадку (грузовик выдан ему и ещё стоит на ней), или -1.
+    int holderOfSpot(int spot) const;
     // Сколько грузовиков работы существует прямо сейчас: стоящие на площадках (в т.ч.
     // закреплённые за игроками на посадке) плюс уехавшие с депо. Сверяется с
     // MAX_TRUCKS перед пере-стоком.
@@ -120,7 +121,12 @@ class HaulerJobService final : public IService
         int queuePosition = 0;
     };
 
-    StartOutcome startWork(int playerId);
+    // usable(spot) — «на площадке физически свободно» (привод спрашивает мир: место
+    // могла занять чужая машина, а спавн внутрь неё — то, что видит игрок). Сервис о
+    // мире не знает, проверку приносит вызывающий.
+    using SpotUsable = std::function<bool(int spot)>;
+
+    StartOutcome startWork(int playerId, const SpotUsable &usable);
 
     // Устроить ГРУЗЧИКОМ: NotWorking -> Standby, роль Loader. Ни грузовика, ни
     // площадки, ни очереди — грузчик ждёт приглашения водителя. false — уже работает.
@@ -165,26 +171,29 @@ class HaulerJobService final : public IService
     // Возвращает НОВЫЙ boxCount; 0 (no-op) — не нёс / вне Loading/Unloading.
     int finishCarry(int carrierId);
 
-    // Пере-сток: привязать свежий pre-stock грузовик к пустой площадке.
+    // Записать на площадку выданный работнику грузовик (после успешного спавна).
     void setStanding(int spot, int vehicleId);
-    // Освободить площадку (реконсиляция уничтоженного извне pre-stock грузовика).
-    void clearStanding(int spot);
+    // Привязать выданный грузовик к работнику (после успешного спавна).
+    void setVehicle(int playerId, int vehicleId);
+    // Освободить площадку: грузовик уехал с неё либо пропал. Идемпотентно.
+    void releaseSpot(int playerId);
 
     struct Promotion
     {
         int playerId = -1;
         int vehicleId = -1;
     };
-    // Продвинуть голову очереди на свободный стоящий грузовик (phase -> Reserved).
-    Promotion promoteQueue();
+    // Продвинуть голову очереди на свободную площадку (phase -> Reserved). Грузовик
+    // спавнит привод и регистрирует его через setStanding.
+    Promotion promoteQueue(const SpotUsable &usable);
 
-    // Провал посадки: снять резерв, работник в КОНЕЦ очереди (phase -> Queued).
-    // busKept=true — грузовик остаётся pre-stock; false — площадка освобождается.
-    void requeueTail(int playerId, bool busKept);
+    // Провал посадки: снять площадку, работник в КОНЕЦ очереди (phase -> Queued).
+    // Грузовик деспавнит привод — pre-stock в этой модели нет.
+    void requeueTail(int playerId);
 
-    // Завершить смену/увольнение: снять резерв площадки, убрать из очереди, phase
-    // -> NotWorking, обнулить состояние. Кошелёк НЕ трогает. Идемпотентно.
-    void endShift(int playerId, bool busKept);
+    // Завершить смену/увольнение: снять площадку, убрать из очереди, phase ->
+    // NotWorking, обнулить состояние. Кошелёк НЕ трогает. Идемпотентно.
+    void endShift(int playerId);
 
     struct State
     {
@@ -205,8 +214,8 @@ class HaulerJobService final : public IService
     // Держит ли фаза личный грузовик игрока (для workerOfVehicle/детача).
     static bool holdsVehicle(Phase phase);
 
-    int firstFreeStandingSpot() const;
-    void detachVehicle(int playerId, bool busKept);
+    int firstFreeSpot(const SpotUsable &usable) const;
+    void detachVehicle(int playerId);
     void removeFromQueue(int playerId);
 
     std::array<State, MAX_PLAYERS> m_state{};

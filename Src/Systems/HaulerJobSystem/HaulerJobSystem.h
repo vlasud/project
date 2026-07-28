@@ -6,6 +6,7 @@
 #include "Services/JobDismissService/JobDismissService.h"
 #include "Services/JobWalletService/JobWalletService.h"
 #include "Services/Core/AttachmentService/AttachmentService.h"
+#include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/NavigationLockService/NavigationLockService.h"
@@ -121,8 +122,11 @@ class HaulerJobSystem : public BaseSystem
 
     // --- таймер депо (один общий, per-second) ---
     void onDepotTick();
-    void restockDepot();
-    void spawnPrestock(int spot);
+    // Освободить площадки, с которых грузовик уже уехал (или пропал): pre-stock в депо
+    // нет, площадку держит машина конкретного работника.
+    void releaseDepartedSpots();
+    // Подать работнику грузовик на его площадку. false — не смогли (пул полон).
+    bool spawnForWorker(IPlayer &player);
     void tickActiveWorkers();
     void tickWorker(IPlayer &player);
     void tickLoader(IPlayer &player); // грузчик: своей фазы нет, живёт фазой напарника
@@ -169,6 +173,7 @@ class HaulerJobSystem : public BaseSystem
     NavigationLockService &m_navLockService;
     PlayerAnimationService &m_animationService;
     AttachmentService &m_attachmentService;
+    AudioService &m_audioService;
 
     int m_pickup = -1;
     TimerService::Handle m_depotTimer;

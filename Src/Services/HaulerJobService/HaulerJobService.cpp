@@ -183,26 +183,19 @@ int HaulerJobService::workerOfVehicle(int vehicleId) const
     return -1;
 }
 
-bool HaulerJobService::isFreeStandingVehicle(int vehicleId) const
+int HaulerJobService::holderOfSpot(int spot) const
 {
-    if (vehicleId < 0)
+    if (spot < 0 || spot >= SLOT_COUNT)
     {
-        return false;
+        return -1;
     }
-    for (int i = 0; i < SLOT_COUNT; ++i)
-    {
-        if (m_spots[i].vehicleId == vehicleId && m_spots[i].reservedBy < 0)
-        {
-            return true;
-        }
-    }
-    return false;
+    return m_spots[spot].reservedBy;
 }
 
 int HaulerJobService::truckCount() const
 {
-    // Площадки и «уехавшие» не пересекаются: completeBoarding очищает площадку, когда
-    // грузовик покидает депо, поэтому одна машина считается ровно один раз.
+    // Площадки и «уехавшие» не пересекаются: площадку освобождает releaseSpot, когда
+    // грузовик физически покидает её, поэтому одна машина считается ровно один раз.
     int count = 0;
     for (int i = 0; i < SLOT_COUNT; ++i)
     {
@@ -222,11 +215,15 @@ int HaulerJobService::truckCount() const
     return count;
 }
 
-int HaulerJobService::firstFreeStandingSpot() const
+int HaulerJobService::firstFreeSpot(const SpotUsable &usable) const
 {
-    for (int i = 0; i < SLOT_COUNT; ++i)
+    // С КОНЦА ряда (справа налево): дальняя площадка отдаётся первой, ближние к
+    // выезду остаются свободными дольше — выезжающий не продирается мимо чужих машин.
+    for (int i = SLOT_COUNT - 1; i >= 0; --i)
     {
-        if (m_spots[i].vehicleId >= 0 && m_spots[i].reservedBy < 0)
+        // Площадка годится, только если она И ничья, И физически пуста: занятую
+        // чужой машиной пропускаем — иначе выдали бы грузовик в машину.
+        if (m_spots[i].reservedBy < 0 && m_spots[i].vehicleId < 0 && (!usable || usable(i)))
         {
             return i;
         }
@@ -243,7 +240,7 @@ void HaulerJobService::removeFromQueue(int playerId)
     }
 }
 
-HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId)
+HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const SpotUsable &usable)
 {
     if (!validId(playerId))
     {
@@ -255,15 +252,15 @@ HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId)
         return {StartResult::AlreadyWorking};
     }
 
-    const int spot = firstFreeStandingSpot();
+    const int spot = firstFreeSpot(usable);
     if (spot >= 0)
     {
         m_spots[spot].reservedBy = playerId;
         state = State{};
         state.phase = Phase::Reserved;
         state.role = Role::Driver;
-        state.vehicleId = m_spots[spot].vehicleId;
-        return {StartResult::Reserved, state.vehicleId, 0};
+        // Грузовика ещё нет: его спавнит привод и регистрирует через setStanding.
+        return {StartResult::Reserved, -1, 0};
     }
 
     state = State{};
@@ -349,12 +346,8 @@ void HaulerJobService::completeBoarding(int playerId)
         return;
     }
     state.phase = Phase::DriveOut;
-    // Грузовик покинул депо — освободить площадку (state.vehicleId остаётся у игрока).
-    const int spot = reservedSpotOf(playerId);
-    if (spot >= 0)
-    {
-        m_spots[spot] = Spot{};
-    }
+    // Площадку НЕ освобождаем: грузовик всё ещё стоит на ней, пока работник не отъедет.
+    // Освободит releaseSpot по факту отъезда (привод следит в тике).
 }
 
 int HaulerJobService::advanceDrive(int playerId)
@@ -476,26 +469,40 @@ void HaulerJobService::setStanding(int spot, int vehicleId)
     {
         return;
     }
+    // Площадка остаётся за работником (reservedBy не трогаем) — меняется только то,
+    // какой грузовик на ней стоит.
     m_spots[spot].vehicleId = vehicleId;
-    m_spots[spot].reservedBy = -1;
 }
 
-void HaulerJobService::clearStanding(int spot)
+void HaulerJobService::setVehicle(int playerId, int vehicleId)
 {
-    if (spot < 0 || spot >= SLOT_COUNT)
+    if (!validId(playerId))
     {
         return;
     }
-    m_spots[spot] = Spot{};
+    m_state[playerId].vehicleId = vehicleId;
 }
 
-HaulerJobService::Promotion HaulerJobService::promoteQueue()
+void HaulerJobService::releaseSpot(int playerId)
+{
+    if (!validId(playerId))
+    {
+        return;
+    }
+    const int spot = reservedSpotOf(playerId);
+    if (spot >= 0)
+    {
+        m_spots[spot] = Spot{};
+    }
+}
+
+HaulerJobService::Promotion HaulerJobService::promoteQueue(const SpotUsable &usable)
 {
     if (m_queue.empty())
     {
         return {};
     }
-    const int spot = firstFreeStandingSpot();
+    const int spot = firstFreeSpot(usable);
     if (spot < 0)
     {
         return {};
@@ -509,27 +516,14 @@ HaulerJobService::Promotion HaulerJobService::promoteQueue()
     state = State{};
     state.phase = Phase::Reserved;
     state.role = Role::Driver; // State{} стирает роль — восстанавливаем явно
-    state.vehicleId = m_spots[spot].vehicleId;
-    return {playerId, state.vehicleId};
+    return {playerId, -1};     // грузовик спавнит привод
 }
 
-void HaulerJobService::detachVehicle(int playerId, bool busKept)
+void HaulerJobService::detachVehicle(int playerId)
 {
-    // Reserved: у игрока закреплён грузовик на площадке — оставить pre-stock
-    // (busKept) либо освободить площадку. Прочие активные фазы: грузовик личный
-    // ведомый (площадки нет) — привод его деспавнит.
-    const int spot = reservedSpotOf(playerId);
-    if (spot >= 0)
-    {
-        if (busKept)
-        {
-            m_spots[spot].reservedBy = -1;
-        }
-        else
-        {
-            m_spots[spot] = Spot{};
-        }
-    }
+    // Площадка всегда освобождается: pre-stock грузовиков в депо нет, а личный
+    // грузовик работника деспавнит привод.
+    releaseSpot(playerId);
     State &state = m_state[playerId];
     state.vehicleId = -1;
     state.driveIndex = 0;
@@ -537,28 +531,28 @@ void HaulerJobService::detachVehicle(int playerId, bool busKept)
     state.carrying = false;
 }
 
-void HaulerJobService::requeueTail(int playerId, bool busKept)
+void HaulerJobService::requeueTail(int playerId)
 {
     if (!validId(playerId))
     {
         return;
     }
     breakPair(playerId); // грузовика нет — обслуживать грузчику нечего
-    detachVehicle(playerId, busKept);
+    detachVehicle(playerId);
     removeFromQueue(playerId);
     m_state[playerId].phase = Phase::Queued;
     m_state[playerId].role = Role::Driver;
     m_queue.push_back(playerId);
 }
 
-void HaulerJobService::endShift(int playerId, bool busKept)
+void HaulerJobService::endShift(int playerId)
 {
     if (!validId(playerId))
     {
         return;
     }
     breakPair(playerId); // пара не переживает конец смены ни одной из сторон
-    detachVehicle(playerId, busKept);
+    detachVehicle(playerId);
     removeFromQueue(playerId);
     m_state[playerId] = State{};
 }
