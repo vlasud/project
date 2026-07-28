@@ -166,6 +166,21 @@ MedicJobSystem::MedicJobSystem(ICore &core, const ServiceRegister &serviceRegist
             onFinishWork(player);
         });
 
+    // Вызовы «скорой» по телефону идут тем, кто СЕЙЧАС на смене (фаза Working —
+    // машина уже выехала с точки). Телефон про работу не знает: список приносим мы.
+    serviceRegister.getService<PhoneService>().registerDispatch(
+        PhoneService::Service::Ambulance, "скорой помощи",
+        [this](const PhoneService::WorkerVisitor &visit)
+        {
+            for (IPlayer *medic : m_core.getPlayers().entries())
+            {
+                if (medic && m_medicJobService.phaseOf(medic->getID()) == MedicJobService::Phase::Working)
+                {
+                    visit(medic->getID());
+                }
+            }
+        });
+
     // Кошелёк этой работы — в справочный список (/jobwallet). Только баланс: выдача
     // остаётся на пикапе работы, туда за деньгами и едут.
     m_jobWalletService.registerWallet("врач", "пикап работы у больницы",

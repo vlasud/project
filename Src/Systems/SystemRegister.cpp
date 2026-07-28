@@ -22,6 +22,7 @@
 #include "Systems/JobDismissSystem/JobDismissSystem.h"
 #include "Systems/JobWalletSystem/JobWalletSystem.h"
 #include "Systems/MedicJobSystem/MedicJobSystem.h"
+#include "Systems/PhoneSystem/PhoneSystem.h"
 #include "Systems/TaxiJobSystem/TaxiJobSystem.h"
 #include "Systems/CarMenuSystem/CarMenuSystem.h"
 #include "Systems/PaymentSystem/PaymentSystem.h"
@@ -290,6 +291,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // (подписка на PlayerClickDispatcher в конструкторе). Кошелька нет: деньги за
     // поездку идут от пассажира и отдаются на руки по прибытии.
     m_systems.push_back(std::make_unique<TaxiJobSystem>(core, serviceRegister));
+    // PhoneSystem — ПОСЛЕ работ (они кладут в телефон свои службы) и после
+    // PlayerSessionSystem/FactionSystem: номер грузится по старту сессии, а полицию
+    // телефон перечисляет через членство во фракции.
+    m_systems.push_back(std::make_unique<PhoneSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<JobDismissSystem>(core, serviceRegister));
     // JobWalletSystem (/jobwallet) — тоже после работ: кошельки в список кладут их
     // конструкторы. Напоминание о деньгах шлётся по сигналу загрузки кошелька, а не

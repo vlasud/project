@@ -27,19 +27,25 @@
 --                   скин; при регистрации геймод проставляет дефолт по полу
 --                   (муж 78 / жен 77). Скин 0 (CJ) недопустим — геймод считает
 --                   его невалидным и подменяет мужским дефолтом.
+--   phone         — номер телефона (Docs/Phone.md): шестизначный, выдаётся аккаунту
+--                   при первом входе и дальше не меняется. NULL — ещё не выдан.
+--                   UNIQUE: по номеру звонят, он обязан быть один на сервере.
 CREATE TABLE IF NOT EXISTS `player` (
     `id`            BIGINT          NOT NULL AUTO_INCREMENT,
     `name`          VARCHAR(24)     NOT NULL,
     `password_hash` VARCHAR(128)    NOT NULL,
     `sex`           TINYINT UNSIGNED NOT NULL DEFAULT 0,
     `skin`          INT             NOT NULL DEFAULT 78,
+    `phone`         BIGINT          NULL DEFAULT NULL,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uq_name` (`name`)
+    UNIQUE KEY `uq_name` (`name`),
+    UNIQUE KEY `uk_player_phone` (`phone`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 -- Если таблица `player` уже существует со старой схемой (без личного скина) и
--- дропать её не хочешь — добавь колонку идемпотентно (MySQL 8.0.29+):
--- ALTER TABLE `player` ADD COLUMN IF NOT EXISTS `skin` INT NOT NULL DEFAULT 78;
+-- дропать её не хочешь — добавь колонку (MySQL НЕ знает IF NOT EXISTS в ADD COLUMN,
+-- это синтаксис MariaDB; повтор ответит «Duplicate column name» = уже сделано):
+-- ALTER TABLE `player` ADD COLUMN `skin` INT NOT NULL DEFAULT 78;
 --
 -- Миграция с прежнего дефолта 22 на 78 (для уже существующей колонки) и починка
 -- аккаунтов, у которых записан запрещённый теперь скин 0 (появлялись как CJ):
@@ -186,6 +192,20 @@ CREATE TABLE IF NOT EXISTS `hauler_wallet` (
     `balance`    BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (`account_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- Телефон игрока (Docs/Phone.md): выдаётся аккаунту при первом входе, дальше живёт с
+-- ним. Для НОВОЙ базы колонка уже есть в CREATE TABLE `player` выше; этот блок — для
+-- существующей базы, применять один раз.
+--
+-- Колонка NULL-able, а НЕ «NOT NULL DEFAULT 0»: под UNIQUE-индексом все старые строки
+-- получили бы одинаковый 0 и индекс просто не создался бы (duplicate entry). NULL под
+-- UNIQUE разрешён в любом количестве — это и есть «номер ещё не выдан».
+--
+-- MySQL НЕ поддерживает IF NOT EXISTS в ADD COLUMN/ADD INDEX (это синтаксис MariaDB):
+-- если блок уже применяли, MySQL ответит «Duplicate column/key name» — это значит
+-- «уже сделано», а не поломку.
+ALTER TABLE `player` ADD COLUMN `phone` BIGINT NULL DEFAULT NULL;
+ALTER TABLE `player` ADD UNIQUE INDEX `uk_player_phone` (`phone`);
 
 -- Кошелёк заработка врача (работа-врач, Docs/MedicJob.md): write-through, забирается
 -- на пикапе больницы. Как bus_wallet/port_wallet/hauler_wallet.

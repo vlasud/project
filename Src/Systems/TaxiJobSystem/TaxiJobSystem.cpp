@@ -167,6 +167,21 @@ TaxiJobSystem::TaxiJobSystem(ICore &core, const ServiceRegister &serviceRegister
         {
             onFinishWork(player);
         });
+    // Вызовы такси по телефону идут тем, кто СЕЙЧАС на смене (фаза Working — машина
+    // уже выехала с точки). Телефон про работу не знает: список приносим мы.
+    serviceRegister.getService<PhoneService>().registerDispatch(
+        PhoneService::Service::Taxi, "такси",
+        [this](const PhoneService::WorkerVisitor &visit)
+        {
+            for (IPlayer *cabbie : m_core.getPlayers().entries())
+            {
+                if (cabbie && m_taxiJobService.phaseOf(cabbie->getID()) == TaxiJobService::Phase::Working)
+                {
+                    visit(cabbie->getID());
+                }
+            }
+        });
+
     // Кошелька у таксиста нет: деньги за поездку приходят от ПАССАЖИРА и отдаются на
     // руки сразу по прибытии — копить их в депо-кошельке было бы неверно (пассажир
     // расстался с наличными мгновенно, водитель получил бы их с задержкой и в другом

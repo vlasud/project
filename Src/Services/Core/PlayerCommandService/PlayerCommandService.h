@@ -81,6 +81,12 @@ class PlayerCommandService final : public IService
 
         Type type = String;
         std::string name; // отображаемое имя, например "id игрока" или "текст"
+        // Необязательный параметр: команда выполнится и без него (обработчик смотрит
+        // CommandArgs::count()). Необязательные обязаны идти ПОСЛЕДНИМИ — иначе
+        // «пропущен второй, но задан третий» не разобрать однозначно; первый
+        // необязательный делает необязательным весь хвост. В usage такие параметры
+        // показываются в круглых скобках: /c (номер телефона).
+        bool optional = false;
     };
 
   private:
@@ -193,7 +199,8 @@ class PlayerCommandService final : public IService
 
     struct Command
     {
-        std::vector<ParamInfo> params; // описания параметров; размер = их число
+        std::vector<ParamInfo> params;   // описания параметров; размер = их число
+        std::size_t requiredParams = 0;  // сколько из них обязательны (необязательные — хвостом)
         std::string usage;             // готовая строка-подсказка, уже в cp1251
         Handler handler;
         PermissionSpec perm;                            // порог прав; None — открыта всем

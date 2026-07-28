@@ -19,6 +19,7 @@
 #include "Services/JobWalletService/JobWalletService.h"
 #include "Services/MedicJobService/MedicJobService.h"
 #include "Services/MedicWalletService/MedicWalletService.h"
+#include "Services/PhoneService/PhoneService.h"
 #include "Services/PlaceCatalogService/PlaceCatalogService.h"
 #include "Services/TaxiJobService/TaxiJobService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
@@ -223,6 +224,9 @@ void ServiceRegister::registerServices()
     // Каталог именованных мест мира: одна таблица «название -> координаты» для /gps,
     // /tp и выбора точки назначения в такси. Без зависимостей, наполняется в ctor.
     registerService<PlaceCatalogService>();
+    // Телефон: номера игроков и вызовы служб (/c, /acceptjob). Без зависимостей;
+    // службы регистрируют себя сами в конструкторах своих систем.
+    registerService<PhoneService>();
     // Работа-таксист: фаза смены, 7 точек спавна, очередь и состояние поездки
     // (пассажир, назначение, депозит). Без зависимостей; машины/чекпоинты/деньги —
     // на приводе TaxiJobSystem.

@@ -67,11 +67,22 @@ void PlayerCommandService::add(std::string name, std::vector<Param> params, Hand
     // Подсказку и сообщения об ошибках собираем один раз здесь и сразу кодируем —
     // в dispatch остаётся только отправить готовую строку.
     std::string usage = "Использование: /" + name;
+    // Обязательные параметры — до первого необязательного; дальше весь хвост
+    // необязателен (см. контракт Param::optional).
+    std::size_t requiredParams = params.size();
+    for (std::size_t i = 0; i < params.size(); ++i)
+    {
+        if (params[i].optional)
+        {
+            requiredParams = i;
+            break;
+        }
+    }
     std::vector<ParamInfo> infos;
     infos.reserve(params.size());
     for (const Param &param : params)
     {
-        usage += " [" + param.name + "]";
+        usage += param.optional ? " (" + param.name + ")" : " [" + param.name + "]";
 
         std::string numberError;
         if (param.type == Param::Int)
@@ -81,8 +92,8 @@ void PlayerCommandService::add(std::string name, std::vector<Param> params, Hand
 
     // description хранится как utf-8 (НЕ кодируем): он попадает в тело диалога
     // /help|/ahelp и кодируется один раз вместе со всем телом.
-    m_commands.emplace(std::move(name), Command{std::move(infos), Encoding::utf8Tocp1251(usage), std::move(handler),
-                                                perm, std::move(description), helpCategory});
+    m_commands.emplace(std::move(name), Command{std::move(infos), requiredParams, Encoding::utf8Tocp1251(usage),
+                                                std::move(handler), perm, std::move(description), helpCategory});
 }
 
 void PlayerCommandService::setPermissionResolver(PermissionResolver resolver)
@@ -168,6 +179,7 @@ bool PlayerCommandService::dispatch(IPlayer &player, StringView message)
     }
 
     const std::size_t paramCount = cmd.params.size();
+    const std::size_t requiredParams = cmd.requiredParams;
 
     // Начало области аргументов.
     while (p < end && *p == ' ')
@@ -197,7 +209,7 @@ bool PlayerCommandService::dispatch(IPlayer &player, StringView message)
             args.push_back({StringView(p, static_cast<std::size_t>(tail - p)), 0});
     }
 
-    if (args.size() < paramCount)
+    if (args.size() < requiredParams)
     {
         player.sendClientMessage(Colour::White(), cmd.usage);
         return true;
@@ -205,7 +217,9 @@ bool PlayerCommandService::dispatch(IPlayer &player, StringView message)
 
     // Проверка и парсинг типов: числовые параметры превращаем в int здесь, чтобы
     // обработчик получил готовое значение.
-    for (std::size_t i = 0; i < paramCount; ++i)
+    // Разбираем ровно то, что игрок ввёл: недоданные необязательные до обработчика
+    // не доедут (он смотрит CommandArgs::count()).
+    for (std::size_t i = 0; i < args.size(); ++i)
     {
         if (cmd.params[i].type == Param::Int && !parseIntFull(args[i].text, args[i].number))
         {

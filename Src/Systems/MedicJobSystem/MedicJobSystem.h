@@ -18,6 +18,7 @@
 #include "Services/JobWalletService/JobWalletService.h"
 #include "Services/MedicJobService/MedicJobService.h"
 #include "Services/MedicWalletService/MedicWalletService.h"
+#include "Services/PhoneService/PhoneService.h"
 #include "Services/PlayerPersonalSkinService/PlayerPersonalSkinService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/VehicleWaypointService/VehicleWaypointService.h"

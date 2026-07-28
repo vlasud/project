@@ -14,6 +14,7 @@
 #include "Services/Core/TimerService/TimerService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 #include "Services/JobDismissService/JobDismissService.h"
+#include "Services/PhoneService/PhoneService.h"
 #include "Services/PlaceCatalogService/PlaceCatalogService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/TaxiJobService/TaxiJobService.h"
