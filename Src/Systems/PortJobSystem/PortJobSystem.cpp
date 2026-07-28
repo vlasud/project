@@ -22,6 +22,10 @@ const Vector3 PORT_PICKUP_POS{2746.6726f, -2450.3950f, 13.6484f};
 constexpr int PORT_PICKUP_MODEL = 1239;
 constexpr PickupType PORT_PICKUP_TYPE = 1;
 
+// Иконка порта на миникарте — ОТДЕЛЬНАЯ точка (замер владельца), не позиция пикапа:
+// ведёт к причалу, где начинается работа, а не к сервис-точке найма.
+const Vector3 PORT_MAP_ICON_POS{2810.2148f, -2437.9641f, 13.6328f};
+
 // Источник ящиков — чекпоинт корабля (один, персональный per-player).
 const Vector3 SOURCE_POS{2809.5854f, -2436.2959f, 13.6283f};
 
@@ -128,7 +132,7 @@ void PortJobSystem::initialize(IComponentList * /*components*/)
         },
         0);
 
-    m_mapIconService.addGlobal(9, PORT_PICKUP_POS, Colour::White(), MapIconStyle_Global);
+    m_mapIconService.addGlobal(9, PORT_MAP_ICON_POS, Colour::White(), MapIconStyle_Global);
 }
 
 void PortJobSystem::onPickup(IPlayer &player)

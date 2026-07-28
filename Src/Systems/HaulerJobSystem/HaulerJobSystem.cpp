@@ -248,6 +248,16 @@ HaulerJobSystem::HaulerJobSystem(ICore &core, const ServiceRegister &serviceRegi
         },
         {}, "позвать грузчика в пару (водитель портового развозчика)",
         PlayerCommandService::HelpCategory::Economy);
+
+    // /unpair — разойтись. Работу при этом не теряет НИ ОДИН из двоих: водитель
+    // возвращается к соло-правилам, грузчик ждёт нового приглашения.
+    serviceRegister.getService<PlayerCommandService>().add(
+        "unpair", {},
+        [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
+        {
+            onUnpairCommand(player);
+        },
+        {}, "разойтись с напарником по работе развозчика", PlayerCommandService::HelpCategory::Economy);
 }
 
 void HaulerJobSystem::initialize(IComponentList * /*components*/)
@@ -600,6 +610,52 @@ void HaulerJobSystem::onPairAccepted(int driverId, int loaderId)
     m_driveIdleSeconds[driverId] = 0;
 }
 
+void HaulerJobSystem::onUnpairCommand(IPlayer &player)
+{
+    const int playerId = player.getID();
+    if (m_haulerJobService.partnerOf(playerId) < 0)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("У вас нет напарника"));
+        return;
+    }
+    // Носильщик меняется — коробку в руках сначала донести (то же правило, что в /pair).
+    if (m_haulerJobService.carryingOf(playerId))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Сначала донесите коробку, потом расходитесь"));
+        return;
+    }
+
+    const bool isDriver = m_haulerJobService.roleOf(playerId) == HaulerJobService::Role::Driver;
+    splitPair(playerId, isDriver ? "Водитель распустил пару — ждите нового приглашения"
+                                 : "Грузчик ушёл из пары — дальше вы работаете один");
+
+    if (isDriver)
+    {
+        player.sendClientMessage(INFO_COLOUR, u("Вы отпустили грузчика — коробки снова на вас"));
+        restoreCarrierTarget(player); // снова носильщик своей смены
+    }
+    else
+    {
+        player.sendClientMessage(INFO_COLOUR, u("Вы вышли из пары. Ждите приглашения другого водителя"));
+        clearCarryState(player); // цель чужой смены больше не его
+    }
+    m_footIdleSeconds[playerId] = 0;
+    m_driveIdleSeconds[playerId] = 0;
+}
+
+void HaulerJobSystem::restoreCarrierTarget(IPlayer &player)
+{
+    const HaulerJobService::Phase phase = m_haulerJobService.phaseOf(player.getID());
+    if (phase == HaulerJobService::Phase::Loading)
+    {
+        showBoxSource(player);
+    }
+    else if (phase == HaulerJobService::Phase::Unloading)
+    {
+        refreshUnloadSource(player); // в кабине цели нет — поставится на выходе
+    }
+}
+
 void HaulerJobSystem::splitPair(int playerId, const std::string &noticeForPartner)
 {
     const int partner = m_haulerJobService.breakPair(playerId);
@@ -615,19 +671,14 @@ void HaulerJobSystem::splitPair(int playerId, const std::string &noticeForPartne
 
     other->sendClientMessage(ERROR_COLOUR, u(noticeForPartner));
 
-    const HaulerJobService::Phase phase = m_haulerJobService.phaseOf(partner);
     if (m_haulerJobService.roleOf(partner) == HaulerJobService::Role::Loader)
     {
         // Грузчик остался без смены: незавершённая коробка и цель снимаются.
         clearCarryState(*other);
     }
-    else if (phase == HaulerJobService::Phase::Loading)
+    else
     {
-        showBoxSource(*other); // водитель снова носит сам
-    }
-    else if (phase == HaulerJobService::Phase::Unloading)
-    {
-        refreshUnloadSource(*other); // в кабине цели нет — поставится на выходе
+        restoreCarrierTarget(*other); // водитель снова носит сам
     }
     // Чужое состояние трогаем ТОЛЬКО по делу: водитель может быть в фазе езды или на
     // посадке, и снимать ему чекпоинт/экшен здесь нельзя — это его маркер грузовика.
@@ -699,7 +750,9 @@ void HaulerJobSystem::showInfo(IPlayer &player)
                         PAY_PER_BOX_UNLOAD);
     body += fmt::format("Бонус пары\t${} каждому за полный рейс ({}/{}) — только в паре\n", PAIR_FULL_UNLOAD_BONUS,
                         HaulerJobService::BOXES_PER_LEG, HaulerJobService::BOXES_PER_LEG);
-    body += "Пара\tводитель зовёт грузчика командой /pair <id>, грузчик подтверждает\n";
+    body += "Пара\tводитель зовёт грузчика командой /pair <id>, грузчик подтверждает; разойтись — /unpair\n";
+    body += fmt::format("Парк грузовиков\t{}/{} в работе; упёрлись — новые водители ждут в очереди\n",
+                        m_haulerJobService.truckCount(), HaulerJobService::MAX_TRUCKS);
     body += fmt::format("Коробки\tпо {} туда и обратно, пешком\n", HaulerJobService::BOXES_PER_LEG);
     body += "Выплата\tкопится в кошельке развозчика; на руки — через «Забрать деньги»\n";
     body += fmt::format("Посадка\t{} секунд сесть за руль отмеченного грузовика\n", RESERVE_SECONDS);
@@ -1424,6 +1477,13 @@ void HaulerJobSystem::restockDepot()
                 }
             }
             continue; // ещё стоит — не пере-стокуем
+        }
+        // Потолок парка: упёрлись — площадку не пере-стокуем. Свободных стоящих
+        // грузовиков не появляется, и новые работники штатно уходят в FIFO-очередь;
+        // освободится машина (увольнение/выход) — пере-сток возобновится сам.
+        if (m_haulerJobService.truckCount() >= HaulerJobService::MAX_TRUCKS)
+        {
+            continue;
         }
         if (spotClear(i))
         {

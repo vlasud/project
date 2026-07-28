@@ -199,6 +199,29 @@ bool HaulerJobService::isFreeStandingVehicle(int vehicleId) const
     return false;
 }
 
+int HaulerJobService::truckCount() const
+{
+    // Площадки и «уехавшие» не пересекаются: completeBoarding очищает площадку, когда
+    // грузовик покидает депо, поэтому одна машина считается ровно один раз.
+    int count = 0;
+    for (int i = 0; i < SLOT_COUNT; ++i)
+    {
+        if (m_spots[i].vehicleId >= 0)
+        {
+            ++count;
+        }
+    }
+    for (int p = 0; p < MAX_PLAYERS; ++p)
+    {
+        const State &state = m_state[p];
+        if (state.vehicleId >= 0 && state.phase != Phase::Reserved && holdsVehicle(state.phase))
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
 int HaulerJobService::firstFreeStandingSpot() const
 {
     for (int i = 0; i < SLOT_COUNT; ++i)

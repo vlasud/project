@@ -72,6 +72,9 @@ class HaulerJobSystem : public BaseSystem
     // --- пара «водитель + грузчик» ---
     void onPairCommand(IPlayer &driver, int targetId); // /pair — приглашение
     void onPairAccepted(int driverId, int loaderId);   // грузчик принял диалог
+    void onUnpairCommand(IPlayer &player);             // /unpair — разойтись, работу не теряя
+    // Вернуть игроку цель коробки, когда он снова стал носильщиком смены.
+    void restoreCarrierTarget(IPlayer &player);
     // Развести пару: обе стороны узнают, носильщик меняется. Зовётся из teardown
     // любой из сторон (выход/смерть/увольнение) и при ручном разрыве.
     void splitPair(int playerId, const std::string &noticeForPartner);
