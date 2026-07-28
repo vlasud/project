@@ -16,6 +16,7 @@
 #include "Services/ParkedVehicleService/ParkedVehicleService.h"
 #include "Services/InventoryService/InventoryService.h"
 #include "Services/JobDismissService/JobDismissService.h"
+#include "Services/JobWalletService/JobWalletService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/PortJobService/PortJobService.h"
 #include "Services/PortWalletService/PortWalletService.h"
@@ -207,6 +208,9 @@ void ServiceRegister::registerServices()
     // своей системы — значит, сервис обязан существовать ДО них (все сервисы
     // создаются раньше систем).
     registerService<JobDismissService>();
+    // Заработок по всем работам в одном месте (/jobwallet + напоминание на входе).
+    // Без зависимостей; кошельки регистрируют сами работы в конструкторах систем.
+    registerService<JobWalletService>();
     // Базовая система вещей (источник правды о предметах игроков онлайн). Без
     // зависимостей; типы регистрируют системы-владельцы (MedkitSystem) в своих
     // конструкторах, persist по сессии делает InventorySystem.

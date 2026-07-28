@@ -4,6 +4,7 @@
 #include "Services/HaulerJobService/HaulerJobService.h"
 #include "Services/HaulerWalletService/HaulerWalletService.h"
 #include "Services/JobDismissService/JobDismissService.h"
+#include "Services/JobWalletService/JobWalletService.h"
 #include "Services/Core/AttachmentService/AttachmentService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
@@ -151,6 +152,7 @@ class HaulerJobSystem : public BaseSystem
 
     HaulerJobService &m_haulerJobService;
     HaulerWalletService &m_haulerWalletService;
+    JobWalletService &m_jobWalletService;
     VehicleService &m_vehicleService;
     CheckpointService &m_checkpointService;
     PickupService &m_pickupService;

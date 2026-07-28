@@ -169,6 +169,7 @@ float distanceSq2D(const Vector3 &a, const Vector3 &b)
 BusJobSystem::BusJobSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_busJobService(serviceRegister.getService<BusJobService>()),
       m_busWalletService(serviceRegister.getService<BusWalletService>()),
+      m_jobWalletService(serviceRegister.getService<JobWalletService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>()),
       m_checkpointService(serviceRegister.getService<CheckpointService>()),
       m_pickupService(serviceRegister.getService<PickupService>()),
@@ -230,6 +231,15 @@ BusJobSystem::BusJobSystem(ICore &core, const ServiceRegister &serviceRegister)
         [this](IPlayer &player)
         {
             onFinishWork(player);
+        });
+
+    // Кошелёк этой работы — в справочный список (/jobwallet). Только баланс: выдача
+    // остаётся на пикапе работы, туда за деньгами и едут.
+    serviceRegister.getService<JobWalletService>().registerWallet(
+        "водитель автобуса", "пикап работы в депо автобусов",
+        [this](int playerId)
+        {
+            return m_busWalletService.balanceOf(playerId);
         });
 }
 
@@ -1014,6 +1024,7 @@ void BusJobSystem::loadWallet(IPlayer &player, const PlayerSessionService::Sessi
                 return;
             }
             m_busWalletService.load(playerId, balance);
+            m_jobWalletService.notifyLoaded(playerId); // общий список знает, что баланс готов
         },
         [](const std::string &error)
         {

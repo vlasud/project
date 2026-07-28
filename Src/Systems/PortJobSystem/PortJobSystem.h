@@ -15,6 +15,7 @@
 #include "Services/Core/TimerService/TimerService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/JobDismissService/JobDismissService.h"
+#include "Services/JobWalletService/JobWalletService.h"
 #include "Services/PortJobService/PortJobService.h"
 #include "Services/PortWalletService/PortWalletService.h"
 #include "Systems/BaseSystem.h"
@@ -94,6 +95,7 @@ class PortJobSystem : public BaseSystem, public PlayerSpawnEventHandler
 
     PortJobService &m_portJobService;
     PortWalletService &m_portWalletService;
+    JobWalletService &m_jobWalletService;
     PickupService &m_pickupService;
     CheckpointService &m_checkpointService;
     PlayerAnimationService &m_animationService;

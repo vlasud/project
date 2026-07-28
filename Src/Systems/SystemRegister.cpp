@@ -20,6 +20,7 @@
 #include "Systems/BusJobSystem/BusJobSystem.h"
 #include "Systems/HaulerJobSystem/HaulerJobSystem.h"
 #include "Systems/JobDismissSystem/JobDismissSystem.h"
+#include "Systems/JobWalletSystem/JobWalletSystem.h"
 #include "Systems/CarMenuSystem/CarMenuSystem.h"
 #include "Systems/PaymentSystem/PaymentSystem.h"
 #include "Systems/DeathPenaltySystem/DeathPenaltySystem.h"
@@ -275,6 +276,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // конструкторы, а команда резолвит работу на момент вызова. Порядок здесь не
     // критичен (регистрации и вызов разнесены во времени), но так видно зависимость.
     m_systems.push_back(std::make_unique<JobDismissSystem>(core, serviceRegister));
+    // JobWalletSystem (/jobwallet) — тоже после работ: кошельки в список кладут их
+    // конструкторы. Напоминание о деньгах шлётся по сигналу загрузки кошелька, а не
+    // на старте сессии (загрузка асинхронная), поэтому порядок подписок не важен.
+    m_systems.push_back(std::make_unique<JobWalletSystem>(core, serviceRegister));
     // SpawnSystem раньше AuthSystem: на спавне сперва применяются интерьер/мир
     // точки спавна, затем auth навешивает экипировку.
     m_systems.push_back(std::make_unique<ClassSelectionSystem>(core, serviceRegister));

@@ -4,6 +4,7 @@
 #include "Services/BusJobService/BusJobService.h"
 #include "Services/BusWalletService/BusWalletService.h"
 #include "Services/JobDismissService/JobDismissService.h"
+#include "Services/JobWalletService/JobWalletService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/NavigationLockService/NavigationLockService.h"
@@ -144,6 +145,7 @@ class BusJobSystem : public BaseSystem
 
     BusJobService &m_busJobService;
     BusWalletService &m_busWalletService;
+    JobWalletService &m_jobWalletService;
     VehicleService &m_vehicleService;
     CheckpointService &m_checkpointService;
     PickupService &m_pickupService;

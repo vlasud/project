@@ -71,6 +71,7 @@ const Colour DELIVERY_POPUP_COLOUR{0x90, 0xEE, 0x90, 0xFF};
 PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_portJobService(serviceRegister.getService<PortJobService>()),
       m_portWalletService(serviceRegister.getService<PortWalletService>()),
+      m_jobWalletService(serviceRegister.getService<JobWalletService>()),
       m_pickupService(serviceRegister.getService<PickupService>()),
       m_checkpointService(serviceRegister.getService<CheckpointService>()),
       m_animationService(serviceRegister.getService<PlayerAnimationService>()),
@@ -132,6 +133,15 @@ PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister
         [this](IPlayer &player)
         {
             onFinishWork(player);
+        });
+
+    // Кошелёк этой работы — в справочный список (/jobwallet). Только баланс: выдача
+    // остаётся на пикапе работы, туда за деньгами и едут.
+    serviceRegister.getService<JobWalletService>().registerWallet(
+        "грузчик порта", "пикап работы в порту",
+        [this](int playerId)
+        {
+            return m_portWalletService.balanceOf(playerId);
         });
 }
 
@@ -587,6 +597,7 @@ void PortJobSystem::loadWallet(IPlayer &player, const PlayerSessionService::Sess
                 return;
             }
             m_portWalletService.load(playerId, balance);
+            m_jobWalletService.notifyLoaded(playerId); // общий список знает, что баланс готов
         },
         [](const std::string &error)
         {

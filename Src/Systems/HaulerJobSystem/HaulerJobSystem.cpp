@@ -189,6 +189,7 @@ float distanceSq2D(const Vector3 &a, const Vector3 &b)
 HaulerJobSystem::HaulerJobSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_haulerJobService(serviceRegister.getService<HaulerJobService>()),
       m_haulerWalletService(serviceRegister.getService<HaulerWalletService>()),
+      m_jobWalletService(serviceRegister.getService<JobWalletService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>()),
       m_checkpointService(serviceRegister.getService<CheckpointService>()),
       m_pickupService(serviceRegister.getService<PickupService>()),
@@ -275,6 +276,15 @@ HaulerJobSystem::HaulerJobSystem(ICore &core, const ServiceRegister &serviceRegi
         [this](IPlayer &player)
         {
             onFinishWork(player);
+        });
+
+    // Кошелёк этой работы — в справочный список (/jobwallet). Только баланс: выдача
+    // остаётся на пикапе работы, туда за деньгами и едут.
+    serviceRegister.getService<JobWalletService>().registerWallet(
+        "портовый развозчик", "пикап работы в депо развозчиков",
+        [this](int playerId)
+        {
+            return m_haulerWalletService.balanceOf(playerId);
         });
 }
 
@@ -1888,6 +1898,7 @@ void HaulerJobSystem::loadWallet(IPlayer &player, const PlayerSessionService::Se
                 return;
             }
             m_haulerWalletService.load(playerId, balance);
+            m_jobWalletService.notifyLoaded(playerId); // общий список знает, что баланс готов
         },
         [](const std::string &error)
         {
