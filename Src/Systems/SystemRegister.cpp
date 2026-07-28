@@ -55,6 +55,7 @@
 #include "Systems/MedkitSystem/MedkitSystem.h"
 #include "Systems/AuctionSystem/AuctionSystem.h"
 #include "Systems/BusinessSystem/BusinessSystem.h"
+#include "Systems/GasStationSystem/GasStationSystem.h"
 #include "Systems/Shop247System/Shop247System.h"
 #include "Systems/ToolkitSystem/ToolkitSystem.h"
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
@@ -366,6 +367,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // заводит точки, а для этого каталог типа уже должен быть в реестре. Предметы
     // (аптечка/инструменты) зарегистрированы выше — магазин продаёт их по типам.
     m_systems.push_back(std::make_unique<Shop247System>(core, serviceRegister));
+    // АЗС — второй тип бизнеса: та же витрина внутри + заправка снаружи (/fuel).
+    // Тоже ДО BusinessSystem (каталог типа нужен на загрузке точек); нужен
+    // VehicleSystem (топливо) — он зарегистрирован выше.
+    m_systems.push_back(std::make_unique<GasStationSystem>(core, serviceRegister));
     // Общий привод бизнесов: дев-команда /business, точки входа/выхода, интерфейс
     // «Бизнес», персист. После Pickup/MapIcon/CheckpointSystem (компоненты готовы).
     m_systems.push_back(std::make_unique<BusinessSystem>(core, serviceRegister));

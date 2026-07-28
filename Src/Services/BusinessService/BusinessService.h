@@ -48,7 +48,8 @@ class BusinessService final : public IService
 
     enum class Type
     {
-        Shop247, // продуктовый магазин 24/7
+        Shop247,    // продуктовый магазин 24/7
+        GasStation, // АЗС: та же витрина + заправка машин снаружи
         Count
     };
 
