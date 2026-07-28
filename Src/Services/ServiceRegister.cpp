@@ -15,6 +15,7 @@
 #include "Services/HouseService/HouseService.h"
 #include "Services/ParkedVehicleService/ParkedVehicleService.h"
 #include "Services/InventoryService/InventoryService.h"
+#include "Services/JobDismissService/JobDismissService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/PortJobService/PortJobService.h"
 #include "Services/PortWalletService/PortWalletService.h"
@@ -201,6 +202,11 @@ void ServiceRegister::registerServices()
     // сгорают при дисконнекте/смерти/увольнении. Без зависимостей; загрузку по
     // сессии/начисление/выдачу ведёт привод HaulerJobSystem.
     registerService<HaulerWalletService>();
+    // Увольнение с работы «откуда угодно» (/stopjob): чем игрок занят и как его с
+    // этого уволить. Без зависимостей; каждая работа регистрирует себя в конструкторе
+    // своей системы — значит, сервис обязан существовать ДО них (все сервисы
+    // создаются раньше систем).
+    registerService<JobDismissService>();
     // Базовая система вещей (источник правды о предметах игроков онлайн). Без
     // зависимостей; типы регистрируют системы-владельцы (MedkitSystem) в своих
     // конструкторах, persist по сессии делает InventorySystem.

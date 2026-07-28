@@ -3,6 +3,7 @@
 #include "Macro.h"
 #include "Services/BusJobService/BusJobService.h"
 #include "Services/BusWalletService/BusWalletService.h"
+#include "Services/JobDismissService/JobDismissService.h"
 #include "Services/Core/CheckpointService/CheckpointService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/NavigationLockService/NavigationLockService.h"

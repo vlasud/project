@@ -258,6 +258,24 @@ HaulerJobSystem::HaulerJobSystem(ICore &core, const ServiceRegister &serviceRegi
             onUnpairCommand(player);
         },
         {}, "разойтись с напарником по работе развозчика", PlayerCommandService::HelpCategory::Economy);
+
+    // Универсальный выход с работы (/stopjob): реестр знает, чем игрок занят, а
+    // увольняет наш же обработчик пикапа — второй логики увольнения не появляется.
+    serviceRegister.getService<JobDismissService>().registerJob(
+        "портовый развозчик",
+        // Одна строка на обе роли: у грузчика ни грузовика, ни взноса не было.
+        fmt::format("Пара распадётся. Грузовик, если он за вами, будет снят, а взнос ${} (его платит только "
+                    "водитель) не возвращается — устройство заново снова платное. Заработок в кошельке "
+                    "развозчика сохранится, его можно забрать у пикапа работы.",
+                    HAULER_JOB_ENTRY_FEE),
+        [this](int playerId)
+        {
+            return m_haulerJobService.isWorking(playerId);
+        },
+        [this](IPlayer &player)
+        {
+            onFinishWork(player);
+        });
 }
 
 void HaulerJobSystem::initialize(IComponentList * /*components*/)

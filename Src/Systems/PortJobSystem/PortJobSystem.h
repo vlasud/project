@@ -14,6 +14,7 @@
 #include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
 #include "Services/Core/TimerService/TimerService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
+#include "Services/JobDismissService/JobDismissService.h"
 #include "Services/PortJobService/PortJobService.h"
 #include "Services/PortWalletService/PortWalletService.h"
 #include "Systems/BaseSystem.h"

@@ -19,6 +19,7 @@
 #include "Systems/BankSystem/BankSystem.h"
 #include "Systems/BusJobSystem/BusJobSystem.h"
 #include "Systems/HaulerJobSystem/HaulerJobSystem.h"
+#include "Systems/JobDismissSystem/JobDismissSystem.h"
 #include "Systems/CarMenuSystem/CarMenuSystem.h"
 #include "Systems/PaymentSystem/PaymentSystem.h"
 #include "Systems/DeathPenaltySystem/DeathPenaltySystem.h"
@@ -270,6 +271,10 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // склада — PortJobService::dropPositions, статический, регистрация выше). Депо-
     // часть O(SLOT_COUNT) в общем per-second таймере, остальное событийно.
     m_systems.push_back(std::make_unique<HaulerJobSystem>(core, serviceRegister));
+    // JobDismissSystem (/stopjob) — ПОСЛЕ всех работ: список наполняют их
+    // конструкторы, а команда резолвит работу на момент вызова. Порядок здесь не
+    // критичен (регистрации и вызов разнесены во времени), но так видно зависимость.
+    m_systems.push_back(std::make_unique<JobDismissSystem>(core, serviceRegister));
     // SpawnSystem раньше AuthSystem: на спавне сперва применяются интерьер/мир
     // точки спавна, затем auth навешивает экипировку.
     m_systems.push_back(std::make_unique<ClassSelectionSystem>(core, serviceRegister));

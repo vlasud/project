@@ -215,6 +215,22 @@ BusJobSystem::BusJobSystem(ICore &core, const ServiceRegister &serviceRegister)
     // VehicleService сам высаживает игрока (removeFromVehicle) — серверный бэкстоп.
     m_vehicleService.subscribeDriverGate([this](IPlayer &player, IVehicle &vehicle)
                                          { return onDriverGate(player, vehicle); });
+
+    // Универсальный выход с работы (/stopjob): реестр знает, чем игрок занят, а
+    // увольняет наш же обработчик пикапа — второй логики увольнения не появляется.
+    serviceRegister.getService<JobDismissService>().registerJob(
+        "водитель автобуса",
+        fmt::format("Автобус будет снят, а взнос ${} не возвращается — устройство заново снова платное. "
+                    "Заработок в кошельке автобусника сохранится, его можно забрать у пикапа работы.",
+                    BUS_JOB_ENTRY_FEE),
+        [this](int playerId)
+        {
+            return m_busJobService.isWorking(playerId);
+        },
+        [this](IPlayer &player)
+        {
+            onFinishWork(player);
+        });
 }
 
 void BusJobSystem::initialize(IComponentList * /*components*/)

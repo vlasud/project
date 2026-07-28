@@ -118,6 +118,21 @@ PortJobSystem::PortJobSystem(ICore &core, const ServiceRegister &serviceRegister
     // Респавн: чекпоинт источника переставляем на onPlayerSpawn (персональный
     // чекпоинт CheckpointService после смерти-респавна сам не перепоказывается).
     listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
+
+    // Универсальный выход с работы (/stopjob): реестр знает, чем игрок занят, а
+    // увольняет наш же обработчик пикапа — второй логики увольнения не появляется.
+    serviceRegister.getService<JobDismissService>().registerJob(
+        "грузчик порта",
+        "Взноса за эту работу нет, терять нечего: заработок в кошельке порта сохранится, его можно забрать у "
+        "пикапа работы. Несомый ящик пропадёт.",
+        [this](int playerId)
+        {
+            return m_portJobService.isWorking(playerId);
+        },
+        [this](IPlayer &player)
+        {
+            onFinishWork(player);
+        });
 }
 
 void PortJobSystem::initialize(IComponentList * /*components*/)
