@@ -19,6 +19,8 @@
 #include "Services/JobWalletService/JobWalletService.h"
 #include "Services/MedicJobService/MedicJobService.h"
 #include "Services/MedicWalletService/MedicWalletService.h"
+#include "Services/PlaceCatalogService/PlaceCatalogService.h"
+#include "Services/TaxiJobService/TaxiJobService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/PortJobService/PortJobService.h"
 #include "Services/PortWalletService/PortWalletService.h"
@@ -218,6 +220,13 @@ void ServiceRegister::registerServices()
     // конструкторах, persist по сессии делает InventorySystem.
     // Работа-врач: фаза смены, 2 точки спавна скорых, очередь и кулдаун лечения
     // пациентов. Без зависимостей; спавн машин/скины/деньги ведёт MedicJobSystem.
+    // Каталог именованных мест мира: одна таблица «название -> координаты» для /gps,
+    // /tp и выбора точки назначения в такси. Без зависимостей, наполняется в ctor.
+    registerService<PlaceCatalogService>();
+    // Работа-таксист: фаза смены, 7 точек спавна, очередь и состояние поездки
+    // (пассажир, назначение, депозит). Без зависимостей; машины/чекпоинты/деньги —
+    // на приводе TaxiJobSystem.
+    registerService<TaxiJobService>();
     registerService<MedicJobService>();
     // Персистентный кошелёк заработка врача (write-through в БД, medic_wallet).
     registerService<MedicWalletService>();

@@ -22,6 +22,7 @@
 #include "Systems/JobDismissSystem/JobDismissSystem.h"
 #include "Systems/JobWalletSystem/JobWalletSystem.h"
 #include "Systems/MedicJobSystem/MedicJobSystem.h"
+#include "Systems/TaxiJobSystem/TaxiJobSystem.h"
 #include "Systems/CarMenuSystem/CarMenuSystem.h"
 #include "Systems/PaymentSystem/PaymentSystem.h"
 #include "Systems/DeathPenaltySystem/DeathPenaltySystem.h"
@@ -284,6 +285,11 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // по смерти), PlayerSkinSystem (форменный скин) и PlayerSessionSystem (кошелёк и
     // пол аккаунта по сессии). Маршрута нет — только окно выезда в общем таймере.
     m_systems.push_back(std::make_unique<MedicJobSystem>(core, serviceRegister));
+    // TaxiJobSystem (работа-таксист, бизнес-фича вне Core) — те же зависимости, что и
+    // прочие работы, плюс CheckpointSystem (чекпоинт точки назначения) и клик по карте
+    // (подписка на PlayerClickDispatcher в конструкторе). Кошелька нет: деньги за
+    // поездку идут от пассажира и отдаются на руки по прибытии.
+    m_systems.push_back(std::make_unique<TaxiJobSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<JobDismissSystem>(core, serviceRegister));
     // JobWalletSystem (/jobwallet) — тоже после работ: кошельки в список кладут их
     // конструкторы. Напоминание о деньгах шлётся по сигналу загрузки кошелька, а не

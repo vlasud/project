@@ -21,7 +21,7 @@ const Colour ERROR_COLOUR{255, 90, 90};
 const Vector3 EMPLOY_PICKUP_POS{1204.0439f, -1823.2920f, 13.5918f};
 constexpr int PICKUP_MODEL = 1239;
 constexpr PickupType PICKUP_TYPE = 1;
-constexpr int JOB_MAP_ICON = 9; // маркер работы на карте (как у порта)
+constexpr int JOB_MAP_ICON = 46; // автобус на миникарте
 
 // Автобус: модель 431. Три площадки депо выровнены в ряд, угол 180 (от геймдизайна).
 constexpr int BUS_MODEL = 431;

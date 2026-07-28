@@ -20,21 +20,19 @@ GpsSystem::GpsSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_houseService(serviceRegister.getService<HouseService>()),
       m_factionService(serviceRegister.getService<FactionService>()),
+      m_placeCatalogService(serviceRegister.getService<PlaceCatalogService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>())
 {
-    // Единый каталог мест (легко правимый — одна таблица). Статические координаты —
-    // реального мирового контента; динамические резолвятся от игрока при клике.
-    m_places = {
-        {"Порт — работа грузчиком", Place::Kind::Static, {2746.6726f, -2450.3950f, 13.6484f}, 0, 0},
-        {"Автобусное депо — работа водителем", Place::Kind::Static, {1204.0439f, -1823.2920f, 13.5918f}, 0, 0},
-        {"Депо развозчиков — работа развозчиком", Place::Kind::Static, {2171.0681f, -2252.5254f, 13.3026f}, 0, 0},
-        {"Больница — работа врачом", Place::Kind::Static, {1183.6260f, -1332.1185f, 13.5814f}, 0, 0},
-        {"Центральная парковка", Place::Kind::Static, {1626.2488f, -1136.7443f, 23.9063f}, 0, 0},
-        {"Банк (Сан-Фиерро)", Place::Kind::Static, {-2766.5515f, 375.5889f, 6.3347f}, 0, 0},
-        {"Мэрия (Лос-Сантос)", Place::Kind::Static, {1480.94f, -1772.07f, 18.80f}, 0, 0},
-        {"Мой дом", Place::Kind::Home, {}, 0, 0},
-        {"Моя организация", Place::Kind::Work, {}, 0, 0},
-    };
+    // Статика мира — из общего каталога (PlaceCatalogService): те же адреса читает
+    // выбор точки назначения в такси, и держать их в двух местах нельзя. Пер-игроковые
+    // цели дописываются ХВОСТОМ: их резолвит эта система, каталог про дома и фракции
+    // не знает.
+    for (const PlaceCatalogService::Place &place : m_placeCatalogService.places())
+    {
+        m_places.push_back({place.name, Place::Kind::Static, place.position, 0, 0});
+    }
+    m_places.push_back({"Мой дом", Place::Kind::Home, {}, 0, 0});
+    m_places.push_back({"Моя организация", Place::Kind::Work, {}, 0, 0});
 
     // Взятие лока навигации гасит активный GPS-маркер игрока (иначе завис бы поверх
     // рабочих маркеров). Гасим только GPS-цель (clearGpsFor) — парковочный/домашний

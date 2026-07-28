@@ -4,6 +4,7 @@
 #include "Services/IService.h"
 #include "types.hpp"
 #include <array>
+#include <functional>
 #include <chrono>
 #include <deque>
 #include <vector>
@@ -85,7 +86,12 @@ class MedicJobService final : public IService
         int queuePosition = 0;
     };
 
-    StartOutcome startWork(int playerId);
+    // usable(spot) — «на точке физически свободно» (привод спрашивает мир: чужая
+    // машина могла встать на место, и спавн внутрь неё — то, что видит игрок).
+    // Сервис о мире не знает, поэтому проверку приносит вызывающий.
+    using SpotUsable = std::function<bool(int spot)>;
+
+    StartOutcome startWork(int playerId, const SpotUsable &usable);
 
     // Привязать заспавненную машину к работнику (после успешного create).
     void setVehicle(int playerId, int vehicleId);
@@ -103,7 +109,7 @@ class MedicJobService final : public IService
         int spot = -1;
     };
     // Продвинуть голову очереди на свободную точку (phase -> Boarding).
-    Promotion promoteQueue();
+    Promotion promoteQueue(const SpotUsable &usable);
 
     // Зафиксировать лечение пациента: кулдаун стартует с этого момента.
     void markHealed(int patientId, TimePoint now);
@@ -122,7 +128,7 @@ class MedicJobService final : public IService
         int spot = -1;      // удерживаемая точка спавна (только Boarding)
     };
 
-    int firstFreeSpot() const;
+    int firstFreeSpot(const SpotUsable &usable) const;
     void removeFromQueue(int playerId);
     void releaseSpot(int playerId);
 

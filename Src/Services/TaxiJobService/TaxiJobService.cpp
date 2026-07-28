@@ -1,6 +1,7 @@
-#include "Services/MedicJobService/MedicJobService.h"
+#include "Services/TaxiJobService/TaxiJobService.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace
 {
@@ -10,12 +11,12 @@ bool validId(int playerId)
 }
 } // namespace
 
-MedicJobService::MedicJobService()
+TaxiJobService::TaxiJobService()
 {
     m_spotHolder.fill(-1); // 0 — валидный playerId, «свободно» это -1
 }
 
-MedicJobService::Phase MedicJobService::phaseOf(int playerId) const
+TaxiJobService::Phase TaxiJobService::phaseOf(int playerId) const
 {
     if (!validId(playerId))
     {
@@ -24,12 +25,12 @@ MedicJobService::Phase MedicJobService::phaseOf(int playerId) const
     return m_state[playerId].phase;
 }
 
-bool MedicJobService::isWorking(int playerId) const
+bool TaxiJobService::isWorking(int playerId) const
 {
     return phaseOf(playerId) != Phase::NotWorking;
 }
 
-int MedicJobService::vehicleIdOf(int playerId) const
+int TaxiJobService::vehicleIdOf(int playerId) const
 {
     if (!validId(playerId))
     {
@@ -38,7 +39,7 @@ int MedicJobService::vehicleIdOf(int playerId) const
     return m_state[playerId].vehicleId;
 }
 
-int MedicJobService::queuePositionOf(int playerId) const
+int TaxiJobService::queuePositionOf(int playerId) const
 {
     int pos = 1;
     for (const int queued : m_queue)
@@ -52,12 +53,12 @@ int MedicJobService::queuePositionOf(int playerId) const
     return 0;
 }
 
-std::vector<int> MedicJobService::queuedPlayers() const
+std::vector<int> TaxiJobService::queuedPlayers() const
 {
     return std::vector<int>(m_queue.begin(), m_queue.end());
 }
 
-int MedicJobService::spotOf(int playerId) const
+int TaxiJobService::spotOf(int playerId) const
 {
     if (!validId(playerId))
     {
@@ -66,7 +67,7 @@ int MedicJobService::spotOf(int playerId) const
     return m_state[playerId].spot;
 }
 
-int MedicJobService::holderOfSpot(int spot) const
+int TaxiJobService::holderOfSpot(int spot) const
 {
     if (spot < 0 || spot >= SPOT_COUNT)
     {
@@ -75,7 +76,7 @@ int MedicJobService::holderOfSpot(int spot) const
     return m_spotHolder[spot];
 }
 
-int MedicJobService::workerOfVehicle(int vehicleId) const
+int TaxiJobService::workerOfVehicle(int vehicleId) const
 {
     if (vehicleId < 0)
     {
@@ -92,34 +93,34 @@ int MedicJobService::workerOfVehicle(int vehicleId) const
     return -1;
 }
 
-bool MedicJobService::canHeal(int patientId, TimePoint now) const
+const TaxiJobService::Ride *TaxiJobService::rideOf(int driverId) const
 {
-    return healCooldownLeft(patientId, now) == 0;
+    if (!validId(driverId) || m_state[driverId].phase == Phase::NotWorking)
+    {
+        return nullptr;
+    }
+    return &m_state[driverId].ride;
 }
 
-int MedicJobService::healCooldownLeft(int patientId, TimePoint now) const
+int TaxiJobService::driverOfPassenger(int passengerId) const
 {
-    if (!validId(patientId))
+    if (!validId(passengerId))
     {
-        return 0;
+        return -1;
     }
-    const TimePoint healedAt = m_healedAt[patientId];
-    if (healedAt.time_since_epoch().count() == 0)
+    for (int p = 0; p < MAX_PLAYERS; ++p)
     {
-        return 0; // ещё не лечили в этой сессии
+        if (m_state[p].ride.passengerId == passengerId)
+        {
+            return p;
+        }
     }
-    const auto elapsed = now - healedAt;
-    if (elapsed >= HEAL_COOLDOWN)
-    {
-        return 0;
-    }
-    const auto left = std::chrono::duration_cast<std::chrono::seconds>(HEAL_COOLDOWN - elapsed).count();
-    return static_cast<int>(left) + 1; // округляем вверх: «осталось 0 секунд» не показываем
+    return -1;
 }
 
-// ------------------------------------------------------------------ мутаторы
+// ------------------------------------------------------------------ смена
 
-MedicJobService::StartOutcome MedicJobService::startWork(int playerId, const SpotUsable &usable)
+TaxiJobService::StartOutcome TaxiJobService::startWork(int playerId, const SpotUsable &usable)
 {
     if (!validId(playerId))
     {
@@ -147,7 +148,7 @@ MedicJobService::StartOutcome MedicJobService::startWork(int playerId, const Spo
     return {StartResult::Queued, -1, static_cast<int>(m_queue.size())};
 }
 
-void MedicJobService::setVehicle(int playerId, int vehicleId)
+void TaxiJobService::setVehicle(int playerId, int vehicleId)
 {
     if (!validId(playerId))
     {
@@ -156,7 +157,7 @@ void MedicJobService::setVehicle(int playerId, int vehicleId)
     m_state[playerId].vehicleId = vehicleId;
 }
 
-void MedicJobService::completeBoarding(int playerId)
+void TaxiJobService::completeBoarding(int playerId)
 {
     if (!validId(playerId))
     {
@@ -171,7 +172,7 @@ void MedicJobService::completeBoarding(int playerId)
     releaseSpot(playerId); // машина уехала — точка свободна для очереди
 }
 
-void MedicJobService::requeueTail(int playerId)
+void TaxiJobService::requeueTail(int playerId)
 {
     if (!validId(playerId))
     {
@@ -185,7 +186,7 @@ void MedicJobService::requeueTail(int playerId)
     m_queue.push_back(playerId);
 }
 
-MedicJobService::Promotion MedicJobService::promoteQueue(const SpotUsable &usable)
+TaxiJobService::Promotion TaxiJobService::promoteQueue(const SpotUsable &usable)
 {
     if (m_queue.empty())
     {
@@ -208,16 +209,87 @@ MedicJobService::Promotion MedicJobService::promoteQueue(const SpotUsable &usabl
     return {playerId, spot};
 }
 
-void MedicJobService::markHealed(int patientId, TimePoint now)
+// ------------------------------------------------------------------ поездка
+
+bool TaxiJobService::setPassenger(int driverId, int passengerId)
 {
-    if (!validId(patientId))
+    if (!validId(driverId) || !validId(passengerId) || driverId == passengerId)
     {
-        return;
+        return false;
     }
-    m_healedAt[patientId] = now;
+    State &state = m_state[driverId];
+    if (state.phase != Phase::Working || state.ride.passengerId >= 0)
+    {
+        return false;
+    }
+    state.ride = Ride{};
+    state.ride.passengerId = passengerId;
+    return true;
 }
 
-void MedicJobService::endShift(int playerId)
+bool TaxiJobService::setDestination(int driverId, const Vector3 &destination, std::string name)
+{
+    if (!validId(driverId))
+    {
+        return false;
+    }
+    Ride &ride = m_state[driverId].ride;
+    if (ride.passengerId < 0)
+    {
+        return false;
+    }
+    ride.hasDestination = true;
+    ride.destination = destination;
+    ride.destinationName = std::move(name);
+    if (!ride.paid)
+    {
+        ride.fare = 0; // не внесённая цена была за другой маршрут — договариваются заново
+    }
+    return true;
+}
+
+bool TaxiJobService::offerFare(int driverId, std::int64_t fare)
+{
+    if (!validId(driverId) || fare <= 0)
+    {
+        return false;
+    }
+    Ride &ride = m_state[driverId].ride;
+    if (ride.passengerId < 0 || !ride.hasDestination || ride.paid)
+    {
+        return false;
+    }
+    ride.fare = fare;
+    return true;
+}
+
+bool TaxiJobService::confirmFare(int driverId)
+{
+    if (!validId(driverId))
+    {
+        return false;
+    }
+    Ride &ride = m_state[driverId].ride;
+    if (ride.passengerId < 0 || ride.fare <= 0 || ride.paid)
+    {
+        return false;
+    }
+    ride.paid = true;
+    return true;
+}
+
+TaxiJobService::Ride TaxiJobService::endRide(int driverId)
+{
+    if (!validId(driverId))
+    {
+        return Ride{};
+    }
+    Ride finished = std::move(m_state[driverId].ride);
+    m_state[driverId].ride = Ride{};
+    return finished;
+}
+
+void TaxiJobService::endShift(int playerId)
 {
     if (!validId(playerId))
     {
@@ -228,18 +300,9 @@ void MedicJobService::endShift(int playerId)
     m_state[playerId] = State{};
 }
 
-void MedicJobService::resetPatient(int playerId)
-{
-    if (!validId(playerId))
-    {
-        return;
-    }
-    m_healedAt[playerId] = TimePoint{};
-}
-
 // ------------------------------------------------------------------ private
 
-int MedicJobService::firstFreeSpot(const SpotUsable &usable) const
+int TaxiJobService::firstFreeSpot(const SpotUsable &usable) const
 {
     for (int i = 0; i < SPOT_COUNT; ++i)
     {
@@ -253,7 +316,7 @@ int MedicJobService::firstFreeSpot(const SpotUsable &usable) const
     return -1;
 }
 
-void MedicJobService::removeFromQueue(int playerId)
+void TaxiJobService::removeFromQueue(int playerId)
 {
     const auto it = std::find(m_queue.begin(), m_queue.end(), playerId);
     if (it != m_queue.end())
@@ -262,7 +325,7 @@ void MedicJobService::removeFromQueue(int playerId)
     }
 }
 
-void MedicJobService::releaseSpot(int playerId)
+void TaxiJobService::releaseSpot(int playerId)
 {
     if (!validId(playerId))
     {

@@ -91,6 +91,8 @@ class MedicJobSystem : public BaseSystem
     void teardownShift(IPlayer &player);
 
     // --- helpers ---
+    // На точке спавна физически пусто (чужой машины нет) — можно подавать.
+    bool spotClear(int spot) const;
     // Машина всё ещё стоит на своей точке спавна (значит, точка занята).
     bool ambulanceOnSpot(int vehicleId, int spot) const;
     // Позиция скорой врача; false — машина пропала.
@@ -121,6 +123,8 @@ class MedicJobSystem : public BaseSystem
 
     // Секунды окна посадки (индексируется playerId; ведёт per-second тик).
     std::array<int, MAX_PLAYERS> m_boardingSeconds{};
+    // Секунды вдали от своей скорой на смене — окно возврата.
+    std::array<int, MAX_PLAYERS> m_awaySeconds{};
 
     std::mt19937 m_rng; // выбор скина из пула (главный поток, событийно)
 };

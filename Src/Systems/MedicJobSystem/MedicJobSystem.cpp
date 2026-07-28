@@ -5,6 +5,7 @@
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
+#include "Utils/Geometry/Geometry.h"
 #include <chrono>
 #include <cstdint>
 #include <fmt/format.h>
@@ -43,6 +44,15 @@ const SpawnSpot SPAWN_SPOT[MedicJobService::SPOT_COUNT] = {
 // точка свободна для следующего из очереди.
 constexpr float SPOT_RADIUS = 8.0f;
 
+// Физическая занятость точки ЛЮБОЙ машиной (не только нашей).
+//
+// anyVehicleNear сравнивает ОРИГИНЫ машин, а не габариты: чужая машина перекрывает
+// место, стоя оригином за 3-4 м от центра. Покрытие считаем от размеров ДВУХ машин —
+// скорая длинная (~6 м), мешающая обычно ~4.5 м. Точки выезда разнесены на ~30 м,
+// поэтому ни радиус, ни оффсет соседа не задевают.
+constexpr float SPOT_OCCUPIED_RADIUS = 3.5f;
+constexpr float SPOT_PROBE_OFFSET = 4.0f;
+
 // Форма врача: пул скинов по полу аккаунта (замеры владельца), выбор случайный.
 const int UNIFORM_MALE[] = {274, 275, 276};
 const int UNIFORM_FEMALE[] = {69};
@@ -55,6 +65,11 @@ constexpr float HEAL_RADIUS = 5.0f;
 constexpr std::int64_t PAY_PER_HEAL = 100; // $ за каждого вылеченного
 constexpr int BOARDING_SECONDS = 30;       // окно «сесть и отъехать с точки спавна»
 
+// Окно возврата к скорой на смене. Врач работает У МАШИНЫ — тот же HEAL_RADIUS, в
+// котором он лечит: ушёл дальше, значит смена перестала быть сменой. Не вернулся —
+// увольнение (скорая снимается, форма меняется обратно).
+constexpr int RETURN_SECONDS = 30;
+
 // Экранные попапы — ТОЛЬКО English (конвенция проекта).
 constexpr Milliseconds BOARDING_POPUP_TIME{4000};
 constexpr Milliseconds CREDIT_POPUP_TIME{2500};
@@ -64,6 +79,7 @@ const Colour CREDIT_POPUP_COLOUR{0x90, 0xEE, 0x90, 0xFF};
 const Colour ERROR_POPUP_COLOUR{0xFF, 0x5A, 0x5A, 0xFF};
 
 const char *const BOARDING_TIMER_LABEL = "AMBULANCE";
+const char *const RETURN_TIMER_LABEL = "RETURN";
 
 // Горизонтальная (XY) дистанция² — Z у больницы одинаковый, а этажи тут не при чём.
 float distanceSq2D(const Vector3 &a, const Vector3 &b)
@@ -252,7 +268,12 @@ void MedicJobSystem::onStartWork(IPlayer &player)
         return;
     }
 
-    const MedicJobService::StartOutcome outcome = m_medicJobService.startWork(playerId);
+    const MedicJobService::StartOutcome outcome = m_medicJobService.startWork(
+        playerId,
+        [this](int spot)
+        {
+            return spotClear(spot);
+        });
     if (outcome.result == MedicJobService::StartResult::AlreadyWorking)
     {
         return; // гонка кликов
@@ -264,9 +285,12 @@ void MedicJobSystem::onStartWork(IPlayer &player)
 
     if (outcome.result == MedicJobService::StartResult::Queued)
     {
+        // Не «обе заняты работниками»: место могло быть и просто заставлено чужой
+        // машиной — формулировка честна в обоих случаях.
         player.sendClientMessage(
             INFO_COLOUR,
-            u(fmt::format("Обе точки выезда заняты. Вы в очереди на скорую, место {}", outcome.queuePosition)));
+            u(fmt::format("Свободных мест для подачи сейчас нет. Вы в очереди на скорую, место {}",
+                          outcome.queuePosition)));
         return;
     }
     onSpotGranted(player);
@@ -436,7 +460,11 @@ void MedicJobSystem::pumpQueue()
     bool promoted = false;
     for (;;)
     {
-        const MedicJobService::Promotion promotion = m_medicJobService.promoteQueue();
+        const MedicJobService::Promotion promotion = m_medicJobService.promoteQueue(
+            [this](int spot)
+            {
+                return spotClear(spot);
+            });
         if (promotion.playerId < 0)
         {
             break; // очередь пуста / свободных точек нет
@@ -657,7 +685,31 @@ void MedicJobSystem::tickWorker(IPlayer &player)
 
     if (m_medicJobService.phaseOf(playerId) != MedicJobService::Phase::Boarding)
     {
-        return; // на смене окон нет: врач легально ходит пешком у своей машины
+        // На смене врач легально ходит пешком, но только У СВОЕЙ МАШИНЫ: рабочая зона
+        // — тот же радиус, в котором он лечит. Ушёл дальше — окно возврата.
+        Vector3 ambulance;
+        if (!ambulancePosition(playerId, ambulance))
+        {
+            return; // машину проверил вызывающий выше
+        }
+        constexpr float leashSq = HEAL_RADIUS * HEAL_RADIUS;
+        if (distanceSq2D(m_locationService.getPosition(playerId), ambulance) > leashSq)
+        {
+            const int away = ++m_awaySeconds[playerId];
+            if (away >= RETURN_SECONDS)
+            {
+                dismiss(player, "Вы ушли от скорой — вы уволены", ERROR_COLOUR);
+                return;
+            }
+            m_screenTimerService.show(player, RETURN_SECONDS - away + 1, RETURN_TIMER_LABEL);
+            return;
+        }
+        if (m_awaySeconds[playerId] != 0)
+        {
+            m_awaySeconds[playerId] = 0;
+            m_screenTimerService.hide(player);
+        }
+        return;
     }
 
     const int spot = m_medicJobService.spotOf(playerId);
@@ -667,6 +719,7 @@ void MedicJobSystem::tickWorker(IPlayer &player)
     {
         m_medicJobService.completeBoarding(playerId);
         m_boardingSeconds[playerId] = 0;
+        m_awaySeconds[playerId] = 0; // окно возврата начинается с чистого листа
         m_waypointService.clearFor(player);
         m_screenTimerService.hide(player);
         player.sendClientMessage(INFO_COLOUR,
@@ -716,6 +769,7 @@ void MedicJobSystem::teardownShift(IPlayer &player)
     if (validPlayerId(playerId))
     {
         m_boardingSeconds[playerId] = 0;
+        m_awaySeconds[playerId] = 0;
     }
     m_navLockService.release(playerId); // конец смены — снять лок навигации
     pumpQueue();                        // освободилась точка — отдать её очереди
@@ -784,6 +838,23 @@ void MedicJobSystem::loadWallet(IPlayer &player, const PlayerSessionService::Ses
 }
 
 // ------------------------------------------------------------------ helpers
+
+bool MedicJobSystem::spotClear(int spot) const
+{
+    if (spot < 0 || spot >= MedicJobService::SPOT_COUNT)
+    {
+        return false; // вне диапазона -> считаем занятой (не спавним)
+    }
+    // Многопробная занятость (центр + вперёд/назад по углу места), как у депо
+    // автобуса/развозчика: длинная машина детектится телом, а не только оригином.
+    const Vector3 &centre = SPAWN_SPOT[spot].position;
+    const float angle = SPAWN_SPOT[spot].angle;
+    return !m_vehicleService.anyVehicleNear(centre, SPOT_OCCUPIED_RADIUS) &&
+           !m_vehicleService.anyVehicleNear(Geometry::forwardOf(centre, angle, SPOT_PROBE_OFFSET),
+                                            SPOT_OCCUPIED_RADIUS) &&
+           !m_vehicleService.anyVehicleNear(Geometry::backOf(centre, angle, SPOT_PROBE_OFFSET),
+                                            SPOT_OCCUPIED_RADIUS);
+}
 
 bool MedicJobSystem::ambulanceOnSpot(int vehicleId, int spot) const
 {

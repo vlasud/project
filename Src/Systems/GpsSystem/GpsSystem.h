@@ -10,6 +10,7 @@
 #include "Services/HouseService/HouseService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/VehicleWaypointService/VehicleWaypointService.h"
+#include "Services/PlaceCatalogService/PlaceCatalogService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 #include "types.hpp"
@@ -91,6 +92,7 @@ class GpsSystem : public BaseSystem
     PlayerSessionService &m_sessionService;
     HouseService &m_houseService;
     FactionService &m_factionService;
+    PlaceCatalogService &m_placeCatalogService;
     PlayerDialogService &m_dialogService;
 
     std::vector<Place> m_places; // единый каталог (легко правимый), заполняется в конструкторе
