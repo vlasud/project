@@ -17,6 +17,8 @@
 #include "Services/InventoryService/InventoryService.h"
 #include "Services/JobDismissService/JobDismissService.h"
 #include "Services/JobWalletService/JobWalletService.h"
+#include "Services/MedicJobService/MedicJobService.h"
+#include "Services/MedicWalletService/MedicWalletService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/PortJobService/PortJobService.h"
 #include "Services/PortWalletService/PortWalletService.h"
@@ -214,6 +216,11 @@ void ServiceRegister::registerServices()
     // Базовая система вещей (источник правды о предметах игроков онлайн). Без
     // зависимостей; типы регистрируют системы-владельцы (MedkitSystem) в своих
     // конструкторах, persist по сессии делает InventorySystem.
+    // Работа-врач: фаза смены, 2 точки спавна скорых, очередь и кулдаун лечения
+    // пациентов. Без зависимостей; спавн машин/скины/деньги ведёт MedicJobSystem.
+    registerService<MedicJobService>();
+    // Персистентный кошелёк заработка врача (write-through в БД, medic_wallet).
+    registerService<MedicWalletService>();
     registerService<InventoryService>();
     registerService<PlayerAuthService>();
     // Админ-доступ (источник правды об уровне/пароле/логине). Без зависимостей;

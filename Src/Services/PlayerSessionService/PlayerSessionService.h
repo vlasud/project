@@ -59,10 +59,16 @@ class PlayerSessionService final : public IService
     using AccountId = std::int64_t;
     static constexpr AccountId NO_ACCOUNT = 0;
 
+    // Пол аккаунта (как ESex в регистрации): 0 — мужской, иначе женский. Хранится в
+    // player.sex, читается на логине. Живёт в сессии, а не у бизнеса: это факт
+    // АККАУНТА, и он нужен разным фичам (форменные скины работ и далее).
+    static constexpr std::uint8_t SEX_MALE = 0;
+
     struct Session
     {
         AccountId accountId = NO_ACCOUNT;
         std::uint32_t serial = 0; // глобальный номер сессии (не переиспользуется)
+        std::uint8_t sex = SEX_MALE;
         TimePoint startedAt;
     };
 
@@ -70,6 +76,7 @@ class PlayerSessionService final : public IService
     bool isActive(int playerId) const;
     AccountId getAccountId(int playerId) const;     // NO_ACCOUNT — не залогинен
     const Session *get(int playerId) const;         // nullptr — сессии нет
+    bool isFemale(int playerId) const;              // пол аккаунта; вне сессии — false
     int playerByAccount(AccountId accountId) const; // id игрока или -1 — аккаунт не в сети
 
     // --- подписки бизнес-сервисов (из конструкторов систем) ---
@@ -85,7 +92,7 @@ class PlayerSessionService final : public IService
 
     // Вызывает PlayerAuthSystem после успешной проверки пароля/регистрации.
     // false — аккаунт уже в сети у другого игрока (двойной вход), сессия не создана.
-    bool start(IPlayer &player, AccountId accountId);
+    bool start(IPlayer &player, AccountId accountId, std::uint8_t sex);
 
     // Идемпотентный персист аккаунт-данных БЕЗ завершения сессии (m_online и
     // Session не трогаются). Зовётся автосейвом онлайн-игроков. Неактивная/offline

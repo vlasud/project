@@ -187,6 +187,14 @@ CREATE TABLE IF NOT EXISTS `hauler_wallet` (
     PRIMARY KEY (`account_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
+-- Кошелёк заработка врача (работа-врач, Docs/MedicJob.md): write-through, забирается
+-- на пикапе больницы. Как bus_wallet/port_wallet/hauler_wallet.
+CREATE TABLE IF NOT EXISTS `medic_wallet` (
+    `account_id` BIGINT NOT NULL,
+    `balance`    BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`account_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
 -- Выборы президента: партии, состояние выборов (одна строка id=1, срок —
 -- unix-время, переживает рестарт) и голоса текущих выборов (один на аккаунт).
 CREATE TABLE IF NOT EXISTS `party` (

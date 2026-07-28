@@ -23,6 +23,12 @@ const PlayerSessionService::Session *PlayerSessionService::get(int playerId) con
     return &m_sessions[playerId];
 }
 
+bool PlayerSessionService::isFemale(int playerId) const
+{
+    const Session *session = get(playerId);
+    return session != nullptr && session->sex != SEX_MALE;
+}
+
 int PlayerSessionService::playerByAccount(AccountId accountId) const
 {
     const auto it = m_online.find(accountId);
@@ -44,7 +50,7 @@ void PlayerSessionService::subscribeEnd(Observer observer)
     m_endObservers.push_back(std::move(observer));
 }
 
-bool PlayerSessionService::start(IPlayer &player, AccountId accountId)
+bool PlayerSessionService::start(IPlayer &player, AccountId accountId, std::uint8_t sex)
 {
     if (accountId == NO_ACCOUNT)
         return false;
@@ -66,6 +72,7 @@ bool PlayerSessionService::start(IPlayer &player, AccountId accountId)
     Session &session = m_sessions[playerId];
     session.accountId = accountId;
     session.serial = m_nextSerial++;
+    session.sex = sex;
     session.startedAt = std::chrono::steady_clock::now();
     m_online[accountId] = playerId;
 

@@ -48,6 +48,8 @@ class PlayerAuthSystem : public BaseSystem,
         // Личный (гражданский) скин аккаунта из БД. Применяется в finalize ДО
         // старта членства; валидируется PlayerPersonalSkinService.
         int personalSkin = PlayerPersonalSkinService::DEFAULT_SKIN_MALE;
+        // Пол аккаунта из БД — уезжает в сессию на start (форменные скины работ).
+        std::uint8_t sex = PlayerSessionService::SEX_MALE;
     };
 
     struct RegistrationData

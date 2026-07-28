@@ -26,6 +26,7 @@ struct LoginRow
     std::int64_t accountId = 0;
     std::string passwordHash;
     int skin = 0;
+    std::uint8_t sex = PlayerSessionService::SEX_MALE;
     int banDaysLeft = 0;
 };
 } // namespace
@@ -147,7 +148,7 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
             mysqlx::SqlResult result =
                 schema.getSession()
                     .sql("SELECT p.id, p.password_hash, p.skin, "
-                         "CEIL(TIMESTAMPDIFF(SECOND, NOW(), b.banned_until) / 86400) "
+                         "p.sex, CEIL(TIMESTAMPDIFF(SECOND, NOW(), b.banned_until) / 86400) "
                          "FROM player p "
                          "LEFT JOIN ban b ON b.account_id = p.id AND b.banned_until > NOW() "
                          "WHERE p.name = ? LIMIT 1")
@@ -163,9 +164,12 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
                 // должно ронять get<int>() при рассинхроне схемы (иначе битый ряд =
                 // вечный kick аккаунта) — мусор отфильтрует isValidSkin в finalize.
                 data.skin = static_cast<int>(row.get(2).get<std::int64_t>());
+                // sex — как записан при регистрации (0 муж / 1 жен); сужаем так же
+                // защитно, мусор трактуется как «не мужской» только при значении != 0.
+                data.sex = static_cast<std::uint8_t>(row.get(3).get<std::int64_t>());
                 // banDaysLeft: NULL (нет активного бана) → 0; иначе CEIL дней.
-                if (!row.get(3).isNull())
-                    data.banDaysLeft = static_cast<int>(row.get(3).get<std::int64_t>());
+                if (!row.get(4).isNull())
+                    data.banDaysLeft = static_cast<int>(row.get(4).get<std::int64_t>());
                 account = std::move(data);
             }
             return account;
@@ -203,6 +207,7 @@ void PlayerAuthSystem::onPlayerSpawn(IPlayer &player)
             // Личный скин из БД; валидируется при применении в finalize (фолбэк
             // на дефолт там же). Невалидное значение из БД безопасно.
             m_loginData[playerId].personalSkin = account->skin;
+            m_loginData[playerId].sex = account->sex;
             runLogin(playerId);
         },
         [this, requestConnectionVersion, playerId = player.getID()](const std::string &)
@@ -337,7 +342,7 @@ void PlayerAuthSystem::showLoginDialog(IPlayer &player)
 
                                  // Сессия — после пароля: до проверки нельзя раскрывать,
                                  // что аккаунт в сети (это уже информация о владельце).
-                                 if (!m_sessionService.start(*player, m_loginData[playerId].accountId))
+                                 if (!m_sessionService.start(*player, m_loginData[playerId].accountId, m_loginData[playerId].sex))
                                  {
                                      player->sendClientMessage(
                                          Colour::White(), Encoding::utf8Tocp1251("Этот аккаунт уже в игре"));
@@ -475,7 +480,8 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
                 accountId = row.get(0).get<std::int64_t>();
             return accountId;
         },
-        [this, requestConnectionVersion, playerId = player.getID(), defaultSkin](std::optional<std::int64_t> accountId)
+        [this, requestConnectionVersion, playerId = player.getID(), defaultSkin,
+         sex = sexValue](std::optional<std::int64_t> accountId)
         {
             if (m_connectionVersionService.getVersion(playerId) != requestConnectionVersion)
             {
@@ -494,7 +500,7 @@ void PlayerAuthSystem::finalizeRegistration(IPlayer &player)
                 return;
             }
 
-            if (!m_sessionService.start(*player, *accountId))
+            if (!m_sessionService.start(*player, *accountId, sex))
             {
                 player->sendClientMessage(Colour::White(), Encoding::utf8Tocp1251("Этот аккаунт уже в игре"));
                 player->kick();

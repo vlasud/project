@@ -21,6 +21,7 @@
 #include "Systems/HaulerJobSystem/HaulerJobSystem.h"
 #include "Systems/JobDismissSystem/JobDismissSystem.h"
 #include "Systems/JobWalletSystem/JobWalletSystem.h"
+#include "Systems/MedicJobSystem/MedicJobSystem.h"
 #include "Systems/CarMenuSystem/CarMenuSystem.h"
 #include "Systems/PaymentSystem/PaymentSystem.h"
 #include "Systems/DeathPenaltySystem/DeathPenaltySystem.h"
@@ -275,6 +276,14 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // JobDismissSystem (/stopjob) — ПОСЛЕ всех работ: список наполняют их
     // конструкторы, а команда резолвит работу на момент вызова. Порядок здесь не
     // критичен (регистрации и вызов разнесены во времени), но так видно зависимость.
+    // MedicJobSystem (работа-врач, бизнес-фича вне Core) после тех же систем, что и
+    // прочие работы: TimerSystem (общий per-second таймер больницы), VehicleSystem
+    // (спавн скорых Owner::Work + driver-gate), Pickup/MapIconSystem (пикап и иконка
+    // в initialize), PlayerMoneySystem (выдача наличных), PlayerLocation/PlayerState
+    // (серверные позиция и стейт для /med), PlayerHealthSystem (лечение + увольнение
+    // по смерти), PlayerSkinSystem (форменный скин) и PlayerSessionSystem (кошелёк и
+    // пол аккаунта по сессии). Маршрута нет — только окно выезда в общем таймере.
+    m_systems.push_back(std::make_unique<MedicJobSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<JobDismissSystem>(core, serviceRegister));
     // JobWalletSystem (/jobwallet) — тоже после работ: кошельки в список кладут их
     // конструкторы. Напоминание о деньгах шлётся по сигналу загрузки кошелька, а не

@@ -298,7 +298,10 @@ void HaulerJobSystem::initialize(IComponentList * /*components*/)
         },
         0);
 
-    m_mapIconService.addGlobal(JOB_MAP_ICON, EMPLOY_PICKUP_POS, Colour::White(), MapIconStyle_Global);
+    // Стрим ровно по радару: дальше иконка только прижималась бы к его краю,
+    // указывая на то, чего в видимой области ещё нет.
+    m_mapIconService.addGlobal(JOB_MAP_ICON, EMPLOY_PICKUP_POS, Colour::White(), MapIconStyle_Global,
+                               MapIconService::RADAR_STREAM_DISTANCE);
 
     // Заспавнить pre-stock грузовики сразу на старте (площадки чисты); дальше их
     // поддерживает тик депо.
