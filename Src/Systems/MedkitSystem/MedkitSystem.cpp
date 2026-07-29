@@ -17,6 +17,20 @@ const Colour ERROR_COLOUR{255, 90, 90};
 // Допуск на «полное здоровье»: тот же масштаб, что EPS рассинхрона в
 // PlayerHealthService — float HP не всегда ровно 100.
 constexpr float FULL_HEALTH_EPS = 1.0f;
+
+// Справка витрины. Пункты «не сработает» перечислены в том же порядке, в каком
+// стоят отказы в healMe — так их проще держать в согласии.
+const char *const MEDKIT_SHOP_DESCRIPTION =
+    "Аптечка восстанавливает здоровье прямо на месте.\n\n"
+    "Как пользоваться: команда /healme.\n"
+    "Восстанавливает 50 HP за одну штуку (если до полного здоровья\n"
+    "не хватает меньше — добьёт до 100 и потратит всю).\n"
+    "С собой можно носить не больше 3 штук.\n\n"
+    "Когда НЕ сработает (аптечка при этом не тратится):\n"
+    "- пока действует штраф после смерти: лечиться нельзя ничем,\n"
+    "  сперва дождитесь снятия ограничения;\n"
+    "- при полном здоровье — лечить нечего;\n"
+    "- в момент собственной смерти лечение не применяется.";
 } // namespace
 
 MedkitSystem::MedkitSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -27,9 +41,17 @@ MedkitSystem::MedkitSystem(ICore &core, const ServiceRegister &serviceRegister)
     // FactionService). Имя — utf-8 (отображение/дев-меню конвертируют сами).
     m_inventory.registerItem(ITEM_MEDKIT, "Аптечка", MEDKIT_MAX);
 
+    static_assert(MEDKIT_MAX == 3, "справка в shopDescription называет размер стека — обнови текст");
+    static_assert(MEDKIT_HEAL == 50.0f, "справка в shopDescription называет объём лечения — обнови текст");
+
     serviceRegister.getService<PlayerCommandService>().add(
         "healme", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { healMe(player); }, {},
         "использовать аптечку и восстановить здоровье", PlayerCommandService::HelpCategory::Misc);
+}
+
+const char *MedkitSystem::shopDescription()
+{
+    return MEDKIT_SHOP_DESCRIPTION;
 }
 
 void MedkitSystem::healMe(IPlayer &player)

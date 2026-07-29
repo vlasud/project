@@ -6,7 +6,11 @@
 #include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/PickupService/PickupService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
+#include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/CameraService/CameraService.h"
+#include "Services/Core/CheckpointService/CheckpointService.h"
+#include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
+#include "Services/InventoryService/InventoryService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
@@ -61,11 +65,58 @@ class BusinessSystem : public BaseSystem
     void showPriceEdit(IPlayer &player, int businessId);
     void showDevRemove(IPlayer &player);
 
+    // Завести чекпоинты-прилавки по каталогам ВСЕХ зарегистрированных типов (по
+    // одному на интерьер, у которого замерен counter). Зовётся из initialize.
+    void registerCounterCheckpoints();
+    // Вошёл на прилавок: определяем бизнес по виртуальному миру игрока и открываем
+    // витрину его типа.
+    void onCounterEnter(IPlayer &player, BusinessService::Type type, std::size_t interiorIndex);
+
     // --- рантайм точки ---
     void spawnBusiness(const BusinessService::Business &business);
     void despawnBusiness(int businessId);
     void onEnterPickup(int businessId, IPlayer &player);
     void onExitPickup(int businessId, IPlayer &player);
+
+    // --- управление своим бизнесом (/business) ---
+    // Меню владельца. Бизнес определяется по аккаунту игрока (один на аккаунт).
+    void showManageMenu(IPlayer &player);
+    void showBusinessInfo(IPlayer &player, int businessId);    // 1: что это и как зарабатывать
+    void showIncomeHistory(IPlayer &player, int businessId);   // 2: выручка по дням за неделю
+    void showSellInput(IPlayer &player, int businessId);       // 5: кому продать
+    void showSellPriceInput(IPlayer &player, int businessId, int targetId,
+                            std::uint32_t targetSerial);       // 5: за сколько
+    void showTransferInput(IPlayer &player, int businessId);   // 6: кому передать бесплатно
+    void showAbandonConfirm(IPlayer &player, int businessId);  // 7: вернуть государству
+    // Предложение покупателю/получателю. price == 0 — безвозмездная передача.
+    void offerToTarget(IPlayer &seller, int businessId, int targetId, std::uint32_t targetSerial,
+                       std::int64_t price);
+    // Согласие принято: ПОЛНАЯ ре-валидация обеих сторон и сама сделка.
+    void completeHandover(IPlayer &target, int businessId, PlayerSessionService::AccountId sellerAccount,
+                          std::int64_t price);
+    // Общая проверка «кому можно отдать точку»: онлайн, не сам себе, рядом, без
+    // своего бизнеса. reason — что сказать инициатору при отказе.
+    bool handoverTargetValid(IPlayer &owner, int targetId, std::uint32_t targetSerial, std::string &reason) const;
+
+    // Дневная выручка в БД: строка на (бизнес, дата), правится ОТНОСИТЕЛЬНО.
+    void persistIncomeDay(int businessId, std::int64_t income);
+
+    // --- склад ---
+    void showInventory(IPlayer &player, int businessId);   // остатки «13/100»
+    void showOrderMenu(IPlayer &player, int businessId);   // выбрать к заказу / сделать заказ
+    void showOrderPicker(IPlayer &player, int businessId); // тот же список + колонка заказа
+    void showOrderAmountInput(IPlayer &player, int businessId, std::size_t goodIndex); // сколько заказать
+    void showOrderConfirm(IPlayer &player, int businessId);                            // что и почём
+    void placeOrder(IPlayer &player, int businessId);                                  // оплата и доставка
+    // Черновик заказа игрока: тип предмета -> сколько заказать. Живёт до отправки
+    // заказа либо до конца сессии — в БД ему делать нечего.
+    std::unordered_map<int, int> &orderDraft(int playerId);
+    void clearOrderDraft(int playerId);
+    // Остаток склада в БД: строка на (бизнес, товар), АБСОЛЮТНАЯ запись под ключом
+    // упорядочивания — у величины есть потолок, и относительная дельта при потере
+    // записи увела бы её за него.
+    void persistStock(int businessId, int itemType, int quantity);
+    void loadStockAsync();
 
     // --- интерфейс «Бизнес» ---
     void showBusinessMenu(IPlayer &player, int businessId);
@@ -124,11 +175,17 @@ class BusinessSystem : public BaseSystem
     MapIconService &m_mapIconService;
     PlayerDialogService &m_dialogService;
     PlayerLocationService &m_locationService;
-    CameraService &m_cameraService; // камера за спину после разворота на входе/выходе
+    CameraService &m_cameraService;         // камера за спину после разворота на входе/выходе
+    CheckpointService &m_checkpointService; // чекпоинты-прилавки внутри интерьеров
+    ScreenNoticeService &m_noticeService;   // попап с названием точки при входе
+    AudioService &m_audioService;           // звук входа
+    InventoryService &m_inventoryService;   // имена товаров в инвентаризации и заказе
     PlayerStateService &m_stateService;
     TextLabelService &m_labelService;
     PlayerMoneyService &m_moneyService;
     PlayerSessionService &m_sessionService;
 
-    std::unordered_map<int, Runtime> m_runtime; // businessId -> хэндлы точек
+    std::unordered_map<int, Runtime> m_runtime;
+    // playerId -> (тип предмета -> заказанное количество). Черновик заказа.
+    std::unordered_map<int, std::unordered_map<int, int>> m_orderDrafts; // businessId -> хэндлы точек
 };

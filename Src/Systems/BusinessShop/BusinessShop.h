@@ -1,44 +1,44 @@
 #pragma once
 
 #include "Services/BusinessService/BusinessService.h"
+#include "Services/Core/AudioService/AudioService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
+#include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
 #include "Services/InventoryService/InventoryService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/ServiceRegister.h"
 #include "player.hpp"
-#include <cstdint>
+#include <cstddef>
 #include <string>
-#include <vector>
 
 // Витрина бизнеса — торговля предметами за наличные с выручкой в копилку точки.
 // НЕ система и НЕ сервис: общий кусок ПОВЕДЕНИЯ, который берут себе типы бизнеса
 // (24/7, АЗС и далее). Правила покупки у них совпадают до буквы, и вторая копия
 // этого кода разъехалась бы на первой же правке — а это чужие деньги и предметы.
 //
-// Тип бизнеса держит витрину членом и отдаёт её show() в свой visitorMenu; сам
-// ассортимент и заголовок задаются при создании — они у типов РАЗНЫЕ, общая
-// только механика.
+// Ассортимент витрина НЕ хранит: он лежит в реестре типа (BusinessService::goods),
+// потому что нужен ещё и меню владельца — инвентаризации и заказу. Две копии списка
+// разъехались бы по ценам и потолкам склада.
 //
-// Магазин своих вещей не заводит: он торгует уже существующими типами предметов
-// из InventoryService (см. Docs/Inventory.md). Цена — единственное, что добавляет
-// сама витрина.
+// Товар продаётся СО СКЛАДА точки: каждая продажа списывает одну единицу, пустой
+// склад продавать отказывается. Пополняет склад владелец через «Заказать товар».
 class BusinessShop
 {
   public:
-    // Товар на полке: тип предмета из InventoryService + цена.
-    struct Good
-    {
-        int itemType;
-        std::int64_t price;
-    };
-
-    BusinessShop(ICore &core, const ServiceRegister &serviceRegister, std::string title, std::vector<Good> goods);
+    BusinessShop(ICore &core, const ServiceRegister &serviceRegister, std::string title, BusinessService::Type type);
 
     // Показать витрину посетителю точки. Зовётся из visitorMenu типа.
     void show(IPlayer &player, int businessId);
 
   private:
+    // Карточка товара: «Купить» / «Информация». Отдельный шаг, чтобы клик по строке
+    // ассортимента не списывал деньги сразу.
+    void showGood(IPlayer &player, int businessId, std::size_t goodIndex);
+    // Справка по товару: механика и подводные камни, назад — в карточку.
+    void showInfo(IPlayer &player, int businessId, std::size_t goodIndex);
+    // Покупка. По успеху ВОЗВРАЩАЕТ в карточку товара, а не закрывает диалог:
+    // предметы стековые, и брать их пачкой — обычный сценарий.
     void buy(IPlayer &player, int businessId, std::size_t goodIndex);
 
     ICore &m_core;
@@ -46,8 +46,9 @@ class BusinessShop
     InventoryService &m_inventory;
     PlayerMoneyService &m_moneyService;
     PlayerDialogService &m_dialogService;
-    PlayerSessionService &m_sessionService; // ключ аккаунта покупателя — для addIncomeFrom
+    ScreenNoticeService &m_noticeService;   // попап с названием купленного
+    AudioService &m_audioService;           // звук покупки
 
     std::string m_title;
-    std::vector<Good> m_goods;
+    BusinessService::Type m_type; // чей ассортимент показываем
 };

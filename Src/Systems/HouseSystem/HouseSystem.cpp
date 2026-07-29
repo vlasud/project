@@ -67,7 +67,20 @@ constexpr float HOUSE_ICON_STREAM_DISTANCE = 150.0f;
 constexpr std::chrono::milliseconds EXIT_GRACE{1500};
 // Смещение пикапа выхода от точки спавна внутри — чтобы появившийся игрок не стоял
 // прямо на нём (основной гард, грейс — вторичный).
-constexpr float EXIT_PICKUP_OFFSET = 2.0f;
+// Сколько метров ЗА СПИНОЙ вошедшего стоит пикап выхода из интерьера. Выходы
+// СЧИТАЮТСЯ, а не замеряются (политика проекта): статичны только точка входа
+// внутрь и угол появления, всё остальное выводится из них.
+//
+// Почему «за спиной»: игрок входит через дверь, значит дверь остаётся позади него.
+// Замер владельца по «24/7 1» это подтвердил — там пикап выхода лежал на 3.48 м
+// строго против угла появления, отклонение по второй оси 6 см.
+//
+// Почему 2 м, а не замеренные 3.48: константа одна на ВСЕ интерьеры, включая
+// тесные (мотельная комната). Короткая дистанция ставит пикап НА ПУТИ к двери и
+// работает при любой её удалённости; длинная в маленьком интерьере уехала бы за
+// стену. 2 м также совпадают с выходом наружу и заведомо больше радиуса
+// срабатывания пикапа — вошедший на нём не стоит.
+constexpr float INSIDE_EXIT_DISTANCE = 2.0f;
 
 // Стабильный ключ категории в файле аукционов. Строка, а не индекс регистрации:
 // порядок систем правится, а ставки обязаны оставаться на своих лотах.
@@ -213,9 +226,11 @@ void HouseSystem::spawnHouse(const HouseService::House &house)
     runtime.mapIcon =
         m_mapIconService.addGlobal(iconType, house.entrance, Colour::White(), MapIconStyle_Global, HOUSE_ICON_STREAM_DISTANCE);
 
-    // Пикап выхода — в уникальном мире дома, со смещением от точки спавна внутри.
-    Vector3 exitPickupPos = entry.insideSpawn;
-    exitPickupPos.x += EXIT_PICKUP_OFFSET;
+    // Пикап выхода — в уникальном мире дома, ЗА СПИНОЙ вошедшего: тот же приём, что
+    // и у выхода наружу (там точка за спиной создателя). Угол округляем — пикап
+    // обязан лежать на оси, иначе уедет в стену по диагонали.
+    const Vector3 exitPickupPos =
+        Geometry::backOf(entry.insideSpawn, Geometry::snapToQuarterTurn(entry.insideAngle), INSIDE_EXIT_DISTANCE);
     runtime.exitPickup =
         m_pickupService.add(EXIT_PICKUP_MODEL, PICKUP_TYPE, exitPickupPos,
                             [this, houseId = house.id](IPlayer &player) { onExitPickup(houseId, player); },

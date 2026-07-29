@@ -59,12 +59,27 @@ class BusinessService final : public IService
         std::string name; // utf-8, отображается в LIST
         int interiorId;
         Vector3 insideSpawn; // куда попадает игрок, войдя внутрь
-        float insideAngle;
-        // Где внутри стоит пикап ВЫХОДА. Замеряется в игре вместе с insideSpawn:
-        // у каждого интерьера дверь своя, и вычислить её из точки спавна нельзя.
-        // НЕ ЗАДАН (нулевой вектор — интерьерных координат (0,0,0) не бывает) —
-        // привод ставит пикап смещением от insideSpawn, как делал раньше.
-        Vector3 exitPickup{};
+        float insideAngle;   // лицом куда он появляется (yaw, градусы)
+        // ПРИЛАВОК — точка, встав на которую посетитель получает витрину. Замер, как
+        // и вход: у каждого интерьера касса своя. НЕ ЗАДАН (нулевой вектор —
+        // интерьерных координат (0,0,0) не бывает) — чекпоинта у точки нет, витрина
+        // открывается только через меню бизнеса.
+        //
+        // Точки пикапа ВЫХОДА здесь нет намеренно: выходы из интерьеров считаются,
+        // а не замеряются (см. Docs/Business.md). Статичны вход, угол и прилавок.
+        Vector3 counter{};
+    };
+
+    // Товар на полке ТИПА: что продаём, почём и сколько влезает на склад точки.
+    // Живёт в реестре типа, а не в витрине: список нужен двоим — витрине (продажа) и
+    // меню владельца (инвентаризация, заказ), и вторая копия разъехалась бы.
+    struct GoodDef
+    {
+        int itemType;
+        std::int64_t price;
+        int stockCap;            // максимум этого товара на складе одной точки
+        std::string description; // справка для витрины (utf-8)
+        std::string popupName;   // короткая английская метка для попапа
     };
 
     // Меню бизнеса для ПОСЕТИТЕЛЯ: геймплей типа (у 24/7 — покупка товаров).
@@ -82,12 +97,22 @@ class BusinessService final : public IService
         int virtualWorld = 0;
         std::string owner;      // ключ аккаунта (std::to_string(accountId)); "" — ничейный.
                                 // Зеркало БД (business_owner), а НЕ json.
-        std::int64_t price = 0;   // стартовая планка аукциона (дев задаёт при создании)
+        std::int64_t price = 0;   // госцена точки (дев задаёт при создании)
         std::int64_t balance = 0; // накопленный доход, ждёт снятия владельцем
+        // СКЛАД точки: тип предмета -> сколько лежит. Продажа списывает отсюда,
+        // заказ пополняет. Зеркало БД (business_stock), в json НЕ пишется — это
+        // динамика, а json дев-контент.
+        std::unordered_map<int, int> stock;
     };
 
     // --- реестр типов (из конструкторов систем-владельцев типов) ---
-    void registerType(Type type, std::string name, std::vector<CatalogEntry> catalog, VisitorMenu visitorMenu);
+    // popupName — КОРОТКАЯ метка для экранного попапа («24/7», «Gas Station»).
+    // Отдельно от name: попапы проекта всегда на английском, а name русское и живёт
+    // в диалогах и дев-меню.
+    void registerType(Type type, std::string name, std::string popupName, std::vector<CatalogEntry> catalog,
+                      std::vector<GoodDef> goods, VisitorMenu visitorMenu);
+    const std::string &typePopupName(Type type) const;
+    const std::vector<GoodDef> &goods(Type type) const;
     bool typeRegistered(Type type) const;
     const std::string &typeName(Type type) const;
     const std::vector<CatalogEntry> &catalog(Type type) const;
@@ -142,12 +167,36 @@ class BusinessService final : public IService
                                                     const std::string &newKey)>;
     void subscribeOwnerChanged(OwnerChangedObserver observer);
     // Начислить доход в копилку бизнеса (income > 0). false — бизнеса нет.
+    //
+    // Покупатель роли НЕ играет, в том числе если он же и владелец. Раньше выручка с
+    // самого владельца отбрасывалась: без склада он выкупал у себя товар, забирал те
+    // же деньги из копилки и получал вещь даром. Теперь товар кончается и его надо
+    // закупать (ORDER_PRICE_PERCENT от цены продажи), поэтому каждая покупка у себя
+    // съедает единицу и стоит владельцу закупочной цены — она убыточна сама по себе,
+    // и особый случай в коде больше не нужен.
     bool addIncome(int id, std::int64_t income);
-    // То же, но от КОНКРЕТНОГО покупателя. Выручка с самого владельца в копилку НЕ
-    // идёт: иначе он выкупает у себя товар и тут же забирает те же деньги обратно —
-    // бесконечные бесплатные аптечки/инструменты/топливо и полный обход денежного
-    // стока. Деньги с покупателя списывает вызывающий в любом случае.
-    bool addIncomeFrom(int id, std::int64_t income, const std::string &buyerKey);
+
+    // Доход ЗАЧИСЛЕН в копилку: (бизнес, сумма). Привод пишет из этого историю
+    // выручки по дням в БД — сам сервис в БД не ходит (как со сменой владельца).
+    using IncomeObserver = std::function<void(int businessId, std::int64_t income)>;
+    void subscribeIncome(IncomeObserver observer);
+
+    // --- склад точки ---
+    int stockOf(int businessId, int itemType) const;
+    // Сколько ЕЩЁ влезет этого товара (потолок минус остаток). 0 — склад полон либо
+    // товар не из ассортимента этого типа.
+    int stockRoom(int businessId, int itemType) const;
+    // Списать со склада при продаже. false — на складе столько нет (продажа не идёт).
+    bool consumeStock(int businessId, int itemType, int count);
+    // Пополнить (доставка заказа). Клампится потолком товара; возвращает сколько
+    // реально легло.
+    int addStock(int businessId, int itemType, int count);
+    // Загрузка зеркала из БД — БЕЗ нотификации (иначе write-through обратно в БД).
+    void loadStock(int businessId, int itemType, int quantity);
+
+    // Остаток изменился: (бизнес, товар, новый остаток). Привод пишет в БД.
+    using StockObserver = std::function<void(int businessId, int itemType, int quantity)>;
+    void subscribeStockChanged(StockObserver observer);
     // Забрать всю копилку: возвращает снятую сумму (0 — пусто/нет бизнеса).
     std::int64_t withdrawBalance(int id);
 
@@ -171,8 +220,10 @@ class BusinessService final : public IService
     struct TypeDef
     {
         bool registered = false;
-        std::string name;
+        std::string name;      // русское, для диалогов и дев-меню
+        std::string popupName; // короткое английское, для экранных попапов
         std::vector<CatalogEntry> catalog;
+        std::vector<GoodDef> goods;
         VisitorMenu visitorMenu;
     };
 
@@ -185,5 +236,9 @@ class BusinessService final : public IService
     bool m_ownershipLoaded = false; // зеркало business_owner легло в память
     TypeDef m_types[static_cast<std::size_t>(Type::Count)];
     std::vector<ChangedObserver> m_changedObservers;
+    std::vector<IncomeObserver> m_incomeObservers;
+    std::vector<StockObserver> m_stockObservers;
+    // Потолок товара у типа этой точки; -1 — товара нет в ассортименте.
+    int stockCapOf(int businessId, int itemType) const;
     std::vector<OwnerChangedObserver> m_ownerChangedObservers;
 };

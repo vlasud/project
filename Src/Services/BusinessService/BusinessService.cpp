@@ -30,10 +30,11 @@ Vector3 BusinessService::backOf(const Vector3 &position, float angleDegrees, flo
 
 // ------------------------------------------------------------------ реестр типов
 
-void BusinessService::registerType(Type type, std::string name, std::vector<CatalogEntry> catalog,
+void BusinessService::registerType(Type type, std::string name, std::string popupName,
+                                   std::vector<CatalogEntry> catalog, std::vector<GoodDef> goods,
                                    VisitorMenu visitorMenu)
 {
-    if (!validType(type) || catalog.empty() || !visitorMenu)
+    if (!validType(type) || catalog.empty() || !visitorMenu || popupName.empty())
     {
         LogManager::log(Error, "BusinessService: тип бизнеса '" + name + "' зарегистрирован неполно, пропущен");
         return;
@@ -41,8 +42,142 @@ void BusinessService::registerType(Type type, std::string name, std::vector<Cata
     TypeDef &def = m_types[static_cast<std::size_t>(type)];
     def.registered = true;
     def.name = std::move(name);
+    def.popupName = std::move(popupName);
     def.catalog = std::move(catalog);
+    def.goods = std::move(goods);
     def.visitorMenu = std::move(visitorMenu);
+}
+
+const std::vector<BusinessService::GoodDef> &BusinessService::goods(Type type) const
+{
+    static const std::vector<GoodDef> EMPTY;
+    return typeRegistered(type) ? m_types[static_cast<std::size_t>(type)].goods : EMPTY;
+}
+
+// ------------------------------------------------------------------ склад точки
+
+int BusinessService::stockCapOf(int businessId, int itemType) const
+{
+    const Business *business = getBusiness(businessId);
+    if (!business)
+    {
+        return -1;
+    }
+    for (const GoodDef &good : goods(business->type))
+    {
+        if (good.itemType == itemType)
+        {
+            return good.stockCap;
+        }
+    }
+    return -1; // товар не из ассортимента этого типа
+}
+
+int BusinessService::stockOf(int businessId, int itemType) const
+{
+    const Business *business = getBusiness(businessId);
+    if (!business)
+    {
+        return 0;
+    }
+    const auto it = business->stock.find(itemType);
+    return it == business->stock.end() ? 0 : it->second;
+}
+
+int BusinessService::stockRoom(int businessId, int itemType) const
+{
+    const int cap = stockCapOf(businessId, itemType);
+    if (cap < 0)
+    {
+        return 0;
+    }
+    return std::max(0, cap - stockOf(businessId, itemType));
+}
+
+bool BusinessService::consumeStock(int businessId, int itemType, int count)
+{
+    if (count <= 0)
+    {
+        return false;
+    }
+    const auto it = m_businesses.find(businessId);
+    if (it == m_businesses.end())
+    {
+        return false;
+    }
+    const auto slot = it->second.stock.find(itemType);
+    if (slot == it->second.stock.end() || slot->second < count)
+    {
+        return false; // столько на складе нет — продажа не идёт
+    }
+    slot->second -= count;
+    const int left = slot->second;
+    for (const StockObserver &observer : m_stockObservers)
+    {
+        observer(businessId, itemType, left);
+    }
+    return true;
+}
+
+int BusinessService::addStock(int businessId, int itemType, int count)
+{
+    if (count <= 0)
+    {
+        return 0;
+    }
+    const auto it = m_businesses.find(businessId);
+    if (it == m_businesses.end())
+    {
+        return 0;
+    }
+    // Потолок держим ЗДЕСЬ, а не у вызывающего: склад — состояние сервиса, и
+    // переполнить его мимо проверки не должен ни один путь.
+    const int cap = stockCapOf(businessId, itemType);
+    if (cap < 0)
+    {
+        return 0;
+    }
+    int &quantity = it->second.stock[itemType];
+    const int added = std::min(count, std::max(0, cap - quantity));
+    if (added <= 0)
+    {
+        return 0;
+    }
+    quantity += added;
+    const int now = quantity;
+    for (const StockObserver &observer : m_stockObservers)
+    {
+        observer(businessId, itemType, now);
+    }
+    return added;
+}
+
+void BusinessService::loadStock(int businessId, int itemType, int quantity)
+{
+    const auto it = m_businesses.find(businessId);
+    if (it == m_businesses.end() || quantity <= 0)
+    {
+        return; // осиротевшая строка либо пустой остаток — хранить нечего
+    }
+    const int cap = stockCapOf(businessId, itemType);
+    if (cap < 0)
+    {
+        return; // товар выпал из ассортимента типа — остаток больше не наш
+    }
+    it->second.stock[itemType] = std::min(quantity, cap);
+}
+
+void BusinessService::subscribeStockChanged(StockObserver observer)
+{
+    if (observer)
+    {
+        m_stockObservers.push_back(std::move(observer));
+    }
+}
+
+const std::string &BusinessService::typePopupName(Type type) const
+{
+    return typeRegistered(type) ? m_types[static_cast<std::size_t>(type)].popupName : EMPTY_NAME;
 }
 
 bool BusinessService::typeRegistered(Type type) const
@@ -240,19 +375,21 @@ bool BusinessService::addIncome(int id, std::int64_t income)
     }
     it->second.balance += income;
     notifyChanged();
+    // История выручки по дням — забота привода (он ходит в БД). Зовём ПОСЛЕ
+    // зачисления: наблюдатель видит уже применённое состояние.
+    for (const IncomeObserver &observer : m_incomeObservers)
+    {
+        observer(id, income);
+    }
     return true;
 }
 
-bool BusinessService::addIncomeFrom(int id, std::int64_t income, const std::string &buyerKey)
+void BusinessService::subscribeIncome(IncomeObserver observer)
 {
-    const Business *business = getBusiness(id);
-    if (business && !buyerKey.empty() && business->owner == buyerKey)
+    if (observer)
     {
-        // Покупает сам владелец: деньги с него уже сняты, но в копилку не кладём —
-        // иначе он вернёт их себе через «Управление бизнесом» и получит товар даром.
-        return false;
+        m_incomeObservers.push_back(std::move(observer));
     }
-    return addIncome(id, income);
 }
 
 std::int64_t BusinessService::withdrawBalance(int id)

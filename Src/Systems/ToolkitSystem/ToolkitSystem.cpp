@@ -17,6 +17,20 @@ const Colour ERROR_COLOUR{255, 90, 90};
 // у длинных машин оригин в середине, а чинят от капота.
 constexpr float REPAIR_RADIUS = 5.0f;
 
+// Справка витрины. Пункты «не сработает» — те же проверки, что в repair/finishRepair.
+const char *const TOOLKIT_SHOP_DESCRIPTION =
+    "Набор инструментов чинит машину прямо на дороге.\n\n"
+    "Как пользоваться: встаньте рядом с машиной и введите /repair.\n"
+    "Чинить нужно пешком, машина должна быть не дальше 5 метров.\n"
+    "Ремонт занимает 5 секунд, всё это время идёт анимация.\n"
+    "Машина чинится ПОЛНОСТЬЮ, тратится один набор.\n"
+    "С собой можно носить не больше 3 наборов.\n\n"
+    "Подводные камни:\n"
+    "- целую машину чинить нельзя — набор не потратится впустую;\n"
+    "- ремонт НЕ замораживает вас: если уйти или сесть за руль,\n"
+    "  до того как пройдут 5 секунд, ремонт сорвётся;\n"
+    "- набор списывается по завершении, а не в начале.";
+
 // «Смотрит на машину»: половина угла конуса. cos(45°) — машина должна быть в
 // передней полусфере игрока, а не сбоку и не за спиной.
 constexpr float LOOK_MIN_COS = 0.7071f;
@@ -49,6 +63,8 @@ ToolkitSystem::ToolkitSystem(ICore &core, const ServiceRegister &serviceRegister
     // Регистрация типа предмета в базовой системе вещей — как у аптечки. Выдача
     // дев-меню (/idev) подхватит новый тип сама, отдельной команды не нужно.
     m_inventory.registerItem(ITEM_TOOLKIT, "Инструменты", TOOLKIT_MAX);
+
+    static_assert(TOOLKIT_MAX == 3, "справка в shopDescription называет размер стека — обнови текст");
 
     // Либа анимации грузится заранее: первая починка иначе прошла бы без анимации.
     m_sessionService.subscribeStart(
@@ -136,6 +152,11 @@ int ToolkitSystem::repairerOf(int vehicleId, int exceptPlayerId) const
         }
     }
     return -1;
+}
+
+const char *ToolkitSystem::shopDescription()
+{
+    return TOOLKIT_SHOP_DESCRIPTION;
 }
 
 void ToolkitSystem::repair(IPlayer &player)

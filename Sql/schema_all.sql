@@ -598,6 +598,36 @@ CREATE TABLE IF NOT EXISTS `business_owner` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 
+-- Выручка бизнеса ПО ДНЯМ — для окна «Прибыль» в /business. Копилка (balance)
+-- отвечает на «сколько лежит сейчас», а владельцу нужно ещё «сколько принесла точка
+-- за неделю»; из копилки это не восстановить — её обнуляет каждое снятие.
+--
+-- amount правится ТОЛЬКО относительно (amount = amount + ?): порядок задач в пуле
+-- БД не определён, а сложение коммутативно, поэтому ключ упорядочивания не нужен.
+-- Дату ставит БД (CURDATE), чтобы запись и выборка не разъезжались по часовым поясам.
+CREATE TABLE IF NOT EXISTS `business_income` (
+    `business_id` INT    NOT NULL,
+    `day`         DATE   NOT NULL,
+    `amount`      BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`business_id`, `day`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
+-- СКЛАД точки: сколько единиц товара лежит и ждёт покупателя. Продажа списывает
+-- единицу, заказ владельца («Заказать товар» в /business) пополняет. Пустой склад
+-- продавать отказывается.
+--
+-- Запись АБСОЛЮТНАЯ и под ключом упорядочивания (business_stock:<id>:<item>).
+-- Относительная дельта тут не годится: у остатка есть ПОТОЛОК, клампится он в
+-- памяти, и потерянная дельта увела бы БД за границу.
+CREATE TABLE IF NOT EXISTS `business_stock` (
+    `business_id` INT NOT NULL,
+    `item_type`   INT NOT NULL,
+    `quantity`    INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`business_id`, `item_type`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
 -- ============ auction.sql ============
 
 -- Аукционы (AuctionService). Применить вручную к схеме геймода.

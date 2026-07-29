@@ -30,6 +30,10 @@ class ToolkitSystem : public BaseSystem
     static constexpr int ITEM_TOOLKIT = 2; // тип предмета «Инструменты» в реестре вещей
     static constexpr int TOOLKIT_MAX = 3;  // максимум в стеке
 
+    // Справка для витрин магазинов (BusinessShop::Good::description). Живёт ЗДЕСЬ,
+    // рядом с механикой ремонта — иначе текст разъедется с проверками.
+    static const char *shopDescription();
+
     ToolkitSystem(ICore &core, const ServiceRegister &serviceRegister);
 
   private:

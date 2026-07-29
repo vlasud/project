@@ -44,6 +44,5 @@ class GasStationSystem : public BaseSystem
     PlayerStateService &m_stateService;
     PlayerMoneyService &m_moneyService;
     VehicleService &m_vehicleService;
-    PlayerSessionService &m_sessionService; // ключ аккаунта заправляющегося
     BusinessShop m_shop;
 };

@@ -5,37 +5,66 @@
 #include "Utils/MoneyFormat/MoneyFormat.h"
 #include <fmt/format.h>
 #include <utility>
+#include <vector>
 
 namespace
 {
 const Colour INFO_COLOUR{120, 220, 255};
 const Colour ERROR_COLOUR{255, 90, 90};
+
+// Попап покупки: короткий, только название товара — подробности уже в чате.
+constexpr Milliseconds PURCHASE_POPUP_TIME{2000};
+// Звук кассы SA: подтверждение оплаты.
+constexpr std::uint32_t PURCHASE_SOUND = 1054;
+
+// Порог «мало» — доля потолка склада. Посетителю точные остатки не показываем:
+// это внутренняя кухня владельца, а покупателю важно лишь «брать сейчас или искать
+// другую точку». Владелец видит точные числа в «Инвентаризации».
+constexpr int LOW_STOCK_PERCENT = 25;
+
+// Как выглядит наличие товара для ПОСЕТИТЕЛЯ.
+std::string availabilityText(int stock, int cap)
+{
+    if (stock <= 0)
+    {
+        return "Нет в наличии";
+    }
+    // cap <= 0 быть не должно (потолок задаёт ассортимент типа), но делить на него
+    // вслепую нельзя — иначе битая регистрация уронит витрину.
+    if (cap > 0 && stock * 100 <= cap * LOW_STOCK_PERCENT)
+    {
+        return "Мало";
+    }
+    return "Много";
+}
 } // namespace
 
 BusinessShop::BusinessShop(ICore &core, const ServiceRegister &serviceRegister, std::string title,
-                           std::vector<Good> goods)
+                           BusinessService::Type type)
     : m_core(core), m_businessService(serviceRegister.getService<BusinessService>()),
       m_inventory(serviceRegister.getService<InventoryService>()),
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
-      m_sessionService(serviceRegister.getService<PlayerSessionService>()), m_title(std::move(title)),
-      m_goods(std::move(goods))
+      m_noticeService(serviceRegister.getService<ScreenNoticeService>()),
+      m_audioService(serviceRegister.getService<AudioService>()), m_title(std::move(title)), m_type(type)
 {
 }
 
 void BusinessShop::show(IPlayer &player, int businessId)
 {
     const int playerId = player.getID();
+    const std::vector<BusinessService::GoodDef> &goods = m_businessService.goods(m_type);
 
-    std::string body = "Товар\tЦена\tУ вас\n";
-    for (const Good &good : m_goods)
+    std::string body = "Товар\tЦена\tНаличие\tУ вас\n";
+    for (const BusinessService::GoodDef &good : goods)
     {
-        body += fmt::format("{}\t{}\t{}\n", m_inventory.itemName(good.itemType), Money::text(good.price),
+        body += fmt::format("{}\t{}\t{}\t{}\n", m_inventory.itemName(good.itemType), Money::text(good.price),
+                            availabilityText(m_businessService.stockOf(businessId, good.itemType), good.stockCap),
                             m_inventory.count(playerId, good.itemType));
     }
     body.pop_back();
 
-    m_dialogService.show(player, makeDialog(DialogStyle_TABLIST_HEADERS, m_title, body, "Купить", "Закрыть"),
+    m_dialogService.show(player, makeDialog(DialogStyle_TABLIST_HEADERS, m_title, body, "Выбрать", "Закрыть"),
                          [this, playerId, businessId](DialogResponse response, int listItem, StringView)
                          {
                              IPlayer *buyer = m_core.getPlayers().get(playerId);
@@ -43,49 +72,150 @@ void BusinessShop::show(IPlayer &player, int businessId)
                              {
                                  return;
                              }
-                             if (listItem < 0 || listItem >= static_cast<int>(m_goods.size()))
+                             if (listItem < 0 ||
+                                 listItem >= static_cast<int>(m_businessService.goods(m_type).size()))
                              {
                                  return; // индекс от клиента — проверяем по живому ассортименту
                              }
-                             buy(*buyer, businessId, static_cast<std::size_t>(listItem));
+                             showGood(*buyer, businessId, static_cast<std::size_t>(listItem));
+                         });
+}
+
+void BusinessShop::showGood(IPlayer &player, int businessId, std::size_t goodIndex)
+{
+    const std::vector<BusinessService::GoodDef> &goods = m_businessService.goods(m_type);
+    if (goodIndex >= goods.size())
+    {
+        return;
+    }
+    const int playerId = player.getID();
+    const BusinessService::GoodDef &good = goods[goodIndex];
+    const int stock = m_businessService.stockOf(businessId, good.itemType);
+
+    // В LIST кликабельна КАЖДАЯ строка, поэтому справочных строк в теле нет: цена и
+    // наличие вписаны в сами пункты, название товара — в заголовок.
+    // ПОРЯДОК СТРОК = порядок case-веток обработчика.
+    const std::string body =
+        fmt::format("Купить — {}\nИнформация\n\nВ продаже: {}\nУ вас сейчас: {}", Money::text(good.price),
+                    availabilityText(stock, good.stockCap), m_inventory.count(playerId, good.itemType));
+
+    m_dialogService.show(
+        // Без u(): makeDialog сам прогоняет все поля через utf8Tocp1251, повторная
+        // конвертация дала бы мусор.
+        player, makeDialog(DialogStyle_LIST, m_inventory.itemName(good.itemType), body, "Выбрать", "Назад"),
+        [this, playerId, businessId, goodIndex](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *buyer = m_core.getPlayers().get(playerId);
+            if (!buyer)
+            {
+                return;
+            }
+            if (response != DialogResponse_Left)
+            {
+                show(*buyer, businessId); // «Назад» — к ассортименту
+                return;
+            }
+            switch (listItem)
+            {
+            case 0:
+                buy(*buyer, businessId, goodIndex);
+                break;
+            case 1:
+                showInfo(*buyer, businessId, goodIndex);
+                break;
+            default:
+                break; // справочные строки и пустая — без действия
+            }
+        });
+}
+
+void BusinessShop::showInfo(IPlayer &player, int businessId, std::size_t goodIndex)
+{
+    const std::vector<BusinessService::GoodDef> &goods = m_businessService.goods(m_type);
+    if (goodIndex >= goods.size())
+    {
+        return;
+    }
+    const int playerId = player.getID();
+    const BusinessService::GoodDef &good = goods[goodIndex];
+
+    m_dialogService.show(player,
+                         makeDialog(DialogStyle_MSGBOX, m_inventory.itemName(good.itemType), good.description,
+                                    "Назад", ""),
+                         [this, playerId, businessId, goodIndex](DialogResponse, int, StringView)
+                         {
+                             IPlayer *visitor = m_core.getPlayers().get(playerId);
+                             if (visitor)
+                             {
+                                 showGood(*visitor, businessId, goodIndex);
+                             }
                          });
 }
 
 void BusinessShop::buy(IPlayer &player, int businessId, std::size_t goodIndex)
 {
+    const std::vector<BusinessService::GoodDef> &goods = m_businessService.goods(m_type);
+    if (goodIndex >= goods.size())
+    {
+        return;
+    }
     const int playerId = player.getID();
-    const Good &good = m_goods[goodIndex];
+    const BusinessService::GoodDef &good = goods[goodIndex];
 
+    // Склад пуст — отказ ДО денег и ДО стека: продавать нечего.
+    if (m_businessService.stockOf(businessId, good.itemType) <= 0)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u(fmt::format("{} закончились — товар не завезли",
+                                                             m_inventory.itemName(good.itemType))));
+        showGood(player, businessId, goodIndex);
+        return;
+    }
     // Стек полон — отказ ДО списания денег: иначе игрок платил бы за то, что не
     // влезет (add клампится к maxStack и вернул бы 0).
     if (m_inventory.count(playerId, good.itemType) >= m_inventory.maxStack(good.itemType))
     {
         player.sendClientMessage(ERROR_COLOUR,
                                  u(fmt::format("Больше {} у вас не поместится", m_inventory.itemName(good.itemType))));
+        showGood(player, businessId, goodIndex); // карточка остаётся открытой и на отказе
         return;
     }
     // Баланс — серверный; take сам отказывает, если денег не стало.
     if (!m_moneyService.take(player, static_cast<unsigned long long>(good.price)))
     {
         player.sendClientMessage(ERROR_COLOUR, u(fmt::format("Не хватает денег: нужно {}", Money::text(good.price))));
+        showGood(player, businessId, goodIndex);
+        return;
+    }
+    // Склад списываем ПОСЛЕ денег, но ДО выдачи предмета: если единицу увели в
+    // гонке, деньги немедленно назад и предмет не выдаём.
+    if (!m_businessService.consumeStock(businessId, good.itemType, 1))
+    {
+        m_moneyService.giveMoney(player, static_cast<unsigned long long>(good.price));
+        player.sendClientMessage(ERROR_COLOUR, u("Последнюю единицу только что забрали"));
+        showGood(player, businessId, goodIndex);
         return;
     }
     if (m_inventory.add(playerId, good.itemType, 1) <= 0)
     {
-        // Гонка (стек заполнился между проверкой и выдачей) — деньги немедленно назад.
+        // Гонка (стек заполнился между проверкой и выдачей) — деньги и товар назад.
         m_moneyService.giveMoney(player, static_cast<unsigned long long>(good.price));
+        m_businessService.addStock(businessId, good.itemType, 1);
         return;
     }
 
     // Выручка — в копилку ЭТОГО бизнеса: владелец заберёт её через «Управление».
     // Бизнес мог быть снесён, пока висел диалог — тогда доход просто некуда класть.
-    // Покупка у самого себя копилку не пополняет (см. addIncomeFrom).
-    const PlayerSessionService::Session *session = m_sessionService.get(playerId);
-    m_businessService.addIncomeFrom(businessId, good.price,
-                                    session ? std::to_string(session->accountId) : std::string());
+    m_businessService.addIncome(businessId, good.price);
+
+    // Попап (английский, как все экранные попапы проекта) + звук кассы: покупка
+    // подтверждается без чтения чата, что важно при покупке пачкой.
+    m_noticeService.show(player, good.popupName, PURCHASE_POPUP_TIME, INFO_COLOUR);
+    m_audioService.playSound(player, PURCHASE_SOUND);
 
     player.sendClientMessage(INFO_COLOUR,
                              u(fmt::format("Куплено: {} за {}. Теперь у вас {}", m_inventory.itemName(good.itemType),
                                            Money::text(good.price), m_inventory.count(playerId, good.itemType))));
-    show(player, businessId); // список заново — с обновлёнными остатками
+    // ВОЗВРАЩАЕМ В КАРТОЧКУ, а не в список и не в закрытый диалог: предметы стековые,
+    // и брать их пачкой — обычный сценарий, кнопка «Купить» остаётся под пальцем.
+    showGood(player, businessId, goodIndex);
 }

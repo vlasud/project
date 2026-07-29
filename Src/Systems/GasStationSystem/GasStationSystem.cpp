@@ -41,12 +41,14 @@ std::vector<BusinessService::CatalogEntry> stationCatalog()
     };
 }
 
-// Ассортимент лавки при заправке — тот же, что в 24/7 (см. Docs/Inventory.md).
-std::vector<BusinessShop::Good> stationGoods()
+// Ассортимент лавки при заправке. ИНСТРУМЕНТЫ — только здесь: в 24/7 их больше нет,
+// ремонт машины покупают там, где машину и обслуживают (см. Docs/GasStation.md).
+// Третье поле — потолок склада точки (см. Shop247System).
+std::vector<BusinessService::GoodDef> stationGoods()
 {
     return {
-        {MedkitSystem::ITEM_MEDKIT, 250},
-        {ToolkitSystem::ITEM_TOOLKIT, 400},
+        {MedkitSystem::ITEM_MEDKIT, 250, 100, MedkitSystem::shopDescription(), "medkit"},
+        {ToolkitSystem::ITEM_TOOLKIT, 400, 100, ToolkitSystem::shopDescription(), "toolkit"},
     };
 }
 
@@ -64,10 +66,10 @@ GasStationSystem::GasStationSystem(ICore &core, const ServiceRegister &serviceRe
       m_stateService(serviceRegister.getService<PlayerStateService>()),
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>()),
-      m_sessionService(serviceRegister.getService<PlayerSessionService>()),
-      m_shop(core, serviceRegister, "Лавка при АЗС", stationGoods())
+      m_shop(core, serviceRegister, "Лавка при АЗС", BusinessService::Type::GasStation)
 {
-    m_businessService.registerType(BusinessService::Type::GasStation, "АЗС", stationCatalog(),
+    m_businessService.registerType(BusinessService::Type::GasStation, "АЗС", "Gas Station", stationCatalog(),
+                                   stationGoods(),
                                    [this](IPlayer &player, int businessId)
                                    {
                                        m_shop.show(player, businessId);
@@ -241,12 +243,8 @@ void GasStationSystem::refuel(IPlayer &player, int businessId, float litres)
     m_vehicleService.refuel(*vehicle, poured);
 
     // Выручка — в копилку АЗС. У ничейной точки копилки нет: заправка всё равно
-    // работает (иначе мир встанет), деньги просто уходят из экономики. Заправка
-    // владельцем на своей же АЗС копилку не пополняет — иначе он ездит бесплатно
-    // (см. BusinessService::addIncomeFrom).
-    const PlayerSessionService::Session *session = m_sessionService.get(playerId);
-    m_businessService.addIncomeFrom(businessId, price,
-                                    session ? std::to_string(session->accountId) : std::string());
+    // работает (иначе мир встанет), деньги просто уходят из экономики.
+    m_businessService.addIncome(businessId, price);
 
     player.sendClientMessage(INFO_COLOUR, u(fmt::format("Залито {:.0f} л за {}. В баке {:.0f} л", poured,
                                                         Money::text(price), m_vehicleService.getFuel(vehicleId))));

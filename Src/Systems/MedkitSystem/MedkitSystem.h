@@ -25,6 +25,11 @@ class MedkitSystem : public BaseSystem
     static constexpr float MEDKIT_HEAL = 50.0f; // сколько HP восстанавливает одна аптечка
     static constexpr int MEDKIT_MAX = 3;        // максимум аптечек в стеке
 
+    // Справка для витрин магазинов (BusinessShop::Good::description). Живёт ЗДЕСЬ,
+    // рядом с механикой: текст про подводные камни обязан меняться вместе с
+    // проверками в healMe, а не жить копией в каждом магазине.
+    static const char *shopDescription();
+
     MedkitSystem(ICore &core, const ServiceRegister &serviceRegister);
 
   private:
