@@ -42,6 +42,11 @@ class PlayerLocationService final : public IService
     // --- авторитетные операции ---
     void teleport(IPlayer &player, const Vector3 &position);
     void teleport(IPlayer &player, const Vector3 &position, unsigned interior, int virtualWorld);
+    // То же + РАЗВОРОТ игрока (yaw, градусы). Нужен везде, где точка прибытия имеет
+    // осмысленное «лицом куда»: вход в интерьер (лицом от двери), выход наружу.
+    // Поворот идёт через сервис, а не сырым player.setRotation у вызывателя —
+    // перемещения игрока обязаны проходить одной точкой (см. КОНТРАКТ выше).
+    void teleport(IPlayer &player, const Vector3 &position, unsigned interior, int virtualWorld, float facingAngle);
     void setInterior(IPlayer &player, unsigned interior);
     void setVirtualWorld(IPlayer &player, int virtualWorld);
 

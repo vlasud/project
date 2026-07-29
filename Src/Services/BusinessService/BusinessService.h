@@ -58,8 +58,13 @@ class BusinessService final : public IService
     {
         std::string name; // utf-8, отображается в LIST
         int interiorId;
-        Vector3 insideSpawn;
+        Vector3 insideSpawn; // куда попадает игрок, войдя внутрь
         float insideAngle;
+        // Где внутри стоит пикап ВЫХОДА. Замеряется в игре вместе с insideSpawn:
+        // у каждого интерьера дверь своя, и вычислить её из точки спавна нельзя.
+        // НЕ ЗАДАН (нулевой вектор — интерьерных координат (0,0,0) не бывает) —
+        // привод ставит пикап смещением от insideSpawn, как делал раньше.
+        Vector3 exitPickup{};
     };
 
     // Меню бизнеса для ПОСЕТИТЕЛЯ: геймплей типа (у 24/7 — покупка товаров).

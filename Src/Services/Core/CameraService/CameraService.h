@@ -74,6 +74,15 @@ class CameraService final : public IService
     // (с защитой от смены игрока в слоте за время чтения).
     bool playFromFile(IPlayer &player, const std::string &name, FinishHandler onFinish = nullptr);
     void stop(IPlayer &player, bool restoreCamera = true);
+
+    // --- обычный игровой вид ---
+    // Поставить камеру ЗА СПИНУ игроку. Нужна после КАЖДОГО серверного разворота:
+    // setRotation крутит модель, но камера остаётся смотреть туда же, куда смотрела,
+    // и игрок оказывается вывернут относительно вида — визуально «появился боком».
+    // Если сейчас играет путь, он продолжит двигать камеру (во время катсцены камеру
+    // не трогает никто другой — см. контракт класса), поэтому телепорты с разворотом
+    // на время катсцены не рассчитаны.
+    void setBehind(IPlayer &player);
     bool isPlaying(int playerId) const;
     int segmentIndex(int playerId) const; // активный сегмент (для инструментов)
 

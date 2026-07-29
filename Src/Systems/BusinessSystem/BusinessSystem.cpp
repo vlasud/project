@@ -7,6 +7,8 @@
 #include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "ThreadPool/ThreadPool.h"
 #include "Utils/Encoding/Encoding.h"
+#include "Utils/Geometry/Geometry.h"
+#include "Utils/MoneyFormat/MoneyFormat.h"
 #include "Utils/TimeFormat/TimeFormat.h"
 #include <algorithm>
 #include <cstdlib>
@@ -18,6 +20,8 @@
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -142,6 +146,7 @@ BusinessSystem::BusinessSystem(ICore &core, const ServiceRegister &serviceRegist
       m_mapIconService(serviceRegister.getService<MapIconService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
+      m_cameraService(serviceRegister.getService<CameraService>()),
       m_stateService(serviceRegister.getService<PlayerStateService>()),
       m_labelService(serviceRegister.getService<TextLabelService>()),
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
@@ -172,8 +177,10 @@ BusinessSystem::BusinessSystem(ICore &core, const ServiceRegister &serviceRegist
             onOwnerChanged(businessId, oldKey, newKey);
         });
 
-    // Категория «Бизнесы» в общих торгах: саморегистрация, как типы бизнеса в этом
-    // же сервисе. Сами торги (ставки, сроки, окна, деньги) ведёт AuctionService —
+    // Категория «Бизнесы» в общих торгах. Госимущество через неё БОЛЬШЕ НЕ ПРОДАЁТСЯ
+    // (бизнес покупается по госцене на пикапе), но регистрация остаётся: уцелевшие с
+    // прежней схемы лоты должны на своём сроке вернуть ставки, а не выдать бизнес, и
+    // будущая продажа имущества игроками переиспользует этот же ключ. Торги ведёт
     // отсюда только «как выглядит лот», «кому можно отдать» и «как передать».
     AuctionService::CategoryDef category;
     category.key = AUCTION_KEY;
@@ -321,10 +328,11 @@ void BusinessSystem::showPriceInput(IPlayer &player, BusinessService::Type type,
     const int playerId = player.getID();
     m_dialogService.show(
         player,
-        // Прямой продажи бизнеса нет — он разыгрывается на аукционе, и это поле
-        // задаёт НИЖНЮЮ ПЛАНКУ торгов, а не цену покупки.
-        makeDialog(DialogStyle_INPUT, "Стартовая цена торгов",
-                   "С какой суммы начинаются торги за этот бизнес?\nНиже неё ставку не примут. 0 — торги с $1."
+        // ГОСЦЕНА бизнеса: за неё игрок покупает его на месте, у пикапа входа
+        // (см. Docs/Business.md). 0 — бизнес государством не выставлен.
+        makeDialog(DialogStyle_INPUT, "Государственная цена",
+                   "Сколько стоит этот бизнес у государства?\nИгрок платит эту сумму и сразу получает бизнес.\n"
+                   "0 — бизнес не продаётся."
                    "\n\nБизнес создастся в ВАШЕЙ текущей точке.",
                    "Создать", "Назад"),
         [this, playerId, type, interiorIndex](DialogResponse response, int, StringView text)
@@ -345,7 +353,7 @@ void BusinessSystem::showPriceInput(IPlayer &player, BusinessService::Type type,
             if (entered.empty() || end == entered.c_str() || *end != '\0' || price < 0 || price > MAX_PRICE)
             {
                 dev->sendClientMessage(ERROR_COLOUR,
-                                       u(fmt::format("Стартовая цена — целое число от 0 до {}", MAX_PRICE)));
+                                       u(fmt::format("Гос. цена — целое число от 0 до {}", MAX_PRICE)));
                 return;
             }
             createBusiness(*dev, type, interiorIndex, static_cast<std::int64_t>(price));
@@ -370,7 +378,7 @@ void BusinessSystem::createBusiness(IPlayer &player, BusinessService::Type type,
     }
     spawnBusiness(*business);
     player.sendClientMessage(DEV_COLOUR,
-                             u(fmt::format("Бизнес #{} создан: {} (старт торгов ${})", business->id,
+                             u(fmt::format("Бизнес #{} создан: {} (гос. цена ${})", business->id,
                                            m_businessService.typeName(type), business->price)));
 }
 
@@ -384,23 +392,20 @@ void BusinessSystem::showDevList(IPlayer &player)
     }
 
     // Снимок id в порядке показа: listItem клиента адресует именно его.
-    const int category = m_auctionService.categoryByKey(AUCTION_KEY);
+    // Колонки ставок больше нет: госимущество не разыгрывается, она всегда была бы
+    // пустой и вводила бы дева в заблуждение.
     std::vector<int> ids;
-    std::string body = "ID\tТип\tВладелец\tСтарт торгов\tКопилка\tСтавки\n";
+    std::string body = "ID\tТип\tВладелец\tГос. цена\tКопилка\n";
     for (const auto &[id, business] : m_businessService.businesses())
     {
-        const std::size_t lotCategory = static_cast<std::size_t>(std::max(category, 0));
-        const AuctionService::Bid *best = category < 0 ? nullptr : m_auctionService.highestBid(lotCategory, id);
         ids.push_back(id);
-        body += fmt::format("{}\t{}\t{}\t${}\t${}\t{}\n", id, m_businessService.typeName(business.type),
-                            business.owner.empty() ? "—" : business.owner, business.price, business.balance,
-                            best ? fmt::format("{} / ${}", m_auctionService.bidCount(lotCategory, id), best->amount)
-                                 : std::string("—"));
+        body += fmt::format("{}\t{}\t{}\t${}\t${}\n", id, m_businessService.typeName(business.type),
+                            business.owner.empty() ? "—" : business.owner, business.price, business.balance);
     }
     body.pop_back();
 
     m_dialogService.show(
-        player, makeDialog(DialogStyle_TABLIST_HEADERS, "Бизнесы", body, "Старт торгов", "Закрыть"),
+        player, makeDialog(DialogStyle_TABLIST_HEADERS, "Бизнесы", body, "Гос. цена", "Закрыть"),
         [this, playerId, ids](DialogResponse response, int listItem, StringView)
         {
             IPlayer *dev = m_core.getPlayers().get(playerId);
@@ -425,12 +430,11 @@ void BusinessSystem::showPriceEdit(IPlayer &player, int businessId)
         player.sendClientMessage(DEV_COLOUR, u(fmt::format("Бизнес #{} не найден", businessId)));
         return;
     }
-    // Уже идущие торги планку не пересчитывают: сделанные ставки останутся в силе,
-    // новая планка подействует на следующие.
-    const std::string title = fmt::format("Бизнес #{} — стартовая цена", businessId);
+    // Новая цена действует со следующей покупки; уже проданный бизнес она не трогает.
+    const std::string title = fmt::format("Бизнес #{} — гос. цена", businessId);
     const std::string body =
-        fmt::format("Сейчас: ${}\n\nС какой суммы начинаются торги за этот бизнес?\nНиже неё ставку не примут. "
-                    "0 — торги с $1.",
+        fmt::format("Сейчас: ${}\n\nСколько стоит этот бизнес у государства?\n"
+                    "Игрок платит эту сумму и сразу получает бизнес.\n0 — бизнес не продаётся.",
                     business->price);
 
     m_dialogService.show(
@@ -453,7 +457,7 @@ void BusinessSystem::showPriceEdit(IPlayer &player, int businessId)
             if (entered.empty() || end == entered.c_str() || *end != '\0' || price < 0 || price > MAX_PRICE)
             {
                 dev->sendClientMessage(ERROR_COLOUR,
-                                       u(fmt::format("Стартовая цена — целое число от 0 до {}", MAX_PRICE)));
+                                       u(fmt::format("Гос. цена — целое число от 0 до {}", MAX_PRICE)));
                 showPriceEdit(*dev, businessId);
                 return;
             }
@@ -463,8 +467,12 @@ void BusinessSystem::showPriceEdit(IPlayer &player, int businessId)
                 dev->sendClientMessage(DEV_COLOUR, u(fmt::format("Бизнес #{} не найден", businessId)));
                 return;
             }
+            // Статус в лейбле зависит от цены («Продаётся» / «Не продаётся»); у
+            // занятой точки цена на текст не влияет — refresh безопасен в обоих случаях.
+            const BusinessService::Business *updated = m_businessService.getBusiness(businessId);
+            refreshBusinessLabel(businessId, updated ? onlineNameOf(updated->owner) : std::string());
             dev->sendClientMessage(DEV_COLOUR,
-                                   u(fmt::format("Бизнес #{}: старт торгов теперь ${}", businessId, price)));
+                                   u(fmt::format("Бизнес #{}: гос. цена теперь ${}", businessId, price)));
             showDevList(*dev);
         });
 }
@@ -554,15 +562,20 @@ void BusinessSystem::spawnBusiness(const BusinessService::Business &business)
         0);
     runtime.mapIcon = m_mapIconService.addGlobal(BUSINESS_MAP_ICON, business.entrance, Colour::White(),
                                                  MapIconStyle_Global, MapIconService::RADAR_STREAM_DISTANCE);
-    // Текст в основном мире (vw 0), у входа. typeName — utf-8, шаблон тоже utf-8 ->
-    // весь текст через u() в cp1251. Клиентского ввода в лейбле нет.
-    runtime.label = m_labelService.add(u(fmt::format("{}\nБизнес #{}", m_businessService.typeName(business.type),
-                                                    business.id)),
-                                       business.entrance, BUSINESS_LABEL_COLOUR, BUSINESS_LABEL_DRAW_DISTANCE,
-                                       BUSINESS_LABEL_TEST_LOS);
+    // Текст в основном мире (vw 0), у входа: тип, номер и статус. На спавне бизнес
+    // ВСЕГДА ничейный (владение приходит из БД позже и перерисует лейбл), поэтому
+    // имя владельца здесь не нужно.
+    runtime.label = m_labelService.add(u(labelText(business, {})), business.entrance, BUSINESS_LABEL_COLOUR,
+                                       BUSINESS_LABEL_DRAW_DISTANCE, BUSINESS_LABEL_TEST_LOS);
 
-    Vector3 exitPickupPos = entry.insideSpawn;
-    exitPickupPos.x += EXIT_PICKUP_OFFSET;
+    // Замеренная точка выхода интерьера, если она есть. Нет — прежнее смещение от
+    // точки спавна: грубо, но лучше пикапа ровно под ногами появившегося игрока.
+    Vector3 exitPickupPos = entry.exitPickup;
+    if (exitPickupPos.x == 0.0f && exitPickupPos.y == 0.0f && exitPickupPos.z == 0.0f)
+    {
+        exitPickupPos = entry.insideSpawn;
+        exitPickupPos.x += EXIT_PICKUP_OFFSET;
+    }
     runtime.exitPickup = m_pickupService.add(
         EXIT_PICKUP_MODEL, PICKUP_TYPE, exitPickupPos,
         [this, id = business.id](IPlayer &player)
@@ -603,22 +616,22 @@ void BusinessSystem::onEnterPickup(int businessId, IPlayer &player)
         return;
     }
 
-    // Ничейный бизнес не работает, а разыгрывается: вместо интерьера — общее
-    // окно торгов (его рисует AuctionSystem, категория здесь ни при чём).
+    // Ничейный бизнес не работает, а продаётся государством: вместо интерьера —
+    // предложение купить по госцене.
     if (business->owner.empty())
     {
-        const int category = m_auctionService.categoryByKey(AUCTION_KEY);
-        if (category >= 0)
-        {
-            m_auctionService.openLot(player, static_cast<std::size_t>(category), businessId);
-        }
+        showPurchaseOffer(player, businessId);
         return;
     }
 
     const BusinessService::CatalogEntry &entry =
         m_businessService.catalog(business->type)[static_cast<std::size_t>(business->interiorIndex)];
+    // С РАЗВОРОТОМ: угол интерьера замерен вместе с точкой спавна, без него игрок
+    // появлялся бы лицом туда же, куда шёл снаружи. Округляем — угол каталога тоже
+    // обязан лежать на оси.
     m_locationService.teleport(player, entry.insideSpawn, static_cast<unsigned>(entry.interiorId),
-                               business->virtualWorld);
+                               business->virtualWorld, Geometry::snapToQuarterTurn(entry.insideAngle));
+    m_cameraService.setBehind(player); // иначе камера осталась бы смотреть «наружным» курсом
     showBusinessMenu(player, businessId);
 }
 
@@ -629,7 +642,11 @@ void BusinessSystem::onExitPickup(int businessId, IPlayer &player)
     {
         return;
     }
-    m_locationService.teleport(player, business->exit, 0, 0);
+    // Разворот — угол создателя + 180: точка выхода лежит ЗА спиной создателя, вход
+    // остаётся позади вышедшего, и смотреть он должен ОТ входа (см. HouseSystem).
+    m_locationService.teleport(player, business->exit, 0, 0,
+                               Geometry::snapToQuarterTurn(business->exitAngle + 180.0f));
+    m_cameraService.setBehind(player); // камера — за спину, вдоль нового направления
 }
 
 // ------------------------------------------------------------------ интерфейс «Бизнес»
@@ -746,23 +763,180 @@ void BusinessSystem::withdrawIncome(IPlayer &player, int businessId)
 
 // ------------------------------------------------------------------ лот аукциона
 
-bool BusinessSystem::describeLot(int businessId, AuctionService::Lot &out) const
+std::string BusinessSystem::labelText(const BusinessService::Business &business, const std::string &ownerName) const
 {
+    std::string status;
+    if (business.owner.empty())
+    {
+        // Цена 0 — точка государством не выставлена. «Продаётся» на ней звало бы
+        // игрока к пикапу, который откажет.
+        status = business.price > 0 ? "Продаётся" : "Не продаётся";
+    }
+    else
+    {
+        // Ник — КЛИЕНТСКИЙ текст, а лейбл рендерит клиент: цветокоды {RRGGBB} и '~'
+        // он интерпретирует, поэтому чистим их как в чате (см. Encoding).
+        const std::string safeName = Encoding::neutralizeColorCodes(std::string_view(ownerName));
+        status = safeName.empty() ? std::string("Частная собственность") : fmt::format("Владелец: {}", safeName);
+    }
+    return fmt::format("{}\nБизнес #{}\n{}", m_businessService.typeName(business.type), business.id, status);
+}
+
+std::string BusinessSystem::onlineNameOf(const std::string &ownerKey) const
+{
+    if (ownerKey.empty())
+    {
+        return {};
+    }
+    const auto accountId = static_cast<PlayerSessionService::AccountId>(std::strtoll(ownerKey.c_str(), nullptr, 10));
+    if (accountId == PlayerSessionService::NO_ACCOUNT)
+    {
+        return {};
+    }
+    const int playerId = m_sessionService.playerByAccount(accountId);
+    if (playerId < 0)
+    {
+        return {};
+    }
+    const IPlayer *player = m_core.getPlayers().get(playerId);
+    return player ? player->getName().to_string() : std::string();
+}
+
+void BusinessSystem::refreshBusinessLabel(int businessId, const std::string &ownerName)
+{
+    const auto it = m_runtime.find(businessId);
+    if (it == m_runtime.end() || it->second.label < 0)
+    {
+        return; // рантайма нет (точка не заведена) — нечего обновлять
+    }
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business)
+    {
+        return;
+    }
+    m_labelService.setText(it->second.label, u(labelText(*business, ownerName)));
+}
+
+void BusinessSystem::showPurchaseOffer(IPlayer &player, int businessId)
+{
+    const int playerId = player.getID();
     const BusinessService::Business *business = m_businessService.getBusiness(businessId);
     if (!business || !business->owner.empty())
     {
-        return false; // снесён либо уже чей-то — торгов по нему нет
+        return; // бизнес исчез/занят между событиями — молча
     }
-    out.title = fmt::format("Бизнес #{} — {}", businessId, m_businessService.typeName(business->type));
-    out.position = business->entrance;
-    out.minPrice = business->price;
-    return true;
+    // Цена 0 — бизнес НЕ выставлен государством. Отдавать его даром нельзя.
+    if (business->price <= 0)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этот бизнес не продаётся: госцена не назначена"));
+        return;
+    }
+
+    std::string body = fmt::format("Бизнес #{}\nТип: {}\n\n", businessId, m_businessService.typeName(business->type));
+    body += fmt::format("Государственная цена: {}\n\n", Money::text(business->price));
+    body += "Деньги спишутся сразу, бизнес сразу станет вашим.\nВ одни руки — один бизнес.";
+
+    m_dialogService.show(player, makeDialog(DialogStyle_MSGBOX, "Покупка бизнеса", body, "Купить", "Закрыть"),
+                         [this, playerId, businessId](DialogResponse response, int, StringView)
+                         {
+                             IPlayer *buyer = m_core.getPlayers().get(playerId);
+                             if (!buyer || response != DialogResponse_Left)
+                             {
+                                 return;
+                             }
+                             buyBusiness(*buyer, businessId);
+                         });
+}
+
+void BusinessSystem::buyBusiness(IPlayer &player, int businessId)
+{
+    const std::string ownerKey = ownerKeyOf(player.getID());
+    if (ownerKey.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Покупка доступна только под аккаунтом"));
+        return;
+    }
+
+    // ГЕЙТ ЗАГРУЗКИ ВЛАДЕНИЯ. Пока зеркало business_owner не пришло из БД,
+    // ownsBusiness врёт «бизнеса нет» ВСЕМ, а персист владения делает
+    // DELETE ... WHERE business_id = X OR account_id = A — покупка вторым бизнесом
+    // стёрла бы строку настоящего бизнеса покупателя. Раньше этот путь гейтился
+    // через ready() аукциона; прямой покупке гейт нужен свой.
+    if (!m_businessService.isOwnershipLoaded())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Покупка бизнесов временно недоступна — попробуйте через минуту"));
+        return;
+    }
+
+    // Ре-валидация на клике: пока висел диалог, бизнес могли купить, снести, а цену
+    // сменить дев-меню.
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этого бизнеса больше нет"));
+        return;
+    }
+    if (!business->owner.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этот бизнес уже купили"));
+        return;
+    }
+    if (business->price <= 0)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этот бизнес не продаётся: госцена не назначена"));
+        return;
+    }
+    if (m_businessService.ownsBusiness(ownerKey))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("У вас уже есть бизнес — второй в одни руки не даётся"));
+        return;
+    }
+
+    const std::int64_t price = business->price;
+    // Деньги забираем ДО выдачи владения: обратный порядок отдал бы бизнес без оплаты.
+    if (!m_moneyService.take(player, static_cast<unsigned long long>(price)))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u(fmt::format("Не хватает денег: нужно {}", Money::text(price))));
+        return;
+    }
+
+    // Уцелевшие с прежней схемы ставки — уже списанные деньги живых игроков. Бизнес
+    // уходит покупателю, торги по нему кончились: сервис вернёт суммы. На чистой базе
+    // это no-op.
+    const int category = m_auctionService.categoryByKey(AUCTION_KEY);
+    if (category >= 0)
+    {
+        m_auctionService.closeLot(static_cast<std::size_t>(category), businessId,
+                                  fmt::format("Бизнес #{} продан по госцене", businessId));
+    }
+
+    // setOwner дёрнет onOwnerChanged — тот запишет владение в БД.
+    if (!m_businessService.setOwner(businessId, ownerKey))
+    {
+        m_moneyService.giveMoney(player, static_cast<unsigned long long>(price));
+        player.sendClientMessage(ERROR_COLOUR, u("Бизнес исчез — деньги возвращены"));
+        return;
+    }
+    player.sendClientMessage(
+        INFO_COLOUR, u(fmt::format("Бизнес #{} куплен за {}. Теперь он ваш", businessId, Money::text(price))));
+}
+
+bool BusinessSystem::describeLot(int /*businessId*/, AuctionService::Lot & /*out*/) const
+{
+    // Госимущество на торги НЕ выставляется — бизнес покупается по госцене на месте.
+    // Категория остаётся зарегистрированной: см. HouseSystem::describeLot.
+    return false;
 }
 
 // ------------------------------------------------------------------ персист владения (БД)
 
 void BusinessSystem::onOwnerChanged(int businessId, const std::string &oldKey, const std::string &newKey)
 {
+    // Лейбл перерисовываем оптимистично сразу, до ответа БД — как иконку у домов.
+    // Имя нового владельца берём из его живой сессии: покупка возможна только
+    // онлайн-игроку, так что ник здесь известен всегда.
+    refreshBusinessLabel(businessId, onlineNameOf(newKey));
+
     if (newKey.empty())
     {
         eraseOwnershipRow(businessId); // выселение — просто снять строку
@@ -816,6 +990,9 @@ void BusinessSystem::onOwnerChanged(int businessId, const std::string &oldKey, c
             if (business && business->owner == newKey) // владелец мог смениться за время запроса
             {
                 m_businessService.setOwnerSilent(businessId, oldKey);
+                // Прежний владелец мог быть офлайн — тогда ника нет и лейбл покажет
+                // «Частная собственность» до перезапуска. Это путь сбоя БД, не штатный.
+                refreshBusinessLabel(businessId, onlineNameOf(oldKey));
             }
         });
 }
@@ -843,11 +1020,20 @@ void BusinessSystem::eraseOwnershipRow(int businessId)
 
 void BusinessSystem::loadOwnershipAsync()
 {
-    using OwnerRow = std::pair<int, std::int64_t>;
+    // business_id, account_id, ник владельца ("" — игрока в player нет либо name NULL).
+    using OwnerRow = std::tuple<int, std::int64_t, std::string>;
     DatabaseManager::selectQuery<std::vector<OwnerRow>>(
         [](mysqlx::Schema schema)
         {
-            mysqlx::RowResult rows = schema.getTable("business_owner").select("business_id", "account_id").execute();
+            // Имя владельца — для 3D-текста у входа. Именно LEFT JOIN: при INNER
+            // строка владения без записи в player (аккаунт удалён вручную) выпала бы
+            // из выборки, точка в памяти стала бы ничейной и её продали бы второй раз.
+            // Отдельной колонки под имя не заводим — она разъезжалась бы со сменой
+            // ника, а player.name и так источник правды.
+            mysqlx::SqlResult rows = schema.getSession()
+                                         .sql("SELECT o.business_id, o.account_id, p.name "
+                                              "FROM business_owner o LEFT JOIN player p ON p.id = o.account_id")
+                                         .execute();
             std::vector<OwnerRow> result;
             while (mysqlx::Row row = rows.fetchOne())
             {
@@ -855,7 +1041,12 @@ void BusinessSystem::loadOwnershipAsync()
                 // не всё владение разом.
                 try
                 {
-                    result.emplace_back(row.get(0).get<int>(), row.get(1).get<std::int64_t>());
+                    std::string ownerName;
+                    if (!row.get(2).isNull())
+                    {
+                        ownerName = row.get(2).get<std::string>();
+                    }
+                    result.emplace_back(row.get(0).get<int>(), row.get(1).get<std::int64_t>(), std::move(ownerName));
                 }
                 catch (...)
                 {
@@ -866,7 +1057,7 @@ void BusinessSystem::loadOwnershipAsync()
         },
         [this](std::vector<OwnerRow> owners)
         {
-            for (const auto &[businessId, accountId] : owners)
+            for (const auto &[businessId, accountId, ownerName] : owners)
             {
                 if (accountId == PlayerSessionService::NO_ACCOUNT || !m_businessService.getBusiness(businessId))
                 {
@@ -875,6 +1066,7 @@ void BusinessSystem::loadOwnershipAsync()
                 // Загрузка зеркала — БЕЗ нотификации: иначе каждая строка
                 // спровоцировала бы write-through обратно в ту же БД.
                 m_businessService.setOwnerSilent(businessId, std::to_string(accountId));
+                refreshBusinessLabel(businessId, ownerName); // «Продаётся» -> «Владелец: ник»
             }
             m_businessService.markOwnershipLoaded(); // итоги аукционов разблокированы
         },

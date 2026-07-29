@@ -2,11 +2,13 @@
 
 #include "Macro.h"
 #include "Services/AuctionService/AuctionService.h"
+#include "Services/Core/CameraService/CameraService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/PickupService/PickupService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
+#include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "Services/Core/TextLabelService/TextLabelService.h"
 #include "Services/HouseService/HouseService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
@@ -28,15 +30,20 @@
 //  * иконка на карте у входа: ничейный -> зелёная (31), занятый -> красная (32);
 //  * 3D-текст у входа (номер дома + тип интерьера) — игроцкий ориентир, виден всем.
 //
-// ВЛАДЕНИЕ через АУКЦИОН: наступив на пикап ничейного дома, игрок попадает в общее
-// окно торгов (AuctionSystem) — бесплатного занятия больше нет. Сами торги ведёт
-// AuctionService, здесь только регистрация категории «Дома»: как выглядит лот, кому
-// его можно отдать (ОДИН ДОМ НА АККАУНТ, ownsHouse) и как передать победителю
-// (setOwner). Владелец = АККАУНТ — переживает рестарт. Источники правды РАЗНЫЕ:
-// ОПИСАНИЕ дома (контент, ставит дев) — houses.json; ВЛАДЕНИЕ (house -> аккаунт) —
-// БД (таблица house_owner, write-through как членство фракций); СТАВКИ — тоже БД
-// (auction_*). Пока зеркало владения не пришло из БД, итоги торгов не подводятся
-// (флаг HouseService::isOwnershipLoaded): «один дом на игрока» нечем проверить.
+// ПОКУПКА ПО ГОСЦЕНЕ: наступив на пикап ничейного дома, игрок получает предложение
+// купить его за house.price — сумму, которую задал дев при создании. Деньги
+// списываются сразу, дом сразу становится личным; бесплатного занятия нет, торгов за
+// госимущество тоже. ОДИН ДОМ НА АККАУНТ (ownsHouse). Владелец = АККАУНТ, переживает
+// рестарт. Источники правды РАЗНЫЕ: ОПИСАНИЕ дома (контент, ставит дев) —
+// houses.json; ВЛАДЕНИЕ (house -> аккаунт) — БД (таблица house_owner, write-through
+// как членство фракций).
+//
+// Пока зеркало владения не пришло из БД (флаг HouseService::isOwnershipLoaded),
+// покупка ЗАПРЕЩЕНА: ownsHouse врал бы «дома нет» всем, а запись владения снесла бы
+// строку настоящего дома покупателя (DELETE ... OR account_id).
+//
+// Аукцион госимуществом больше не торгует. Категория «Дома» остаётся
+// зарегистрированной под будущую продажу имущества между игроками.
 //
 // ПЕРСИСТ ВЛАДЕНИЯ — ЕДИНАЯ ТОЧКА (onOwnerChanged, подписка на
 // HouseService::subscribeOwnerChanged): И итог аукциона, И передача/выселение
@@ -78,13 +85,39 @@ class HouseSystem : public BaseSystem
     // глобальных иконок нет update — только remove+add; хэндл в Runtime::mapIcon
     // обновляется (нет утечки/двойного remove). Зовётся после смены владельца.
     void refreshHouseIcon(int houseId);
+    // Текст 3D-лейбла у входа: тип интерьера, номер дома и статус — «Владелец: ник»
+    // у занятого, «Продаётся»/«Не продаётся» у ничейного (зависит от госцены).
+    // ownerName пустой у ничейного дома либо когда ник неизвестен (владелец офлайн).
+    std::string labelText(const HouseService::House &house, const std::string &ownerName) const;
+    // Ник владельца по ключу аккаунта, если он СЕЙЧАС в сети ("" — офлайн/не найден).
+    // Покупка и передача дома идут только онлайн-игроку, поэтому на этих путях ник
+    // известен всегда.
+    std::string onlineNameOf(const std::string &ownerKey) const;
+    // Перерисовать лейбл дома (setText — живое обновление у тех, кто рядом; снимать
+    // и заводить лейбл заново, как иконку, не требуется).
+    void refreshHouseLabel(int houseId, const std::string &ownerName);
 
     // --- обработчики пикапов (живого игрока берут заново) ---
     void onEntrancePickup(int houseId, IPlayer &player);
     void onExitPickup(int houseId, IPlayer &player);
 
-    // Описание лота для общих торгов (колбэк категории «Дома»). false — дома нет
-    // либо он уже чей-то, значит и торгов по нему нет.
+    // Ключ аккаунта покупателя ("" — игрок не под аккаунтом).
+    std::string ownerKeyOf(int playerId) const;
+
+    // --- покупка из госсобственности ---
+    // Предложение купить ничейный дом по ГОСЦЕНЕ (house.price). Показывается на
+    // пикапе входа вместо прежнего окна торгов: госимущество продаётся сразу и по
+    // фиксированной цене, аукцион остаётся для будущей продажи имущества игроками.
+    void showPurchaseOffer(IPlayer &player, int houseId);
+    // Купить дом. ВСЯ проверка авторитетная и повторяется здесь: пока висел диалог,
+    // дом могли занять/снести, цену — сменить, а деньги — потратить.
+    void buyHouse(IPlayer &player, int houseId);
+
+    // Описание лота для общих торгов (колбэк категории «Дома»). ВСЕГДА false:
+    // госимущество больше не разыгрывается, дом покупается по госцене. Категория
+    // остаётся зарегистрированной, чтобы (1) уцелевшие с прежней схемы лоты
+    // вернули ставки на своём сроке, а не выдали дом мимо новой модели, и
+    // (2) будущая продажа имущества игроками переиспользовала тот же ключ.
     bool describeLot(int houseId, AuctionService::Lot &out) const;
 
     // ЕДИНАЯ точка персиста владения (подписка на HouseService::subscribeOwnerChanged):
@@ -101,11 +134,11 @@ class HouseSystem : public BaseSystem
     void showMain(IPlayer &player);
     void showCreatePicker(IPlayer &player);       // LIST каталога интерьеров
     void showCapInput(IPlayer &player, int interiorIndex); // INPUT лимита парковки после выбора интерьера
-    void showPriceInput(IPlayer &player, int interiorIndex, int parkingCap); // INPUT стартовой цены торгов
+    void showPriceInput(IPlayer &player, int interiorIndex, int parkingCap); // INPUT госцены дома
     void showHouseList(IPlayer &player);          // LIST существующих домов
     void showPickById(IPlayer &player);           // INPUT id -> подменю того дома
     void showHouseMenu(IPlayer &player, int houseId);     // подменю: цена/телепорт/удалить
-    void showHousePriceEdit(IPlayer &player, int houseId); // INPUT стартовой цены уже созданного дома
+    void showHousePriceEdit(IPlayer &player, int houseId); // INPUT госцены уже созданного дома
     void showDeleteConfirm(IPlayer &player, int houseId); // MSGBOX подтверждения
 
     // Создать дом + persist + сообщить. parkingCap уже провалидирован вводом, но
@@ -145,10 +178,12 @@ class HouseSystem : public BaseSystem
     MapIconService &m_mapIconService;
     PickupService &m_pickupService;
     PlayerLocationService &m_locationService;
+    CameraService &m_cameraService; // камера за спину после разворота на входе/выходе
     PlayerDialogService &m_dialogService;
     TextLabelService &m_labelService;
     PlayerSessionService &m_sessionService; // ключ владельца = std::to_string(accountId)
-    AuctionService &m_auctionService;       // торги по ничейным домам
+    PlayerMoneyService &m_moneyService;     // оплата госцены при покупке дома
+    AuctionService &m_auctionService;       // возврат ставок при сносе дома (торгов госимуществом больше нет)
 
     std::unordered_map<int, Runtime> m_runtime;            // houseId -> хэндлы
     // Готовность владения (загрузка house_owner из БД завершилась) живёт в

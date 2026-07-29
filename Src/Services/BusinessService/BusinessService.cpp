@@ -9,7 +9,10 @@
 namespace
 {
 // Точка выхода — за спиной создателя, чтобы выйдя он не стоял в пикапе входа.
-constexpr float EXIT_BEHIND = 1.5f;
+// Два метра за спину создателя: там игрок появляется, выходя из бизнеса. Дистанция
+// подобрана владельцем так, чтобы вышедший не остался стоять во входном пикапе
+// (см. Docs/Business.md, «Риск ре-триггера»).
+constexpr float EXIT_BEHIND = 2.0f;
 
 const std::string EMPTY_NAME;
 const std::vector<BusinessService::CatalogEntry> EMPTY_CATALOG;
@@ -144,8 +147,10 @@ const BusinessService::Business *BusinessService::createBusiness(Type type, cons
     business.type = type;
     business.interiorIndex = interiorIndex;
     business.entrance = creatorPos;
-    business.exit = backOf(creatorPos, creatorAngle, EXIT_BEHIND);
-    business.exitAngle = creatorAngle;
+    // Угол ОКРУГЛЯЕМ до четверти оборота: сырой поворот игрока увёл бы точку выхода
+    // с оси мира, и точка выглядела бы поставленной «под углом».
+    business.exitAngle = Geometry::snapToQuarterTurn(creatorAngle);
+    business.exit = backOf(creatorPos, business.exitAngle, EXIT_BEHIND);
     business.virtualWorld = VW_BASE + business.id;
     business.price = std::max<std::int64_t>(price, 0);
 
@@ -315,7 +320,13 @@ void BusinessService::loadBusiness(const Business &business)
     {
         return;
     }
-    m_businesses.emplace(business.id, business); // дубликат id отбрасывается
+    Business normalized = business;
+    // Тот же инвариант, что и при создании: угол — четверть оборота, точка выхода —
+    // РОВНО EXIT_BEHIND за спиной от входа. Пересчитываем, а не берём из файла: иначе
+    // точки, созданные до правки, остались бы со старым углом и старой дистанцией.
+    normalized.exitAngle = Geometry::snapToQuarterTurn(business.exitAngle);
+    normalized.exit = backOf(normalized.entrance, normalized.exitAngle, EXIT_BEHIND);
+    m_businesses.emplace(normalized.id, std::move(normalized)); // дубликат id отбрасывается
 }
 
 void BusinessService::finalizeLoad()

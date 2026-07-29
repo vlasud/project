@@ -214,6 +214,11 @@ void CameraService::stop(IPlayer &player, bool restoreCamera)
     }
 }
 
+void CameraService::setBehind(IPlayer &player)
+{
+    player.setCameraBehind();
+}
+
 bool CameraService::isPlaying(int playerId) const
 {
     if (!validPlayerId(playerId))

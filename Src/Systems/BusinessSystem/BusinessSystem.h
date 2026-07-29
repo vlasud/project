@@ -6,6 +6,7 @@
 #include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/PickupService/PickupService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
+#include "Services/Core/CameraService/CameraService.h"
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
@@ -28,9 +29,11 @@
 //  * вход/выход (телепорт в уникальный vw бизнеса и обратно);
 //  * ЕДИНЫЙ интерфейс «Бизнес» — меню внутри точки: информация, действие типа
 //    (у 24/7 — покупка), управление для владельца (снять доход);
-//  * АУКЦИОН ничейного бизнеса — вход внутрь заменяется торгами. Сами торги
-//    (ставки, сроки, окна, деньги, /auc) ведёт общий AuctionService: здесь только
-//    регистрация категории «Бизнесы» и открытие окна с пикапа.
+//  * ПОКУПКА ничейного бизнеса по ГОСЦЕНЕ — вход внутрь заменяется предложением
+//    купить. Цену задаёт дев при создании (business.price), деньги списываются
+//    сразу, бизнес сразу становится личным. В одни руки — один бизнес.
+//    Аукцион госимуществом больше не торгует и остаётся под будущую продажу
+//    имущества между игроками (категория «Бизнесы» зарегистрирована под неё).
 //
 // ДВА ПЕРСИСТА, как у домов:
 //  * ОПИСАНИЕ — businesses.json рядом с сервером: пишем на любое изменение через
@@ -54,7 +57,7 @@ class BusinessSystem : public BaseSystem
     void showPriceInput(IPlayer &player, BusinessService::Type type, int interiorIndex);
     void createBusiness(IPlayer &player, BusinessService::Type type, int interiorIndex, std::int64_t price);
     void showDevList(IPlayer &player);
-    // Правка стартовой планки торгов уже созданного бизнеса (из списка).
+    // Правка госцены уже созданного бизнеса (из списка).
     void showPriceEdit(IPlayer &player, int businessId);
     void showDevRemove(IPlayer &player);
 
@@ -71,8 +74,28 @@ class BusinessSystem : public BaseSystem
     // Ключ владельца текущей сессии игрока ("" — не залогинен).
     std::string ownerKeyOf(int playerId) const;
 
-    // Описание лота для общих торгов (колбэк категории «Бизнесы»). false — бизнеса
-    // нет либо он уже чей-то, значит и торгов по нему нет.
+    // Текст 3D-лейбла у входа: тип, номер и статус — «Владелец: ник» у занятого,
+    // «Продаётся»/«Не продаётся» у ничейного (зависит от госцены). ownerName пуст у
+    // ничейного либо когда ник неизвестен (владелец офлайн).
+    std::string labelText(const BusinessService::Business &business, const std::string &ownerName) const;
+    // Ник владельца по ключу аккаунта, если он СЕЙЧАС в сети ("" — офлайн/не найден).
+    // Покупка бизнеса идёт только онлайн-игроку, поэтому там ник известен всегда.
+    std::string onlineNameOf(const std::string &ownerKey) const;
+    // Перерисовать лейбл (setText — живое обновление у тех, кто рядом).
+    void refreshBusinessLabel(int businessId, const std::string &ownerName);
+
+    // --- покупка из госсобственности ---
+    // Предложение купить ничейный бизнес по ГОСЦЕНЕ (business.price). Показывается
+    // на пикапе входа вместо прежнего окна торгов: госимущество продаётся сразу и по
+    // фиксированной цене, аукцион остаётся для будущей продажи имущества игроками.
+    void showPurchaseOffer(IPlayer &player, int businessId);
+    // Купить бизнес. Вся проверка авторитетная и повторяется здесь: пока висел
+    // диалог, бизнес могли занять/снести, цену — сменить, а деньги — потратить.
+    void buyBusiness(IPlayer &player, int businessId);
+
+    // Описание лота для общих торгов. ВСЕГДА false: госимущество больше не
+    // разыгрывается (см. HouseSystem::describeLot — там же и зачем категория
+    // остаётся зарегистрированной).
     bool describeLot(int businessId, AuctionService::Lot &out) const;
 
     // --- персист ---
@@ -101,6 +124,7 @@ class BusinessSystem : public BaseSystem
     MapIconService &m_mapIconService;
     PlayerDialogService &m_dialogService;
     PlayerLocationService &m_locationService;
+    CameraService &m_cameraService; // камера за спину после разворота на входе/выходе
     PlayerStateService &m_stateService;
     TextLabelService &m_labelService;
     PlayerMoneyService &m_moneyService;

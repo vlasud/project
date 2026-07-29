@@ -6,6 +6,8 @@
 #include "ThreadPool/ThreadPool.h"
 #include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
+#include "Utils/Geometry/Geometry.h"
+#include "Utils/MoneyFormat/MoneyFormat.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -18,6 +20,8 @@
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -124,9 +128,11 @@ HouseSystem::HouseSystem(ICore &core, const ServiceRegister &serviceRegister)
     : BaseSystem(core, serviceRegister), m_mapIconService(serviceRegister.getService<MapIconService>()),
       m_pickupService(serviceRegister.getService<PickupService>()),
       m_locationService(serviceRegister.getService<PlayerLocationService>()),
+      m_cameraService(serviceRegister.getService<CameraService>()),
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_labelService(serviceRegister.getService<TextLabelService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
+      m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
       m_auctionService(serviceRegister.getService<AuctionService>())
 {
     auto &commands = serviceRegister.getService<PlayerCommandService>();
@@ -142,7 +148,10 @@ HouseSystem::HouseSystem(ICore &core, const ServiceRegister &serviceRegister)
     houses.subscribeOwnerChanged([this](int houseId, const std::string &oldKey, const std::string &newKey)
                                  { onOwnerChanged(houseId, oldKey, newKey); });
 
-    // Категория «Дома» в общих торгах: саморегистрация. Сами торги (ставки, сроки,
+    // Категория «Дома» в общих торгах. Госимущество через неё БОЛЬШЕ НЕ ПРОДАЁТСЯ
+    // (дом покупается по госцене на пикапе), но регистрация остаётся: уцелевшие с
+    // прежней схемы лоты должны на своём сроке вернуть ставки, а не выдать дом, и
+    // будущая продажа имущества игроками переиспользует этот же ключ. Торги (ставки,
     // окна, деньги, /auc) ведёт AuctionService — отсюда только «как выглядит лот»,
     // «кому можно отдать» и «как передать».
     AuctionService::CategoryDef category;
@@ -212,11 +221,11 @@ void HouseSystem::spawnHouse(const HouseService::House &house)
                             [this, houseId = house.id](IPlayer &player) { onExitPickup(houseId, player); },
                             static_cast<std::uint32_t>(house.virtualWorld));
 
-    // 3D-текст у входа (vw 0): тип интерьера над номером дома. entry.name — utf-8,
-    // слово «Дом» в шаблоне тоже utf-8 -> весь текст через u() в cp1251. Сервис
-    // санитизирует текст; клиентского ввода у лейбла нет.
-    runtime.label = m_labelService.add(u(fmt::format("{}\nДом #{}", entry.name, house.id)), house.entrance,
-                                       HOUSE_LABEL_COLOUR, HOUSE_LABEL_DRAW_DISTANCE, HOUSE_LABEL_TEST_LOS);
+    // 3D-текст у входа (vw 0): тип интерьера, номер дома и статус. На спавне дом
+    // ВСЕГДА ничейный (владение приходит из БД позже и перерисует лейбл через
+    // refreshHouseLabel), поэтому имя владельца здесь не нужно.
+    runtime.label = m_labelService.add(u(labelText(house, {})), house.entrance, HOUSE_LABEL_COLOUR,
+                                       HOUSE_LABEL_DRAW_DISTANCE, HOUSE_LABEL_TEST_LOS);
 
     m_runtime.emplace(house.id, runtime);
 }
@@ -264,6 +273,68 @@ void HouseSystem::despawnHouse(int houseId)
     m_runtime.erase(it);
 }
 
+std::string HouseSystem::labelText(const HouseService::House &house, const std::string &ownerName) const
+{
+    const char *interior =
+        HouseService::catalogValid(house.interiorIndex) ? HouseService::catalog()[house.interiorIndex].name : "?";
+
+    std::string status;
+    if (house.owner.empty())
+    {
+        // Цена 0 — дом государством не выставлен. Писать «Продаётся» на нём значило
+        // бы звать игрока к пикапу, который откажет.
+        status = house.price > 0 ? "Продаётся" : "Не продаётся";
+    }
+    else
+    {
+        // Ник — КЛИЕНТСКИЙ текст, а лейбл клиент рендерит: цветокоды {RRGGBB} и '~'
+        // он интерпретирует, поэтому чистим их как в чате (см. Encoding).
+        const std::string safeName = Encoding::neutralizeColorCodes(std::string_view(ownerName));
+        // Имя неизвестно — владелец офлайн и не пришёл из загрузки (напр. откат
+        // памяти после сбоя БД). Дом при этом точно занят, так и пишем.
+        status = safeName.empty() ? std::string("Частная собственность") : fmt::format("Владелец: {}", safeName);
+    }
+    return fmt::format("{}\nДом #{}\n{}", interior, house.id, status);
+}
+
+std::string HouseSystem::onlineNameOf(const std::string &ownerKey) const
+{
+    if (ownerKey.empty())
+    {
+        return {};
+    }
+    const auto accountId = static_cast<PlayerSessionService::AccountId>(std::strtoll(ownerKey.c_str(), nullptr, 10));
+    if (accountId == PlayerSessionService::NO_ACCOUNT)
+    {
+        return {};
+    }
+    const int playerId = m_sessionService.playerByAccount(accountId);
+    if (playerId < 0)
+    {
+        return {};
+    }
+    const IPlayer *player = m_core.getPlayers().get(playerId);
+    return player ? player->getName().to_string() : std::string();
+}
+
+void HouseSystem::refreshHouseLabel(int houseId, const std::string &ownerName)
+{
+    const auto it = m_runtime.find(houseId);
+    if (it == m_runtime.end() || it->second.label < 0)
+    {
+        return; // рантайма нет (дом не заведён) — нечего обновлять
+    }
+    const HouseService &service = m_serviceRegister.getService<HouseService>();
+    const HouseService::House *house = service.getHouse(houseId);
+    if (!house)
+    {
+        return;
+    }
+    // setText обновляет текст живьём у всех, кто рядом — снимать и заводить лейбл
+    // заново не нужно (в отличие от глобальной иконки, у которой update нет).
+    m_labelService.setText(it->second.label, u(labelText(*house, ownerName)));
+}
+
 void HouseSystem::refreshHouseIcon(int houseId)
 {
     const auto it = m_runtime.find(houseId);
@@ -307,47 +378,162 @@ void HouseSystem::onEntrancePickup(int houseId, IPlayer &player)
         return; // дом исчез между событиями — игнор
     }
 
-    // Ничейный дом -> торги (не входим): дом не занимается бесплатно, он
-    // разыгрывается на аукционе. Окно рисует AuctionSystem — оно общее для всех
-    // категорий лотов. Занятый -> молчаливый вход (контроль доступа/замки —
-    // будущее: любой занятый дом пускает внутрь).
+    // Ничейный дом -> предложение купить по ГОСЦЕНЕ (не входим): дом не занимается
+    // бесплатно. Занятый -> молчаливый вход (контроль доступа/замки — будущее:
+    // любой занятый дом пускает внутрь).
     if (house->owner.empty())
     {
-        const int category = m_auctionService.categoryByKey(AUCTION_KEY);
-        if (category >= 0)
-        {
-            m_auctionService.openLot(player, static_cast<std::size_t>(category), houseId);
-        }
+        showPurchaseOffer(player, houseId);
         return;
     }
 
     const HouseService::CatalogEntry &entry = service.catalog()[house->interiorIndex];
-    // Вход в дом: телепорт в интерьер (мир дома), включаем грейс выхода.
-    m_locationService.teleport(player, entry.insideSpawn, static_cast<unsigned>(entry.interiorId), house->virtualWorld);
+    // Вход в дом: телепорт в интерьер (мир дома) С РАЗВОРОТОМ — угол интерьера
+    // замерен вместе с точкой спавна, без него игрок появлялся бы лицом туда же,
+    // куда шёл снаружи. Округляем: угол каталога тоже обязан лежать на оси.
+    m_locationService.teleport(player, entry.insideSpawn, static_cast<unsigned>(entry.interiorId),
+                               house->virtualWorld, Geometry::snapToQuarterTurn(entry.insideAngle));
+    m_cameraService.setBehind(player); // иначе камера осталась бы смотреть «наружным» курсом
     m_exitGraceFrom[player.getID()] = std::chrono::steady_clock::now();
 }
 
-bool HouseSystem::describeLot(int houseId, AuctionService::Lot &out) const
+std::string HouseSystem::ownerKeyOf(int playerId) const
 {
+    const PlayerSessionService::Session *session = m_sessionService.get(playerId);
+    if (!session || session->accountId == PlayerSessionService::NO_ACCOUNT)
+    {
+        return {};
+    }
+    return std::to_string(session->accountId);
+}
+
+void HouseSystem::showPurchaseOffer(IPlayer &player, int houseId)
+{
+    const int playerId = player.getID();
     const HouseService &service = m_serviceRegister.getService<HouseService>();
     const HouseService::House *house = service.getHouse(houseId);
-    if (!house || !house->owner.empty())
+    if (!house || !house->owner.empty() || !HouseService::catalogValid(house->interiorIndex))
     {
-        return false; // снесён либо уже чей-то — торгов по нему нет
+        return; // дом исчез/занят между событиями — молча
     }
-    out.title = fmt::format("Дом #{}", houseId);
-    out.description = fmt::format("Интерьер: {}. Парковка: {} машин", service.catalog()[house->interiorIndex].name,
-                                  house->parkingCap);
-    out.position = house->entrance;
-    out.minPrice = house->price;
-    return true;
+    // Цена 0 — дом НЕ выставлен государством. Продавать его даром нельзя, а
+    // «бесплатно» тут читалось бы именно так.
+    if (house->price <= 0)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этот дом не продаётся: госцена не назначена"));
+        return;
+    }
+
+    const HouseService::CatalogEntry &entry = service.catalog()[house->interiorIndex];
+    std::string body = fmt::format("Дом #{}\n{}\nПарковка: {} машин\n\n", houseId, entry.name, house->parkingCap);
+    body += fmt::format("Государственная цена: {}\n\n", Money::text(house->price));
+    body += "Деньги спишутся сразу, дом сразу станет вашим.\nВ одни руки — один дом.";
+
+    m_dialogService.show(player, makeDialog(DialogStyle_MSGBOX, "Покупка дома", body, "Купить", "Закрыть"),
+                         [this, playerId, houseId](DialogResponse response, int, StringView)
+                         {
+                             IPlayer *buyer = m_core.getPlayers().get(playerId);
+                             if (!buyer || response != DialogResponse_Left)
+                             {
+                                 return;
+                             }
+                             buyHouse(*buyer, houseId);
+                         });
+}
+
+void HouseSystem::buyHouse(IPlayer &player, int houseId)
+{
+    const std::string ownerKey = ownerKeyOf(player.getID());
+    if (ownerKey.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Покупка доступна только под аккаунтом"));
+        return;
+    }
+
+    HouseService &service = m_serviceRegister.getService<HouseService>();
+    // ГЕЙТ ЗАГРУЗКИ ВЛАДЕНИЯ. Пока зеркало house_owner не пришло из БД, ownsHouse
+    // врёт «дома нет» ВСЕМ, и правило «один дом в одни руки» проверять нечем. Хуже
+    // того, персист владения делает DELETE ... WHERE house_id = X OR account_id = A —
+    // покупка вторым домом стёрла бы строку настоящего дома покупателя. Раньше этот
+    // путь гейтился через ready() аукциона; прямой покупке гейт нужен свой.
+    if (!service.isOwnershipLoaded())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Покупка домов временно недоступна — попробуйте через минуту"));
+        return;
+    }
+
+    // Ре-валидация на клике: пока висел диалог, дом могли купить, снести, а цену
+    // сменить дев-меню.
+    const HouseService::House *house = service.getHouse(houseId);
+    if (!house)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этого дома больше нет"));
+        return;
+    }
+    if (!house->owner.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этот дом уже купили"));
+        return;
+    }
+    if (house->price <= 0)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этот дом не продаётся: госцена не назначена"));
+        return;
+    }
+    if (service.ownsHouse(ownerKey))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("У вас уже есть дом — второй в одни руки не даётся"));
+        return;
+    }
+
+    const std::int64_t price = house->price;
+    // Деньги забираем ДО выдачи владения: обратный порядок отдал бы дом без оплаты,
+    // если денег не хватило.
+    if (!m_moneyService.take(player, static_cast<unsigned long long>(price)))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u(fmt::format("Не хватает денег: нужно {}", Money::text(price))));
+        return;
+    }
+
+    // Уцелевшие с прежней схемы ставки по этому дому — уже списанные деньги живых
+    // игроков. Дом уходит покупателю, значит торги по нему кончились: сервис вернёт
+    // суммы владельцам ставок. На чистой базе это no-op.
+    const int category = m_auctionService.categoryByKey(AUCTION_KEY);
+    if (category >= 0)
+    {
+        m_auctionService.closeLot(static_cast<std::size_t>(category), houseId,
+                                  fmt::format("Дом #{} продан по госцене", houseId));
+    }
+
+    // setOwner дёрнет onOwnerChanged — тот запишет владение в БД и перекрасит иконку.
+    if (!service.setOwner(houseId, ownerKey))
+    {
+        m_moneyService.giveMoney(player, static_cast<unsigned long long>(price));
+        player.sendClientMessage(ERROR_COLOUR, u("Дом исчез — деньги возвращены"));
+        return;
+    }
+    player.sendClientMessage(INFO_COLOUR,
+                             u(fmt::format("Дом #{} куплен за {}. Теперь он ваш", houseId, Money::text(price))));
+}
+
+bool HouseSystem::describeLot(int /*houseId*/, AuctionService::Lot & /*out*/) const
+{
+    // Госимущество на торги НЕ выставляется — дом покупается по госцене на месте.
+    // Категория остаётся зарегистрированной намеренно: уцелевшие с прежней схемы
+    // лоты на своём сроке увидят «лота нет» и вернут ВСЕ ставки вместо выдачи дома
+    // мимо новой модели (resolveDue: alive == false -> победителя нет, всем возврат).
+    // Будущая продажа имущества игроками переиспользует этот же ключ категории.
+    return false;
 }
 
 void HouseSystem::onOwnerChanged(int houseId, const std::string &oldKey, const std::string &newKey)
 {
-    // Иконка перекрашивается оптимистично сразу (как было при занятии) — БД лишь
-    // подтверждает write-through, откат при сбое перекрасит обратно.
+    // Иконка и лейбл перекрашиваются оптимистично сразу (как было при занятии) — БД
+    // лишь подтверждает write-through, откат при сбое перерисует обратно. Имя нового
+    // владельца берём из его живой сессии: и покупка, и передача дома возможны только
+    // ОНЛАЙН-игроку, так что имя здесь всегда известно.
     refreshHouseIcon(houseId);
+    refreshHouseLabel(houseId, onlineNameOf(newKey));
 
     // Владение — в БД (write-through, как членство фракций). newKey непустой:
     // DELETE по дому И по аккаунту + INSERT В ОДНОЙ ТРАНЗАКЦИИ (либо вся пара
@@ -406,6 +592,10 @@ void HouseSystem::onOwnerChanged(int houseId, const std::string &oldKey, const s
                 {
                     service.setOwnerSilent(houseId, oldKey);
                     refreshHouseIcon(houseId);
+                    // Прежний владелец мог быть офлайн — тогда имени нет и лейбл
+                    // покажет «Частная собственность» до перезапуска. Дом при этом
+                    // числится занятым верно, а это путь сбоя БД, не штатный.
+                    refreshHouseLabel(houseId, onlineNameOf(oldKey));
                 }
             });
     }
@@ -442,7 +632,14 @@ void HouseSystem::onExitPickup(int houseId, IPlayer &player)
 
     // Выход: телепорт на точку выхода в основном мире (интерьер 0, vw 0), включаем
     // грейс входа (точка выхода в EXIT_DISTANCE от пикапа входа).
-    m_locationService.teleport(player, house->exit, 0, 0);
+    //
+    // Разворот — угол создателя + 180: точка выхода лежит ЗА спиной создателя, то
+    // есть вход остаётся позади вышедшего, и смотреть он должен ОТ входа. Взяли бы
+    // сам exitAngle — игрок появлялся бы лицом к двери, из которой только что вышел.
+    // snapToQuarterTurn заодно нормализует 270+180=450 обратно в 90.
+    m_locationService.teleport(player, house->exit, 0, 0,
+                               Geometry::snapToQuarterTurn(house->exitAngle + 180.0f));
+    m_cameraService.setBehind(player); // камера — за спину, вдоль нового направления
     m_entranceGraceFrom[player.getID()] = std::chrono::steady_clock::now();
 }
 
@@ -600,12 +797,13 @@ void HouseSystem::showCapInput(IPlayer &player, int interiorIndex)
 
 void HouseSystem::showPriceInput(IPlayer &player, int interiorIndex, int parkingCap)
 {
-    // Дом не продаётся напрямую — он разыгрывается на аукционе (см. Docs/Auction.md).
-    // Цена дева здесь — СТАРТОВАЯ ПЛАНКА торгов: ниже неё ставку не примут.
+    // ГОСЦЕНА дома: за неё игрок покупает дом на месте, у пикапа входа
+    // (см. Docs/Houses.md). 0 — дом государством не выставлен и не продаётся.
     m_dialogService.showNumberInput(
         player,
-        makeDialog(DialogStyle_INPUT, "Стартовая цена",
-                   "С какой суммы начинаются торги за этот дом?\nНиже неё ставку не примут. 0 — торги с $1.",
+        makeDialog(DialogStyle_INPUT, "Государственная цена",
+                   "Сколько стоит этот дом у государства?\nИгрок платит эту сумму и сразу получает дом.\n"
+                   "0 — дом не продаётся.",
                    "Создать", "Назад"),
         [this, playerId = player.getID(), interiorIndex, parkingCap](DialogResponse response, std::int64_t value)
         {
@@ -698,7 +896,7 @@ void HouseSystem::showHouseMenu(IPlayer &player, int houseId)
     // вместе с её веткой, иначе индексы съезжают и пункт делает чужое действие.
     std::string body;
     body += fmt::format("Лимит парковки: {}\n", house->parkingCap);
-    body += fmt::format("Стартовая цена торгов: ${} (изменить)\n", house->price);
+    body += fmt::format("Гос. цена: ${} (изменить)\n", house->price);
     body += "Телепорт ко входу\n";
     body += "Удалить дом";
 
@@ -729,7 +927,7 @@ void HouseSystem::showHouseMenu(IPlayer &player, int houseId)
             // Пункт 0 — «Лимит парковки» (информационная строка): без действия.
             switch (listItem)
             {
-            case 1: // стартовая цена торгов — правится и у уже созданного дома
+            case 1: // госцена — правится и у уже созданного дома
                 showHousePriceEdit(*player, houseId);
                 break;
             case 2: // телепорт ко входу (дев проходит через пикап и проверяет вход)
@@ -747,12 +945,13 @@ void HouseSystem::showHouseMenu(IPlayer &player, int houseId)
 
 void HouseSystem::showHousePriceEdit(IPlayer &player, int houseId)
 {
-    // Дома из старых houses.json стартуют торги с нуля — без этой правки их
-    // пришлось бы пересоздавать, чтобы задать планку.
+    // Госцену правим и у уже созданного дома — иначе дом с нулевой ценой пришлось бы
+    // пересоздавать, чтобы вообще выставить его на продажу.
     m_dialogService.showNumberInput(
         player,
-        makeDialog(DialogStyle_INPUT, fmt::format("Дом #{} — стартовая цена", houseId),
-                   "С какой суммы начинаются торги за этот дом?\nНиже неё ставку не примут. 0 — торги с $1.",
+        makeDialog(DialogStyle_INPUT, fmt::format("Дом #{} — гос. цена", houseId),
+                   "Сколько стоит этот дом у государства?\nИгрок платит эту сумму и сразу получает дом.\n"
+                   "0 — дом не продаётся.",
                    "Сохранить", "Назад"),
         [this, playerId = player.getID(), houseId](DialogResponse response, std::int64_t value)
         {
@@ -780,8 +979,13 @@ void HouseSystem::showHousePriceEdit(IPlayer &player, int houseId)
                 return;
             }
             saveToFileAsync();
+            // Статус в лейбле зависит от цены («Продаётся» / «Не продаётся»), а у
+            // занятого дома цена на текст не влияет — refresh безопасен в обоих
+            // случаях: имя берём из сессии владельца, если он в сети.
+            const HouseService::House *house = m_serviceRegister.getService<HouseService>().getHouse(houseId);
+            refreshHouseLabel(houseId, house ? onlineNameOf(house->owner) : std::string());
             player->sendClientMessage(DEBUG_COLOUR,
-                                      u(fmt::format("Дом #{}: старт торгов теперь ${}", houseId, value)));
+                                      u(fmt::format("Дом #{}: гос. цена теперь ${}", houseId, value)));
             showHouseMenu(*player, houseId);
         });
 }
@@ -852,7 +1056,7 @@ void HouseSystem::createHouseFor(IPlayer &player, int interiorIndex, int parking
     saveToFileAsync();
 
     player.sendClientMessage(
-        DEBUG_COLOUR, u(fmt::format("Дом #{} создан ({}). Лимит парковки — {}, старт торгов — ${}. "
+        DEBUG_COLOUR, u(fmt::format("Дом #{} создан ({}). Лимит парковки — {}, гос. цена — ${}. "
                                     "Вход — на вашей позиции, выход — за спиной",
                                     house->id, name, house->parkingCap, house->price)));
 }
@@ -977,11 +1181,21 @@ void HouseSystem::loadOwnershipAsync()
 {
     // Все строки house_owner: (house_id, account_id). Один selectQuery на старте —
     // воркер вычитывает в владеющий вектор, колбэк на главном потоке применяет.
-    using OwnerRow = std::pair<int, std::int64_t>;
+    // house_id, account_id, ник владельца ("" — игрока в player нет либо name NULL).
+    using OwnerRow = std::tuple<int, std::int64_t, std::string>;
     DatabaseManager::selectQuery<std::vector<OwnerRow>>(
         [](mysqlx::Schema schema)
         {
-            mysqlx::RowResult rows = schema.getTable("house_owner").select("house_id", "account_id").execute();
+            // Имя владельца — для 3D-текста у входа. Именно LEFT JOIN: при INNER
+            // строка владения без записи в player (аккаунт удалён вручную) выпала бы
+            // из выборки, дом в памяти стал бы ничейным и его продали бы второй раз,
+            // а write-through (DELETE ... OR account_id) снёс бы чужое владение.
+            // Отдельной колонки под имя не заводим — она разъезжалась бы со сменой
+            // ника, а player.name и так источник правды.
+            mysqlx::SqlResult rows = schema.getSession()
+                                         .sql("SELECT o.house_id, o.account_id, p.name "
+                                              "FROM house_owner o LEFT JOIN player p ON p.id = o.account_id")
+                                         .execute();
             std::vector<OwnerRow> result;
             while (mysqlx::Row row = rows.fetchOne())
             {
@@ -990,7 +1204,14 @@ void HouseSystem::loadOwnershipAsync()
                 // — одна битая запись не теряет всё владение.
                 try
                 {
-                    result.emplace_back(row.get(0).get<int>(), row.get(1).get<std::int64_t>());
+                    // name может быть NULL (LEFT JOIN не нашёл игрока) — тогда пусто,
+                    // лейбл покажет «Частная собственность», владение при этом цело.
+                    std::string ownerName;
+                    if (!row.get(2).isNull())
+                    {
+                        ownerName = row.get(2).get<std::string>();
+                    }
+                    result.emplace_back(row.get(0).get<int>(), row.get(1).get<std::int64_t>(), std::move(ownerName));
                 }
                 catch (...)
                 {
@@ -1006,7 +1227,7 @@ void HouseSystem::loadOwnershipAsync()
             // загрузка) и перекрасить иконку (зелёная -> красная). getHouse-гард:
             // строка владения могла осиротеть (дом удалён из houses.json).
             HouseService &service = m_serviceRegister.getService<HouseService>();
-            for (const auto &[houseId, accountId] : owners)
+            for (const auto &[houseId, accountId, ownerName] : owners)
             {
                 if (accountId == PlayerSessionService::NO_ACCOUNT)
                 {
@@ -1021,6 +1242,7 @@ void HouseSystem::loadOwnershipAsync()
                 // в ту же БД, откуда она только что прочитана).
                 service.setOwnerSilent(houseId, std::to_string(accountId));
                 refreshHouseIcon(houseId);
+                refreshHouseLabel(houseId, ownerName); // «Продаётся» -> «Владелец: ник»
             }
             // Владение в памяти — занятие домов разблокировано; оповещаем
             // подписчиков (SpawnChoiceSystem перерезолвит спавн «Дом» онлайн-игрокам,

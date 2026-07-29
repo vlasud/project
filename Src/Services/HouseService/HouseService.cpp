@@ -9,7 +9,10 @@
 
 namespace
 {
-constexpr float EXIT_DISTANCE = 1.5f; // метров за спину создателя до точки выхода
+// Два метра за спину создателя: там игрок появляется, выходя из дома. Дистанция
+// подобрана владельцем так, чтобы вышедший не остался стоять во входном пикапе
+// (см. Docs/Houses.md, «Риск ре-триггера»).
+constexpr float EXIT_DISTANCE = 2.0f;
 
 } // namespace
 
@@ -103,7 +106,9 @@ const HouseService::House *HouseService::createHouse(const Vector3 &creatorPos, 
     house.id = m_nextId++;
     house.interiorIndex = interiorIndex;
     house.entrance = {Utils::finiteOrZero(creatorPos.x), Utils::finiteOrZero(creatorPos.y), Utils::finiteOrZero(creatorPos.z)};
-    house.exitAngle = Utils::finiteOrZero(creatorAngle);
+    // Угол ОКРУГЛЯЕМ до четверти оборота: сырой поворот игрока (187.34) увёл бы
+    // точку выхода с оси мира, и дом выглядел бы поставленным «под углом».
+    house.exitAngle = Geometry::snapToQuarterTurn(creatorAngle);
     house.exit = backOf(house.entrance, house.exitAngle, EXIT_DISTANCE);
     house.virtualWorld = VW_BASE + house.id;
     house.owner.clear(); // ничейный
@@ -169,8 +174,16 @@ bool HouseService::setOwnerSilent(int houseId, const std::string &ownerKey)
 
 void HouseService::loadHouse(const House &house)
 {
+    House normalized = house;
+    // Тот же инвариант, что и при создании: угол — четверть оборота, точка выхода —
+    // РОВНО EXIT_DISTANCE за спиной от входа. Пересчитываем, а не берём из файла:
+    // иначе дома, созданные до правки, навсегда остались бы со старым углом и старой
+    // дистанцией, а поле exit в json тихо разъезжалось бы с формулой. Источник правды
+    // — вход + угол; exit из файла только для читаемости.
+    normalized.exitAngle = Geometry::snapToQuarterTurn(house.exitAngle);
+    normalized.exit = backOf(normalized.entrance, normalized.exitAngle, EXIT_DISTANCE);
     // Дубликат id из битого/правленого файла — отбрасываем (emplace не перезаписывает).
-    m_houses.emplace(house.id, house);
+    m_houses.emplace(normalized.id, std::move(normalized));
 }
 
 void HouseService::finalizeLoad()

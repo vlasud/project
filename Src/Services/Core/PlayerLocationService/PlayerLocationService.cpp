@@ -1,5 +1,6 @@
 #include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 
+#include "Utils/Sanitize.h"
 #include "glm/geometric.hpp"
 #include <algorithm>
 #include <chrono>
@@ -134,6 +135,16 @@ void PlayerLocationService::teleport(IPlayer &player, const Vector3 &position, u
     setInterior(player, interior);
     setVirtualWorld(player, virtualWorld);
     teleport(player, position);
+}
+
+void PlayerLocationService::teleport(IPlayer &player, const Vector3 &position, unsigned interior, int virtualWorld,
+                                     float facingAngle)
+{
+    teleport(player, position, interior, virtualWorld);
+    // Разворот ПОСЛЕ переноса: setPosition поворот не трогает, а обратный порядок
+    // дал бы кадр со старым положением и новым углом. Мусорный угол гасим — иначе
+    // NaN уехал бы в кватернион и поворот стал бы неопределённым.
+    player.setRotation(GTAQuat(Vector3(0.0f, 0.0f, Utils::finiteOrZero(facingAngle))));
 }
 
 void PlayerLocationService::setInterior(IPlayer &player, unsigned interior)
