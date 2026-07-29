@@ -64,6 +64,7 @@ GasStationSystem::GasStationSystem(ICore &core, const ServiceRegister &serviceRe
       m_stateService(serviceRegister.getService<PlayerStateService>()),
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>()),
+      m_sessionService(serviceRegister.getService<PlayerSessionService>()),
       m_shop(core, serviceRegister, "Лавка при АЗС", stationGoods())
 {
     m_businessService.registerType(BusinessService::Type::GasStation, "АЗС", stationCatalog(),
@@ -240,8 +241,12 @@ void GasStationSystem::refuel(IPlayer &player, int businessId, float litres)
     m_vehicleService.refuel(*vehicle, poured);
 
     // Выручка — в копилку АЗС. У ничейной точки копилки нет: заправка всё равно
-    // работает (иначе мир встанет), деньги просто уходят из экономики.
-    m_businessService.addIncome(businessId, price);
+    // работает (иначе мир встанет), деньги просто уходят из экономики. Заправка
+    // владельцем на своей же АЗС копилку не пополняет — иначе он ездит бесплатно
+    // (см. BusinessService::addIncomeFrom).
+    const PlayerSessionService::Session *session = m_sessionService.get(playerId);
+    m_businessService.addIncomeFrom(businessId, price,
+                                    session ? std::to_string(session->accountId) : std::string());
 
     player.sendClientMessage(INFO_COLOUR, u(fmt::format("Залито {:.0f} л за {}. В баке {:.0f} л", poured,
                                                         Money::text(price), m_vehicleService.getFuel(vehicleId))));

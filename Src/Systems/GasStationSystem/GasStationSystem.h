@@ -6,6 +6,7 @@
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
+#include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Systems/BaseSystem.h"
 #include "Systems/BusinessShop/BusinessShop.h"
 #include "player.hpp"
@@ -43,5 +44,6 @@ class GasStationSystem : public BaseSystem
     PlayerStateService &m_stateService;
     PlayerMoneyService &m_moneyService;
     VehicleService &m_vehicleService;
+    PlayerSessionService &m_sessionService; // ключ аккаунта заправляющегося
     BusinessShop m_shop;
 };

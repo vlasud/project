@@ -238,6 +238,18 @@ bool BusinessService::addIncome(int id, std::int64_t income)
     return true;
 }
 
+bool BusinessService::addIncomeFrom(int id, std::int64_t income, const std::string &buyerKey)
+{
+    const Business *business = getBusiness(id);
+    if (business && !buyerKey.empty() && business->owner == buyerKey)
+    {
+        // Покупает сам владелец: деньги с него уже сняты, но в копилку не кладём —
+        // иначе он вернёт их себе через «Управление бизнесом» и получит товар даром.
+        return false;
+    }
+    return addIncome(id, income);
+}
+
 std::int64_t BusinessService::withdrawBalance(int id)
 {
     const auto it = m_businesses.find(id);

@@ -563,15 +563,21 @@ void PlayerAuthSystem::applyPersistedEquipment(IPlayer &player)
 
     // Раньше тут был хардкод (Deagle+M4, $1500), теперь наличные/оружие приходят
     // из PlayerMoneyPersistService/PlayerWeaponPersistService (см.
-    // Docs/Persistence.md). Наличные реальный баланс получают ещё на загрузке
-    // (спавн их не сбрасывает) — setMoney здесь лишь идемпотентный ресинхрон
-    // HUD на случай, если загрузка ещё не пришла. Оружие сбрасывается на
-    // КАЖДОМ спавне — giveWeapon строго здесь, не раньше: PlayerWeaponService::
-    // onSpawn уже отработал.
-    if (m_moneyPersistService.isMoneyLoaded(playerId))
-        m_moneyService.setMoney(player, m_moneyPersistService.cachedMoney(playerId));
-    else
-        m_awaitingMoneyApply[playerId] = true; // загрузка ещё в пути — применит наблюдатель
+    // Docs/Persistence.md). Оружие сбрасывается на КАЖДОМ спавне — giveWeapon
+    // строго здесь, не раньше: PlayerWeaponService::onSpawn уже отработал.
+    //
+    // НАЛИЧНЫЕ ЗДЕСЬ НЕ ВОССТАНАВЛИВАЮТСЯ ИЗ КЭША. cachedMoney — снимок на момент
+    // логина, он больше никогда не обновляется, а момент спавна задаёт КЛИЕНТ
+    // (RPC Spawn). Абсолютный setMoney(cachedMoney) откатывал бы всё, что случилось
+    // с балансом между логином и спавном: аукционный возврат, /pay, выплату
+    // работы. Это и потеря денег у честного игрока, и печатный станок для нечестного
+    // (перевести деньги сообщнику до спавна, затем «восстановиться» из кэша).
+    // Реальный баланс применяет сама загрузка (PlayerMoneyPersistSystem::loadMoney),
+    // спавн его не сбрасывает; если загрузка ещё в пути — применит наблюдатель.
+    // HUD на спавне и без нас приводит PlayerMoneySystem::onPlayerSpawn
+    // (syncToClient — пуш ТЕКУЩЕГО баланса, без записи состояния).
+    if (!m_moneyPersistService.isMoneyLoaded(playerId))
+        m_awaitingMoneyApply[playerId] = true;
 
     if (m_weaponPersistService.areWeaponsLoaded(playerId))
     {

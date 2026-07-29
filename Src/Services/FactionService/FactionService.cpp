@@ -257,6 +257,22 @@ bool FactionService::setMember(IPlayer &player, int factionId, std::int64_t rank
     if (salary < 0 || salary > MAX_SALARY)
         return false;
 
+    // «Лидер у фракции один» — инвариант ЭТОГО мутатора, а не его вызывателей:
+    // leader выставляется только здесь, и прежние лидеры обязаны сниматься тем же
+    // действием. Пока снятие жило у вызывателя, дев-путь «назначить лидером»
+    // (FactionSystem: DevAction::MakeLeader) его не делал вовсе — фракция получала
+    // двух лидеров сразу, обоих с полными правами (hasPermission пускает лидера
+    // всюду). Цель чистим ДО присваиваний ниже: если она уже была лидером этой же
+    // фракции, флаг ей вернёт сама же запись.
+    if (leader)
+    {
+        for (Member &other : m_members)
+        {
+            if (other.factionId == factionId)
+                other.leader = false;
+        }
+    }
+
     const int oldFactionId = member.factionId;
     member.factionId = factionId;
     member.rankId = rankId;
@@ -278,6 +294,19 @@ bool FactionService::setMember(IPlayer &player, int factionId, std::int64_t rank
             dbSession.startTransaction();
             try
             {
+                // Снятие прежних лидеров — В ЭТОЙ ЖЕ транзакции, а не отдельной
+                // задачей: две задачи уходят разным воркерам на разные соединения, и
+                // порядка их коммитов не существует. Снятие, легшее ПОСЛЕ вставки,
+                // погасило бы is_leader у только что назначенного — в памяти лидер
+                // есть, в БД фракция без лидера, и это всплывает на следующем старте.
+                if (leader)
+                {
+                    table.update()
+                        .set("is_leader", 0)
+                        .where("faction_id = :faction")
+                        .bind("faction", factionId)
+                        .execute();
+                }
                 table.remove().where("account_id = :account").bind("account", accountId).execute();
                 table.insert("account_id", "faction_id", "rank_id", "is_leader", "salary", "skin")
                     .values(accountId, factionId, rankId, leader ? 1 : 0, salary, skin)
@@ -520,28 +549,9 @@ bool FactionService::appointLeader(IPlayer &target, int factionId, std::int64_t 
         rankId = start->id;
     }
 
-    // Прежние лидеры (онлайн-кэш и вся БД) становятся обычными членами —
-    // лидер у фракции один.
-    for (Member &other : m_members)
-    {
-        if (other.factionId == factionId)
-            other.leader = false;
-    }
-    DatabaseManager::throwQuery(
-        [factionId](mysqlx::Schema schema)
-        {
-            schema.getTable("faction_member")
-                .update()
-                .set("is_leader", 0)
-                .where("faction_id = :faction")
-                .bind("faction", factionId)
-                .execute();
-        },
-        [](const std::string &error)
-        {
-            LogManager::log(Error, "FactionService::appointLeader failed: " + error);
-        });
-
+    // Снятие прежних лидеров (память + БД) делает сам setMember при leader = true —
+    // одной транзакцией со вставкой нового. Отдельной задачей это было гонкой:
+    // порядок коммитов двух задач не определён, и снятие могло лечь после вставки.
     return setMember(target, factionId, rankId, true, salary);
 }
 

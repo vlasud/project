@@ -31,6 +31,16 @@ const Colour DEV_COLOUR{200, 200, 200};
 const std::string BUSINESSES_FILE = "businesses.json"; // рабочая директория сервера
 const std::string BUSINESSES_BACKUP = "businesses.json.bak";
 
+// Ключ упорядочивания записей business_owner по бизнесу (DatabaseManager::
+// throwQueryOrdered). Занятие/передача (DELETE+INSERT транзакцией) и снятие владения
+// спорят за ОДНУ строку business_id: без ключа их коммиты могут лечь в обратном
+// порядке, и владение в БД разойдётся с памятью. Бизнес, а не аккаунт: business_id —
+// первичный ключ строки, «один бизнес на аккаунт» держит UNIQUE(account_id) схемы.
+std::string ownershipKey(int businessId)
+{
+    return fmt::format("business_owner:{}", businessId);
+}
+
 // Пикапы: белая стрелка снаружи (вход) и она же внутри (выход).
 constexpr int ENTRANCE_PICKUP_MODEL = 1318;
 constexpr int EXIT_PICKUP_MODEL = 1318;
@@ -769,7 +779,8 @@ void BusinessSystem::onOwnerChanged(int businessId, const std::string &oldKey, c
         return; // ключ не число — не наш формат, персист невозможен
     }
 
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        ownershipKey(businessId),
         [businessId, accountId, claimedAt = TimeFormat::nowUnix()](mysqlx::Schema schema)
         {
             mysqlx::Table table = schema.getTable("business_owner");
@@ -811,7 +822,8 @@ void BusinessSystem::onOwnerChanged(int businessId, const std::string &oldKey, c
 
 void BusinessSystem::eraseOwnershipRow(int businessId)
 {
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        ownershipKey(businessId),
         [businessId](mysqlx::Schema schema)
         {
             schema.getTable("business_owner")

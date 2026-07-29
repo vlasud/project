@@ -498,7 +498,14 @@ void FactionSystem::showHireRankPick(IPlayer &leader, int targetId, std::uint32_
     if (!target)
         return;
 
-    // Ранги пересобираем здесь же — список индексируется в колбэке.
+    // Ранги пересобираем здесь же — список индексируется в колбэке. Пустой список
+    // возможен: гарантию стартового ранга даёт только успешная загрузка
+    // faction_rank, а на её ошибке ranks остаётся пустым до перезапуска.
+    if (faction->ranks.empty())
+    {
+        leader.sendClientMessage(ERROR_COLOUR, u("Ранги организации не загружены"));
+        return;
+    }
     std::string body;
     for (const FactionService::Rank &rank : faction->ranks)
         body += fmt::format("{}\n", rank.name);
@@ -690,6 +697,12 @@ void FactionSystem::showSetRankDialog(IPlayer &leader, int targetId, std::functi
     if (!targetSession)
         return;
 
+    // Пустой список рангов — не абстракция: см. комментарий в showHireRankPick.
+    if (faction->ranks.empty())
+    {
+        leader.sendClientMessage(ERROR_COLOUR, u("Ранги организации не загружены"));
+        return;
+    }
     std::string body;
     for (const FactionService::Rank &rank : faction->ranks)
         body += fmt::format("{}\n", rank.name);
@@ -882,7 +895,13 @@ void FactionSystem::showMyRankMenu(IPlayer &player)
     if (!faction)
         return;
 
-    // Ранги пересобираем здесь — список индексируется в колбэке.
+    // Ранги пересобираем здесь — список индексируется в колбэке. Пустой список
+    // возможен (см. showHireRankPick), а pop_back() на пустой строке — UB.
+    if (faction->ranks.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Ранги организации не загружены"));
+        return;
+    }
     std::string body;
     for (const FactionService::Rank &rank : faction->ranks)
         body += fmt::format("{}\n", rank.name);

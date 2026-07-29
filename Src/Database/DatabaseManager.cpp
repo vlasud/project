@@ -93,7 +93,12 @@ void DatabaseManager::releaseAndPump(SessionWrapper *sessionWrapper)
     {
         PendingThrow pending = std::move(m_queue.front());
         m_queue.pop();
-        throwQuery(std::move(pending.task), std::move(pending.errorCallback));
+        // Именно dispatchThrow, а не throwQuery: ключ этой задачи занят ЕЮ ЖЕ с
+        // момента постановки в бэкпрешер, и повторный заход через submitThrow увидел
+        // бы его занятым — задача встала бы в очередь ожидания самой себя навсегда.
+        // Гард берёт ключ move'ом: если dispatchThrow бросит, ключ отпустится.
+        KeyGuard keyGuard(std::move(pending.key));
+        dispatchThrow(keyGuard, std::move(pending.task), std::move(pending.errorCallback));
     }
     else if (!m_selectQueue.empty())
     {
@@ -106,15 +111,61 @@ void DatabaseManager::releaseAndPump(SessionWrapper *sessionWrapper)
 // Not thread safe, should be called from the main thread
 void DatabaseManager::throwQuery(DatabaseManager::Task task, DatabaseManager::ErrorCallback errorCallback)
 {
+    submitThrow({}, std::move(task), std::move(errorCallback));
+}
+
+void DatabaseManager::throwQueryOrdered(std::string orderingKey, DatabaseManager::Task task,
+                                        DatabaseManager::ErrorCallback errorCallback)
+{
+    submitThrow(std::move(orderingKey), std::move(task), std::move(errorCallback));
+}
+
+void DatabaseManager::submitThrow(std::string key, DatabaseManager::Task task,
+                                  DatabaseManager::ErrorCallback errorCallback)
+{
+    assertMainThread();
+    if (!key.empty() && !m_busyKeys.insert(key).second)
+    {
+        // По ключу уже что-то выполняется — встаём за ним. Свою сессию НЕ занимаем:
+        // иначе ждущие задачи выели бы пул и заблокировали независимые запросы.
+        // Очередь берём отдельной строкой: key уходит в PendingThrow move'ом, и
+        // выражение вида m_keyQueue[key].push(... std::move(key) ...) читалось бы как
+        // зависящее от порядка вычисления.
+        std::queue<PendingThrow> &waiting = m_keyQueue[key];
+        waiting.push(PendingThrow{std::move(task), std::move(errorCallback), key});
+        if (waiting.size() == KEY_QUEUE_WARN_DEPTH)
+        {
+            LogManager::log(Warning, "DatabaseManager: ordered queue for key '" + key +
+                                         "' reached " + std::to_string(KEY_QUEUE_WARN_DEPTH) +
+                                         " entries; the key looks stuck and this row is no longer being written");
+        }
+        return;
+    }
+    // Ключ (если он есть) занят НАМИ — и сразу уходит во владение гарду. Между
+    // insert выше и этой строкой нет ни одной операции, способной бросить, поэтому
+    // «помечен занятым, но никем не освобождается» невозможно по построению.
+    KeyGuard keyGuard(std::move(key));
+    dispatchThrow(keyGuard, std::move(task), std::move(errorCallback));
+}
+
+void DatabaseManager::dispatchThrow(KeyGuard &keyGuard, DatabaseManager::Task task,
+                                    DatabaseManager::ErrorCallback errorCallback)
+{
     assertMainThread();
     SessionWrapper *sessionWrapper = m_sessionPool.get();
     if (sessionWrapper == nullptr)
     {
-        m_queue.push({std::move(task), std::move(errorCallback)});
+        // Ключ остаётся занятым, пока задача лежит в бэкпрешере: иначе следующая
+        // задача того же ключа обогнала бы её и порядок сломался бы именно там, где
+        // его и просили. commit — ТОЛЬКО после успешного push: если он бросит, ключ
+        // отпустит гард вызывающего, а не запрёт навсегда.
+        m_queue.push(PendingThrow{std::move(task), std::move(errorCallback), keyGuard.key()});
+        keyGuard.commit();
         return;
     }
 
-    // Гард вернёт сессию в пул, если addTask бросит до постановки задачи.
+    // Гард сессии вернёт её в пул, если addTask бросит до постановки задачи; ключ на
+    // этом пути держит гард вызывающего.
     SessionGuard guard(sessionWrapper);
 
     ThreadPool::Task<bool> asyncTask;
@@ -125,23 +176,61 @@ void DatabaseManager::throwQuery(DatabaseManager::Task task, DatabaseManager::Er
         return true;
     };
 
-    asyncTask.callback = [sessionWrapper](bool)
+    // Оба гарда — RAII и в успехе тоже: бросок из releaseAndPump иначе не дал бы
+    // освободить ключ, и записи по этой строке встали бы навсегда. Порядок разрушения
+    // обратный объявлению — сперва возвращается сессия, потом освобождается ключ, так
+    // что следующая задача ключа сразу получает освободившийся слот.
+    asyncTask.callback = [sessionWrapper, key = keyGuard.key()](bool)
     {
-        releaseAndPump(sessionWrapper);
+        KeyRelease keyRelease(key);
+        PumpGuard release(sessionWrapper);
     };
 
-    asyncTask.errorCallback = [errorCallback = std::move(errorCallback), sessionWrapper](const std::string &error)
+    asyncTask.errorCallback = [errorCallback = std::move(errorCallback), sessionWrapper,
+                               key = keyGuard.key()](const std::string &error)
     {
+        KeyRelease keyRelease(key);
+        PumpGuard release(sessionWrapper); // релиз даже если обработчик ошибки бросит
         LogManager::log(Error, "DatabaseManager: query failed: " + error);
         if (errorCallback)
         {
             errorCallback(error);
         }
-        releaseAndPump(sessionWrapper);
     };
 
     ThreadPool::addTask(std::move(asyncTask));
-    guard.commit(); // задача принята — релиз теперь делает releaseAndPump в её колбэке
+    guard.commit();    // задача принята — релиз теперь делает releaseAndPump в её колбэке
+    keyGuard.commit(); // ключ теперь отпустит KeyGuard внутри колбэка задачи
+}
+
+// Задача ключа отработала. Если по нему ждут — запускаем следующую, НЕ снимая
+// занятость (её тут же перехватывает эта следующая задача). Если очередь пуста —
+// стираем обе записи, чтобы карты не росли от числа обслуженных ключей.
+void DatabaseManager::releaseKey(const std::string &key)
+{
+    if (key.empty())
+    {
+        return;
+    }
+    assertMainThread();
+
+    const auto queued = m_keyQueue.find(key);
+    if (queued == m_keyQueue.end() || queued->second.empty())
+    {
+        if (queued != m_keyQueue.end())
+        {
+            m_keyQueue.erase(queued);
+        }
+        m_busyKeys.erase(key);
+        return;
+    }
+
+    PendingThrow next = std::move(queued->second.front());
+    queued->second.pop();
+    // Ключ не снимаем — его перехватывает эта следующая задача, и владеет им гард:
+    // бросок из dispatchThrow отпустит ключ, а не оставит очередь запертой.
+    KeyGuard keyGuard(std::move(next.key));
+    dispatchThrow(keyGuard, std::move(next.task), std::move(next.errorCallback));
 }
 
 // selectQuery<T> / dispatchSelect<T> — шаблонные, определены в DatabaseManager.h.

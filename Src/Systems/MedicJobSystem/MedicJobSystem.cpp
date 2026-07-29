@@ -604,8 +604,17 @@ void MedicJobSystem::onMedCommand(IPlayer &medic, int targetId)
         return;
     }
 
+    // Кулдаун ключуется АККАУНТОМ пациента, а не слотом: по слоту его обнулял бы
+    // релог. Без сессии лечить некого — пациент не опознан.
+    const PlayerSessionService::AccountId patientAccount = m_sessionService.getAccountId(targetId);
+    if (patientAccount == PlayerSessionService::NO_ACCOUNT)
+    {
+        medic.sendClientMessage(ERROR_COLOUR, u("Этот игрок ещё не вошёл в аккаунт"));
+        return;
+    }
+
     const TimePoint timeNow = now();
-    const int cooldownLeft = m_medicJobService.healCooldownLeft(targetId, timeNow);
+    const int cooldownLeft = m_medicJobService.healCooldownLeft(patientAccount, timeNow);
     if (cooldownLeft > 0)
     {
         medic.sendClientMessage(
@@ -615,7 +624,7 @@ void MedicJobSystem::onMedCommand(IPlayer &medic, int targetId)
     }
 
     m_healthService.setHealth(*patient, PlayerHealthService::MAX_HEALTH);
-    m_medicJobService.markHealed(targetId, timeNow);
+    m_medicJobService.markHealed(patientAccount, timeNow);
 
     const PlayerSessionService::AccountId accountId = m_sessionService.getAccountId(medicId);
     m_medicWalletService.add(medicId, accountId, PAY_PER_HEAL);
@@ -805,8 +814,10 @@ void MedicJobSystem::onSessionEnd(IPlayer &player)
             notifyQueueShift();
         }
     }
-    m_medicWalletService.reset(playerId);   // teardown ТОЛЬКО кэша — баланс в БД остаётся
-    m_medicJobService.resetPatient(playerId); // чужой кулдаун лечения не наследуем
+    m_medicWalletService.reset(playerId); // teardown ТОЛЬКО кэша — баланс в БД остаётся
+    // Кулдаун лечения ЗДЕСЬ НЕ СБРАСЫВАЕТСЯ: он привязан к аккаунту, а не к слоту,
+    // и сброс на выходе означал бы «релогнулся — лечись снова» (пара «врач +
+    // сообщник» фармила бы выплату каждые полминуты).
 }
 
 void MedicJobSystem::onPlayerDeath(IPlayer &player)

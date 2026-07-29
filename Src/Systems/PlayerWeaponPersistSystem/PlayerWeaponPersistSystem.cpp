@@ -95,7 +95,10 @@ void PlayerWeaponPersistSystem::persistWeapons(IPlayer &player, const PlayerSess
     std::vector<std::pair<std::uint8_t, int>> weapons;
     m_weaponService.getWeapons(playerId, weapons);
 
-    DatabaseManager::throwQuery(
+    // Упорядочено по аккаунту — тот же двойной save-канал, что у денег и вещей
+    // (см. PlayerMoneyPersistSystem::persistMoney).
+    DatabaseManager::throwQueryOrdered(
+        fmt::format("player_weapon:{}", session.accountId),
         [accountId = session.accountId, weapons = std::move(weapons)](mysqlx::Schema schema)
         {
             mysqlx::Table table = schema.getTable("player_weapon");

@@ -17,7 +17,8 @@ BusinessShop::BusinessShop(ICore &core, const ServiceRegister &serviceRegister, 
     : m_core(core), m_businessService(serviceRegister.getService<BusinessService>()),
       m_inventory(serviceRegister.getService<InventoryService>()),
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
-      m_dialogService(serviceRegister.getService<PlayerDialogService>()), m_title(std::move(title)),
+      m_dialogService(serviceRegister.getService<PlayerDialogService>()),
+      m_sessionService(serviceRegister.getService<PlayerSessionService>()), m_title(std::move(title)),
       m_goods(std::move(goods))
 {
 }
@@ -78,7 +79,10 @@ void BusinessShop::buy(IPlayer &player, int businessId, std::size_t goodIndex)
 
     // Выручка — в копилку ЭТОГО бизнеса: владелец заберёт её через «Управление».
     // Бизнес мог быть снесён, пока висел диалог — тогда доход просто некуда класть.
-    m_businessService.addIncome(businessId, good.price);
+    // Покупка у самого себя копилку не пополняет (см. addIncomeFrom).
+    const PlayerSessionService::Session *session = m_sessionService.get(playerId);
+    m_businessService.addIncomeFrom(businessId, good.price,
+                                    session ? std::to_string(session->accountId) : std::string());
 
     player.sendClientMessage(INFO_COLOUR,
                              u(fmt::format("Куплено: {} за {}. Теперь у вас {}", m_inventory.itemName(good.itemType),

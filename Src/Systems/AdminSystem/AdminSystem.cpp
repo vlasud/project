@@ -924,7 +924,10 @@ void AdminSystem::cmdDevSkin(IPlayer &actor, int targetId, int skin)
     // мы — то же значение, что положили в personalSkin.setSkin), расхождения нет;
     // редкая гонка со снимком саморасхлопывается на след. автосейве.
     // UPDATE без чтения обратно — к игроку в колбэке не обращаемся, serial не нужен.
-    DatabaseManager::throwQuery(
+    // Ключ общий со снимком PlayerPersonalSkinSystem: колонка player.skin одна на
+    // двоих, и порядок между ними должен быть определён.
+    DatabaseManager::throwQueryOrdered(
+        fmt::format("player_skin:{}", accountId),
         [accountId, skin](mysqlx::Schema schema)
         {
             schema.getTable("player").update().set("skin", skin).where("id = :id").bind("id", accountId).execute();

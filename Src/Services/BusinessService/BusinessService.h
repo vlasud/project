@@ -138,6 +138,11 @@ class BusinessService final : public IService
     void subscribeOwnerChanged(OwnerChangedObserver observer);
     // Начислить доход в копилку бизнеса (income > 0). false — бизнеса нет.
     bool addIncome(int id, std::int64_t income);
+    // То же, но от КОНКРЕТНОГО покупателя. Выручка с самого владельца в копилку НЕ
+    // идёт: иначе он выкупает у себя товар и тут же забирает те же деньги обратно —
+    // бесконечные бесплатные аптечки/инструменты/топливо и полный обход денежного
+    // стока. Деньги с покупателя списывает вызывающий в любом случае.
+    bool addIncomeFrom(int id, std::int64_t income, const std::string &buyerKey);
     // Забрать всю копилку: возвращает снятую сумму (0 — пусто/нет бизнеса).
     std::int64_t withdrawBalance(int id);
 

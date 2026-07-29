@@ -23,8 +23,9 @@ constexpr Milliseconds AUCTION_TICK{60000};
 // и затереть выданное. Задержка снимает зависимость от порядка наблюдателей.
 constexpr Milliseconds REFUND_DELAY{2000};
 
-// Потолок ставки: защита от опечатки и от арифметики на грани int64.
-constexpr std::int64_t MAX_BID = 100000000;
+// Потолок ставки живёт в сервисе рядом с minimumBid — иначе они рассогласуются и
+// ставка ровно на потолке станет непробиваемой.
+constexpr std::int64_t MAX_BID = AuctionService::MAX_BID;
 
 std::string bidStatus(bool leading)
 {
@@ -268,8 +269,16 @@ void AuctionSystem::showBidInput(IPlayer &player, std::size_t category, int lotI
         return;
     }
 
-    std::string body =
-        fmt::format("Минимальная ставка: {}\n\n", Money::text(m_auctionService.minimumBid(category, lotId)));
+    const std::int64_t minimum = m_auctionService.minimumBid(category, lotId);
+    if (minimum <= 0)
+    {
+        // Высшая ставка упёрлась в потолок — перебить нечем. Честно говорим это
+        // вместо диалога, который отвергнет любое введённое число.
+        player.sendClientMessage(ERROR_COLOUR, u("Ставка уже на максимуме — перебить её нельзя"));
+        return;
+    }
+
+    std::string body = fmt::format("Минимальная ставка: {}\n\n", Money::text(minimum));
     body += "Деньги списываются сразу. Если вы проиграете аукцион\n";
     body += "или заберёте ставку — они вернутся полностью.\n\nВведите сумму:";
 
@@ -324,6 +333,11 @@ void AuctionSystem::placeBid(IPlayer &player, std::size_t category, int lotId, s
         return;
     }
     const std::int64_t minimum = m_auctionService.minimumBid(category, lotId);
+    if (minimum <= 0)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Ставка уже на максимуме — перебить её нельзя"));
+        return;
+    }
     if (amount < minimum)
     {
         player.sendClientMessage(ERROR_COLOUR, u(fmt::format("Минимальная ставка — {}", Money::text(minimum))));

@@ -121,7 +121,12 @@ void InventorySystem::persistItems(IPlayer &player, const PlayerSessionService::
     // accountId валиден.
     std::vector<std::pair<int, int>> snapshot = m_inventoryService.snapshot(playerId);
 
-    DatabaseManager::throwQuery(
+    // Упорядочено по аккаунту: снимок абсолютный, а save-канал может отработать
+    // дважды по одному игроку в одном стеке (см. PlayerMoneyPersistSystem::
+    // persistMoney) и на автосейве рядом с концом сессии. Сегодня оба снимка
+    // совпадают — ключ держит это верным и когда между ними что-то изменится.
+    DatabaseManager::throwQueryOrdered(
+        fmt::format("player_items:{}", session.accountId),
         [accountId = session.accountId, snapshot = std::move(snapshot)](mysqlx::Schema schema)
         {
             // REPLACE снимка В ОДНОЙ ТРАНЗАКЦИИ: удаляем все строки аккаунта и

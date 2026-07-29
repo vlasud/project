@@ -92,22 +92,19 @@ int MedicJobService::workerOfVehicle(int vehicleId) const
     return -1;
 }
 
-bool MedicJobService::canHeal(int patientId, TimePoint now) const
+bool MedicJobService::canHeal(AccountId patientAccount, TimePoint now) const
 {
-    return healCooldownLeft(patientId, now) == 0;
+    return healCooldownLeft(patientAccount, now) == 0;
 }
 
-int MedicJobService::healCooldownLeft(int patientId, TimePoint now) const
+int MedicJobService::healCooldownLeft(AccountId patientAccount, TimePoint now) const
 {
-    if (!validId(patientId))
+    const auto it = m_healedAt.find(patientAccount);
+    if (patientAccount <= 0 || it == m_healedAt.end())
     {
-        return 0;
+        return 0; // этот аккаунт ещё не лечили
     }
-    const TimePoint healedAt = m_healedAt[patientId];
-    if (healedAt.time_since_epoch().count() == 0)
-    {
-        return 0; // ещё не лечили в этой сессии
-    }
+    const TimePoint healedAt = it->second;
     const auto elapsed = now - healedAt;
     if (elapsed >= HEAL_COOLDOWN)
     {
@@ -208,13 +205,29 @@ MedicJobService::Promotion MedicJobService::promoteQueue(const SpotUsable &usabl
     return {playerId, spot};
 }
 
-void MedicJobService::markHealed(int patientId, TimePoint now)
+void MedicJobService::markHealed(AccountId patientAccount, TimePoint now)
 {
-    if (!validId(patientId))
+    if (patientAccount <= 0)
     {
         return;
     }
-    m_healedAt[patientId] = now;
+    // Просроченные записи снимаем здесь же. Ключ — аккаунт, а аккаунты за аптайм не
+    // кончаются: без чистки карта росла бы всю работу сервера. Лечение — холодный
+    // путь (команда врача), проход по десяткам записей на нём дешевле отдельного
+    // таймера. Снятая запись неотличима от «не лечили»: healCooldownLeft на обеих
+    // отдаёт 0.
+    for (auto it = m_healedAt.begin(); it != m_healedAt.end();)
+    {
+        if (now - it->second >= HEAL_COOLDOWN)
+        {
+            it = m_healedAt.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    m_healedAt[patientAccount] = now;
 }
 
 void MedicJobService::endShift(int playerId)
@@ -226,15 +239,6 @@ void MedicJobService::endShift(int playerId)
     releaseSpot(playerId);
     removeFromQueue(playerId);
     m_state[playerId] = State{};
-}
-
-void MedicJobService::resetPatient(int playerId)
-{
-    if (!validId(playerId))
-    {
-        return;
-    }
-    m_healedAt[playerId] = TimePoint{};
 }
 
 // ------------------------------------------------------------------ private

@@ -145,7 +145,10 @@ void WeaponProficiencySystem::persistProficiency(IPlayer &player, const PlayerSe
     for (std::size_t i = 0; i < TRACKED_WEAPONS.size(); ++i)
         snapshot[i] = {TRACKED_WEAPONS[i], m_proficiencyService.getSkill(playerId, TRACKED_WEAPONS[i])};
 
-    DatabaseManager::throwQuery(
+    // Упорядочено по аккаунту — тот же двойной save-канал, что у денег и вещей
+    // (см. PlayerMoneyPersistSystem::persistMoney).
+    DatabaseManager::throwQueryOrdered(
+        fmt::format("player_weapon_skill:{}", session.accountId),
         [accountId = session.accountId, snapshot](mysqlx::Schema schema)
         {
             // UPSERT (как BankService): первый заход создаёт строку, последующие

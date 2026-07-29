@@ -4,6 +4,7 @@
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "Services/InventoryService/InventoryService.h"
+#include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/ServiceRegister.h"
 #include "player.hpp"
 #include <cstdint>
@@ -45,6 +46,7 @@ class BusinessShop
     InventoryService &m_inventory;
     PlayerMoneyService &m_moneyService;
     PlayerDialogService &m_dialogService;
+    PlayerSessionService &m_sessionService; // ключ аккаунта покупателя — для addIncomeFrom
 
     std::string m_title;
     std::vector<Good> m_goods;

@@ -166,7 +166,11 @@ std::int64_t AuctionService::minimumBid(std::size_t category, int lotId) const
     // тоже поднимают только вверх.
     const std::int64_t floor = std::max<std::int64_t>(lot.minPrice, 1);
     const Bid *best = highestBid(category, lotId);
-    return best ? std::max(floor, best->amount + 1) : floor;
+    const std::int64_t minimum = best ? std::max(floor, best->amount + 1) : floor;
+    // Минимум выше потолка означал бы «перебить нельзя вообще»: 0 — торги по лоту
+    // закрыты для новых ставок, привод объяснит это игроку, а не покажет
+    // недостижимое число.
+    return minimum > MAX_BID ? 0 : minimum;
 }
 
 std::vector<int> AuctionService::lotsOf(std::size_t category, const std::string &ownerKey) const
@@ -214,7 +218,11 @@ bool AuctionService::placeBid(std::size_t category, int lotId, const std::string
     {
         return false; // лота нет либо он уже не разыгрывается
     }
-    if (amount < minimumBid(category, lotId))
+    // 0 — «перебить нельзя» (высшая ставка упёрлась в потолок), а НЕ «минимума нет»:
+    // без этой ветки сравнение `amount < 0` пропустило бы любую сумму, деньги
+    // списались бы, а лидером игрок не стал — ставка легла бы вровень с высшей.
+    const std::int64_t minimum = minimumBid(category, lotId);
+    if (minimum <= 0 || amount < minimum)
     {
         return false;
     }
@@ -390,7 +398,7 @@ void AuctionService::addPendingRefund(const std::string &ownerKey, std::int64_t 
         return;
     }
     m_pendingRefunds[ownerKey] += amount;
-    persistPlayer(ownerKey);
+    persistRefundDelta(ownerKey, amount);
 }
 
 std::int64_t AuctionService::pendingRefund(const std::string &ownerKey) const
@@ -408,7 +416,7 @@ std::int64_t AuctionService::takePendingRefund(const std::string &ownerKey)
     }
     const std::int64_t amount = it->second;
     m_pendingRefunds.erase(it); // снимаем СРАЗУ — повторный вход не выдаст второй раз
-    persistPlayer(ownerKey);
+    persistRefundDelta(ownerKey, -amount);
     return amount;
 }
 
@@ -418,7 +426,7 @@ void AuctionService::markOutbid(const std::string &ownerKey)
     {
         return; // пометка уже стоит — уведомление однократное
     }
-    persistPlayer(ownerKey);
+    persistOutbid(ownerKey, true);
 }
 
 bool AuctionService::takeOutbid(const std::string &ownerKey)
@@ -427,7 +435,7 @@ bool AuctionService::takeOutbid(const std::string &ownerKey)
     {
         return false;
     }
-    persistPlayer(ownerKey);
+    persistOutbid(ownerKey, false);
     return true;
 }
 
@@ -436,6 +444,16 @@ bool AuctionService::takeOutbid(const std::string &ownerKey)
 std::int64_t AuctionService::accountOf(const std::string &ownerKey)
 {
     return ownerKey.empty() ? 0 : std::strtoll(ownerKey.c_str(), nullptr, 10);
+}
+
+std::string AuctionService::orderingKeyOfLot(const std::string &categoryKey, int lotId)
+{
+    // Единица упорядочивания — ЛОТ ЦЕЛИКОМ, а не отдельная ставка: eraseLot сносит
+    // строку лота вместе со ВСЕМИ его ставками, поэтому он обязан быть упорядочен и
+    // относительно чужих persistBid по этому лоту. Ключ на ставку такую пару не
+    // связал бы, и снятие лота могло бы лечь после ставки, поданной уже на новые
+    // торги — деньги за неё списаны, а строки в БД нет.
+    return fmt::format("auction:{}:{}", categoryKey, lotId);
 }
 
 void AuctionService::load()
@@ -563,7 +581,8 @@ void AuctionService::persistBid(const std::string &categoryKey, int lotId, const
     {
         return; // не наш формат ключа — писать нечего
     }
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        orderingKeyOfLot(categoryKey, lotId),
         [categoryKey, lotId, accountId, amount](mysqlx::Schema schema)
         {
             schema.getSession()
@@ -586,7 +605,8 @@ void AuctionService::eraseBid(const std::string &categoryKey, int lotId, const s
     {
         return;
     }
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        orderingKeyOfLot(categoryKey, lotId),
         [categoryKey, lotId, accountId](mysqlx::Schema schema)
         {
             schema.getTable("auction_bid")
@@ -606,7 +626,8 @@ void AuctionService::eraseBid(const std::string &categoryKey, int lotId, const s
 
 void AuctionService::persistLot(const std::string &categoryKey, int lotId, std::int64_t endsAtUnix) const
 {
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        orderingKeyOfLot(categoryKey, lotId),
         [categoryKey, lotId, endsAtUnix](mysqlx::Schema schema)
         {
             schema.getSession()
@@ -624,7 +645,8 @@ void AuctionService::persistLot(const std::string &categoryKey, int lotId, std::
 
 void AuctionService::eraseLot(const std::string &categoryKey, int lotId) const
 {
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        orderingKeyOfLot(categoryKey, lotId),
         [categoryKey, lotId](mysqlx::Schema schema)
         {
             // Срок и ставки — одной транзакцией: лот без срока не дозреет никогда,
@@ -659,45 +681,66 @@ void AuctionService::eraseLot(const std::string &categoryKey, int lotId) const
         });
 }
 
-void AuctionService::persistPlayer(const std::string &ownerKey) const
+void AuctionService::persistRefundDelta(const std::string &ownerKey, std::int64_t delta) const
+{
+    const std::int64_t accountId = accountOf(ownerKey);
+    if (accountId <= 0 || delta == 0)
+    {
+        return;
+    }
+    // ОТНОСИТЕЛЬНАЯ запись, а не абсолютная. Задачи уходят в многопоточный пул и
+    // порядок их выполнения не определён: два возврата, начисленные в один тик
+    // итогов, при абсолютной записи затёрли бы друг друга и съели деньги.
+    //
+    // Обе ветки применяют ОДНУ И ТУ ЖЕ дельту и ничем её не клампят: безопасной
+    // перестановку задач делает именно коммутативность сложения. Кламп нижней
+    // границей (GREATEST(refund + ?, 0)) её ломает — «-N», выполнившийся раньше
+    // своего «+N», обрезался бы в ноль, а пришедший следом «+N» вернул бы в БД уже
+    // выданную наличными сумму, и на ближайшем рестарте она выдалась бы второй раз.
+    // То же и у ветки INSERT: клампить стартовое значение нельзя по той же причине.
+    //
+    // Отрицательный остаток в строке поэтому допустим: он промежуточный и гасится
+    // парным начислением, а до игрока не доходит — загрузка берёт строку только при
+    // refund > 0 (см. load).
+    DatabaseManager::throwQuery(
+        [accountId, delta](mysqlx::Schema schema)
+        {
+            schema.getSession()
+                .sql("INSERT INTO auction_player (account_id, refund, outbid) VALUES (?, ?, 0) "
+                     "ON DUPLICATE KEY UPDATE refund = refund + ?")
+                .bind(accountId, delta, delta)
+                .execute();
+        },
+        [accountId, delta](const std::string &error)
+        {
+            LogManager::log(Error, fmt::format("AuctionService: не записан возврат {} аккаунту {}: {}", delta,
+                                               accountId, error));
+        });
+}
+
+void AuctionService::persistOutbid(const std::string &ownerKey, bool marked) const
 {
     const std::int64_t accountId = accountOf(ownerKey);
     if (accountId <= 0)
     {
         return;
     }
-    const std::int64_t refund = pendingRefund(ownerKey);
-    const int outbid = m_outbid.count(ownerKey) ? 1 : 0;
-
-    if (refund <= 0 && outbid == 0)
-    {
-        DatabaseManager::throwQuery(
-            [accountId](mysqlx::Schema schema)
-            {
-                schema.getTable("auction_player")
-                    .remove()
-                    .where("account_id = :account")
-                    .bind("account", accountId)
-                    .execute();
-            },
-            [accountId](const std::string &error)
-            {
-                LogManager::log(Error,
-                                fmt::format("AuctionService: не снята строка аккаунта {}: {}", accountId, error));
-            });
-        return;
-    }
+    // Пометка — отдельная колонка отдельным запросом: смешивать её с суммой в одной
+    // абсолютной записи нельзя (см. persistRefundDelta). Строку с нулями НЕ удаляем:
+    // DELETE, переставший местами с INSERT возврата, стёр бы деньги. Пустая строка
+    // на аккаунт безвредна, загрузка её просто пропускает.
+    const int flag = marked ? 1 : 0;
     DatabaseManager::throwQuery(
-        [accountId, refund, outbid](mysqlx::Schema schema)
+        [accountId, flag](mysqlx::Schema schema)
         {
             schema.getSession()
-                .sql("INSERT INTO auction_player (account_id, refund, outbid) VALUES (?, ?, ?) "
-                     "ON DUPLICATE KEY UPDATE refund = VALUES(refund), outbid = VALUES(outbid)")
-                .bind(accountId, refund, outbid)
+                .sql("INSERT INTO auction_player (account_id, refund, outbid) VALUES (?, 0, ?) "
+                     "ON DUPLICATE KEY UPDATE outbid = VALUES(outbid)")
+                .bind(accountId, flag)
                 .execute();
         },
         [accountId](const std::string &error)
         {
-            LogManager::log(Error, fmt::format("AuctionService: не записан аккаунт {}: {}", accountId, error));
+            LogManager::log(Error, fmt::format("AuctionService: не записана пометка аккаунта {}: {}", accountId, error));
         });
 }

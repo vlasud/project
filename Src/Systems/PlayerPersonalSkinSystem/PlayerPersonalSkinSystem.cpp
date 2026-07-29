@@ -2,6 +2,7 @@
 
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
+#include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
 
 PlayerPersonalSkinSystem::PlayerPersonalSkinSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -35,7 +36,11 @@ PlayerPersonalSkinSystem::PlayerPersonalSkinSystem(ICore &core, const ServiceReg
         {
             const int skin = m_personalSkinService.getSkin(player.getID());
             const PlayerSessionService::AccountId accountId = session.accountId;
-            DatabaseManager::throwQuery(
+            // Упорядочено по аккаунту — тот же двойной save-канал, что у денег и вещей
+            // (см. PlayerMoneyPersistSystem::persistMoney). Тот же ключ берёт
+            // AdminSystem::cmdDevSkin: колонка player.skin у них общая.
+            DatabaseManager::throwQueryOrdered(
+                fmt::format("player_skin:{}", accountId),
                 [accountId, skin](mysqlx::Schema schema)
                 {
                     schema.getTable("player")

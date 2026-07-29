@@ -91,7 +91,15 @@ void PlayerMoneyPersistSystem::persistMoney(IPlayer &player, const PlayerSession
         return;
 
     const unsigned long long cash = m_moneyService.getMoney(playerId);
-    DatabaseManager::throwQuery(
+    // Упорядочено по аккаунту. Снимок АБСОЛЮТНЫЙ (cash = VALUES(cash)), а save-канал
+    // умеет отработать ДВАЖДЫ ПО ОДНОМУ игроку в одном стеке: PlayerSessionService::
+    // end сперва гоняет save-наблюдателей, а затем end-наблюдателей, и TaxiJobSystem
+    // из end-фазы возвращает депозит пассажиру и зовёт save() повторно. Колбэки задач
+    // выполняются только из onTick, поэтому обе записи гарантированно оказываются в
+    // полёте одновременно — без ключа более старый снимок мог лечь последним и съесть
+    // возвращённые деньги. Тот же ключ упорядочивает автосейв против конца сессии.
+    DatabaseManager::throwQueryOrdered(
+        fmt::format("player_money:{}", session.accountId),
         [accountId = session.accountId, cash](mysqlx::Schema schema)
         {
             schema.getSession()

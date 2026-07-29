@@ -1038,6 +1038,11 @@ void TaxiJobSystem::onSessionEnd(IPlayer &player)
     if (driverId >= 0)
     {
         closeRide(driverId, /*delivered=*/false, "Вы вышли из игры, не доехав");
+        // Мы в END-фазе, а снимок наличных персистеры сняли в SAVE-фазе ДО нас
+        // (PlayerSessionService::end). Без повторного персиста возвращённый депозит
+        // остался бы только в памяти и умер бы вместе с сессией — игрок заплатил
+        // и не получил ничего. save() идемпотентен, лишний UPSERT безвреден.
+        m_sessionService.save(player);
     }
 
     if (m_taxiJobService.isWorking(playerId))

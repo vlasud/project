@@ -2,11 +2,13 @@
 
 #include "Macro.h"
 #include "Services/IService.h"
+#include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "types.hpp"
 #include <array>
 #include <functional>
 #include <chrono>
 #include <deque>
+#include <unordered_map>
 #include <vector>
 
 class MedicJobSystem;
@@ -26,8 +28,8 @@ class MedicJobSystem;
 // заблокировал бы точку, сидя на ней).
 //
 // Кулдаун лечения принадлежит ПАЦИЕНТУ, а не врачу: иначе два врача лечили бы одного
-// и того же по очереди. Живёт в памяти сессии — слот сбрасывается на её конце, чтобы
-// переиспользованный playerId не унаследовал чужой кулдаун.
+// и того же по очереди. Ключуется АККАУНТОМ и конец сессии его НЕ снимает — иначе
+// релог обнулял бы кулдаун. Живёт в памяти: рестарт сервера его сбрасывает.
 //
 // Побочные эффекты (спавн/деспавн машин, скины, деньги, таймеры) — на приводе
 // MedicJobSystem; сервис только считает состояние.
@@ -43,7 +45,13 @@ class MedicJobService final : public IService
 
     // Анти-абуз: одного пациента нельзя лечить чаще. Кулдаун общий на пациента —
     // сменой врача его не обойти.
+    //
+    // Ключ — АККАУНТ, а не слот playerId: слот освобождается на выходе, и по слоту
+    // кулдаун обнулялся бы релогом пациента (пара «врач + сообщник» фармила бы
+    // выплату каждые полминуты вместо десяти минут).
     static constexpr std::chrono::minutes HEAL_COOLDOWN{10};
+
+    using AccountId = PlayerSessionService::AccountId;
 
     enum class Phase
     {
@@ -66,9 +74,9 @@ class MedicJobService final : public IService
     int workerOfVehicle(int vehicleId) const;
 
     // --- кулдаун лечения (принадлежит пациенту) ---
-    bool canHeal(int patientId, TimePoint now) const;
+    bool canHeal(AccountId patientAccount, TimePoint now) const;
     // Сколько секунд кулдауна осталось (0 — можно лечить).
-    int healCooldownLeft(int patientId, TimePoint now) const;
+    int healCooldownLeft(AccountId patientAccount, TimePoint now) const;
 
   private:
     // --- вызывается ТОЛЬКО MedicJobSystem ---
@@ -112,14 +120,11 @@ class MedicJobService final : public IService
     Promotion promoteQueue(const SpotUsable &usable);
 
     // Зафиксировать лечение пациента: кулдаун стартует с этого момента.
-    void markHealed(int patientId, TimePoint now);
+    void markHealed(AccountId patientAccount, TimePoint now);
 
     // Завершить смену/увольнение: снять точку, убрать из очереди, phase ->
     // NotWorking. Кошелёк и кулдаун лечения НЕ трогает. Идемпотентно.
     void endShift(int playerId);
-
-    // Сброс кулдауна лечения слота (конец сессии).
-    void resetPatient(int playerId);
 
     struct State
     {
@@ -134,8 +139,8 @@ class MedicJobService final : public IService
 
     std::array<State, MAX_PLAYERS> m_state{};
     std::array<int, SPOT_COUNT> m_spotHolder{}; // playerId держателя или -1
-    // Момент последнего лечения ПАЦИЕНТА (не врача). Дефолтный TimePoint{} — «не
-    // лечили никогда», кулдаун не действует.
-    std::array<TimePoint, MAX_PLAYERS> m_healedAt{};
+    // Момент последнего лечения ПАЦИЕНТА (не врача). Записи нет — аккаунт не лечили
+    // либо кулдаун истёк и запись снята (markHealed чистит просроченные).
+    std::unordered_map<AccountId, TimePoint> m_healedAt; // аккаунт -> когда лечили
     std::deque<int> m_queue;
 };

@@ -9,6 +9,23 @@
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
 
+namespace
+{
+// Ключ упорядочивания записей семьи (DatabaseManager::throwQueryOrdered). Единица —
+// СЕМЬЯ целиком: роспуск сносит и её строку, и все строки состава, поэтому он обязан
+// быть упорядочен относительно вступлений/исключений по той же семье. Ключ на аккаунт
+// эту пару не связал бы.
+//
+// Квалификация DELETE обеими колонками (см. leaveFamily/kickMember) закрывает ДРУГОЙ
+// случай — «вышел и тут же вступил в ЧУЖУЮ семью», где ключи разные и порядка между
+// ними нет. Здесь же остаётся «вступил -> вышел из ТОЙ ЖЕ семьи»: переставленный
+// вперёд DELETE не находит строку, а легший следом INSERT воскрешает ушедшего.
+std::string familyKey(int familyId)
+{
+    return fmt::format("family:{}", familyId);
+}
+} // namespace
+
 FamilyService::FamilyService()
 {
     m_playerFamily.fill(NO_FAMILY);
@@ -166,7 +183,8 @@ FamilyService::Result FamilyService::createFamily(IPlayer &player, AccountId acc
     if (playerId >= 0 && playerId < MAX_PLAYERS)
         m_playerFamily[playerId] = id;
 
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        familyKey(id),
         [id, name, accountId, now, ownerName = player.getName().to_string()](mysqlx::Schema schema)
         {
             // family + первая строка family_member (владелец) — одной транзакцией,
@@ -226,7 +244,8 @@ FamilyService::Result FamilyService::joinFamily(IPlayer &player, AccountId accou
     if (playerId >= 0 && playerId < MAX_PLAYERS)
         m_playerFamily[playerId] = familyId;
 
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        familyKey(familyId),
         [familyId, accountId, memberName, now](mysqlx::Schema schema)
         {
             schema.getTable("family_member")
@@ -269,7 +288,8 @@ bool FamilyService::leaveFamily(IPlayer &player, AccountId accountId)
     // DELETE квалифицирован ОБЕИМИ колонками: воркер-пул не гарантирует порядок
     // async-запросов, и «вышел -> тут же вступил в другую семью» мог бы удалить
     // строку уже НОВОЙ семьи, будь фильтр только по account_id.
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        familyKey(familyId),
         [accountId, familyId](mysqlx::Schema schema)
         {
             schema.getTable("family_member")
@@ -307,7 +327,8 @@ FamilyService::Result FamilyService::kickMember(int ownerPlayerId, AccountId tar
 
     // Оба фильтра — как в leaveFamily: без family_id гонка порядка async-запросов
     // («кикнут -> сразу вступил в другую») могла бы стереть строку новой семьи.
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        familyKey(familyId),
         [targetAccountId, familyId](mysqlx::Schema schema)
         {
             schema.getTable("family_member")
@@ -346,7 +367,8 @@ void FamilyService::destroyFamily(int familyId)
 
     m_families.erase(familyId);
 
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        familyKey(familyId),
         [familyId](mysqlx::Schema schema)
         {
             mysqlx::Session &session = schema.getSession();
@@ -476,7 +498,8 @@ void FamilyService::finalizeLoad()
             family.ownerAccountId = family.members.front().accountId;
             const int familyId = family.id;
             const AccountId newOwner = family.ownerAccountId;
-            DatabaseManager::throwQuery(
+            DatabaseManager::throwQueryOrdered(
+                familyKey(familyId),
                 [familyId, newOwner](mysqlx::Schema schema)
                 {
                     schema.getTable("family")

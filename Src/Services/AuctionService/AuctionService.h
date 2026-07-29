@@ -49,6 +49,11 @@ class AuctionService final : public IService
     // Сколько длятся торги с ПЕРВОЙ ставки.
     static constexpr std::int64_t AUCTION_SECONDS = 2 * 24 * 60 * 60;
 
+    // Потолок ставки. Живёт ЗДЕСЬ, рядом с minimumBid: пока потолок был у привода,
+    // ставка ровно на нём делала минимум = потолок + 1, и лот становился
+    // непробиваемым — ввести такое число не давал сам же привод.
+    static constexpr std::int64_t MAX_BID = 100000000;
+
     // Ставка. Одна на аккаунт в пределах лота.
     struct Bid
     {
@@ -126,7 +131,8 @@ class AuctionService final : public IService
     std::size_t bidCount(std::size_t category, int lotId) const;
     std::int64_t endsAt(std::size_t category, int lotId) const;                 // 0 — срок не идёт
     // Минимально принимаемая ставка: не ниже стартовой планки лота и строго выше
-    // текущей высшей. 0 — лота нет.
+    // текущей высшей. 0 — лота нет ЛИБО перебить его уже нельзя (минимум упёрся
+    // в MAX_BID); вызывающий обязан отличать это от «ставь сколько хочешь».
     std::int64_t minimumBid(std::size_t category, int lotId) const;
     // Лоты категории, где у аккаунта есть ставка (отсортированы по id).
     std::vector<int> lotsOf(std::size_t category, const std::string &ownerKey) const;
@@ -172,13 +178,21 @@ class AuctionService final : public IService
 
     // --- write-through (внутри сервиса, как в FamilyService) ---
     static std::int64_t accountOf(const std::string &ownerKey); // 0 — ключ не число
+    // Ключ упорядочивания записей БД по лоту (DatabaseManager::throwQueryOrdered):
+    // ставка, срок и снятие лота обязаны лечь в БД в том же порядке, в каком их
+    // применили к памяти.
+    static std::string orderingKeyOfLot(const std::string &categoryKey, int lotId);
     void persistBid(const std::string &categoryKey, int lotId, const std::string &ownerKey, std::int64_t amount) const;
     void eraseBid(const std::string &categoryKey, int lotId, const std::string &ownerKey) const;
     void persistLot(const std::string &categoryKey, int lotId, std::int64_t endsAtUnix) const;
     // Снять лот целиком: его строка и ВСЕ его ставки одной транзакцией.
     void eraseLot(const std::string &categoryKey, int lotId) const;
-    // Возврат и пометка одного аккаунта; нули — строка удаляется.
-    void persistPlayer(const std::string &ownerKey) const;
+    // Долг аккаунта правится ОТНОСИТЕЛЬНО (+начислили / -выдали), а пометка — своим
+    // запросом по своей колонке. Абсолютная запись состояния строки была бы не
+    // коммутативна, а порядок задач в многопоточном пуле не определён: две записи по
+    // одному аккаунту переставились бы и съели деньги.
+    void persistRefundDelta(const std::string &ownerKey, std::int64_t delta) const;
+    void persistOutbid(const std::string &ownerKey, bool marked) const;
 
     struct LotAuction
     {

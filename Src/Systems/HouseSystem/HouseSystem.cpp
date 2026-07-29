@@ -89,6 +89,17 @@ bool inWorldBounds(const Vector3 &p)
            p.z >= WORLD_MIN_Z && p.z <= WORLD_MAX_Z;
 }
 
+// Ключ упорядочивания записей house_owner по дому (DatabaseManager::
+// throwQueryOrdered). Занятие/передача (DELETE+INSERT транзакцией), выселение и снос
+// дома спорят за ОДНУ строку house_id: без ключа их коммиты могут лечь в обратном
+// порядке, и в БД останется владелец, которого в памяти уже нет (или наоборот).
+// Дом, а не аккаунт: house_id — первичный ключ строки, а «один дом на аккаунт»
+// держит UNIQUE(account_id) в самой схеме.
+std::string ownershipKey(int houseId)
+{
+    return fmt::format("house_owner:{}", houseId);
+}
+
 // Прочитать Vector3 из json-массива [x,y,z] с проверкой. false — поле не массив
 // из трёх чисел, координаты не конечны либо вне границ мира.
 bool readVec3(const nlohmann::json &node, Vector3 &out)
@@ -355,7 +366,8 @@ void HouseSystem::onOwnerChanged(int houseId, const std::string &oldKey, const s
         {
             return; // ключ не число — не наш формат ownerKey, персист невозможен
         }
-        DatabaseManager::throwQuery(
+        DatabaseManager::throwQueryOrdered(
+            ownershipKey(houseId),
             [houseId, accountId, claimedAt = static_cast<std::int64_t>(std::time(nullptr))](mysqlx::Schema schema)
             {
                 mysqlx::Table table = schema.getTable("house_owner");
@@ -399,7 +411,8 @@ void HouseSystem::onOwnerChanged(int houseId, const std::string &oldKey, const s
     }
     else
     {
-        DatabaseManager::throwQuery(
+        DatabaseManager::throwQueryOrdered(
+            ownershipKey(houseId),
             [houseId](mysqlx::Schema schema)
             { schema.getTable("house_owner").remove().where("house_id = :house").bind("house", houseId).execute(); },
             [houseId](const std::string &error)
@@ -681,8 +694,11 @@ void HouseSystem::showHouseMenu(IPlayer &player, int houseId)
                            : "?";
 
     // Кап показываем в теле, чтобы дев видел значение без чтения houses.json.
+    // ПОРЯДОК СТРОК = порядок case-веток обработчика: строку сюда добавляют только
+    // вместе с её веткой, иначе индексы съезжают и пункт делает чужое действие.
     std::string body;
     body += fmt::format("Лимит парковки: {}\n", house->parkingCap);
+    body += fmt::format("Стартовая цена торгов: ${} (изменить)\n", house->price);
     body += "Телепорт ко входу\n";
     body += "Удалить дом";
 
@@ -866,7 +882,8 @@ void HouseSystem::deleteHouse(IPlayer &player, int houseId)
     // Владение — отдельный источник правды (БД). Стираем строку владения, чтобы
     // не осталось осиротевшего владения (дома уже нет, а house_owner ссылалась бы
     // на него — и блокировала бы аккаунт по UNIQUE).
-    DatabaseManager::throwQuery(
+    DatabaseManager::throwQueryOrdered(
+        ownershipKey(houseId),
         [houseId](mysqlx::Schema schema)
         { schema.getTable("house_owner").remove().where("house_id = :house").bind("house", houseId).execute(); },
         [houseId](const std::string &error) {
@@ -945,8 +962,14 @@ void HouseSystem::loadFromFileAsync()
         // перекрасит зелёную в красную (refreshHouseIcon найдёт m_runtime).
         loadOwnershipAsync();
     };
-    task.errorCallback = [](const std::string &error)
-    { LogManager::log(Error, "HouseSystem: ошибка чтения houses.json: " + error); };
+    task.errorCallback = [this](const std::string &error)
+    {
+        LogManager::log(Error, "HouseSystem: ошибка чтения houses.json: " + error);
+        // Владение чейним и здесь: это ЧЕТВЁРТАЯ ветка загрузки (файл не открылся).
+        // Без неё markOwnershipLoaded не позовут никогда — итоги аукционов домов
+        // встанут навсегда, а уже сделанные ставки останутся списанными.
+        loadOwnershipAsync();
+    };
     ThreadPool::addTask(std::move(task));
 }
 
@@ -1004,14 +1027,16 @@ void HouseSystem::loadOwnershipAsync()
             // чей Home-выбор применился на логине ДО прихода house_owner).
             service.markOwnershipLoaded();
         },
-        [this](const std::string &error)
+        [](const std::string &error)
         {
             LogManager::log(Error, "HouseSystem: failed to load house ownership: " + error);
-            // БД-загрузка упала — НЕ блокируем фичу навсегда: работаем с пустым
-            // in-memory владением. БД-бэкстопы (UNIQUE account_id, claim-DELETE по
-            // OR account_id) держат консистентность даже при пустом зеркале. Флаг
-            // готовности всё равно выставляем (подписчики разблокируются).
-            m_serviceRegister.getService<HouseService>().markOwnershipLoaded();
+            // Флаг НЕ выставляем (раньше выставляли — это годилось, пока дома
+            // занимали бесплатно). Теперь тем же флагом гейтятся ИТОГИ АУКЦИОНА:
+            // с пустым зеркалом ownsHouse врёт «дома нет» для всех, лот ушёл бы
+            // игроку с домом, а write-through владения (DELETE ... OR account_id
+            // + INSERT) стёр бы строку его настоящего дома. Это необратимо, поэтому
+            // торги ждут перезапуска — ставки и деньги при этом целы.
+            // Плата за это: спавн «Дом» до перезапуска резолвится на вокзал.
         });
 }
 
