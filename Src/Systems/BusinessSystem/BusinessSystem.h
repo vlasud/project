@@ -129,6 +129,10 @@ class BusinessSystem : public BaseSystem
     void refundOrdersOf(int businessId);
     // Отмена заказа владельцем — только пока его никто не повёз.
     void cancelOrder(IPlayer &player, int businessId);
+    // Что дописать в строку отмены: есть ли у точки заказ и в каком он состоянии.
+    // Владелец должен видеть это ДО клика — иначе «отменить заказ» приходится жать
+    // наугад, чтобы узнать, был ли он вообще сделан.
+    std::string orderRowStatus(int businessId) const;
     // Во сколько обошлась закупка заказа (без премии) по ценам его точки.
     std::int64_t orderCost(const BusinessOrderService::Order &order) const;
     // Черновик заказа игрока: тип предмета -> сколько заказать. Живёт до отправки

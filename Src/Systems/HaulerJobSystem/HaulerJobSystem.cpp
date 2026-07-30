@@ -87,12 +87,6 @@ constexpr std::int64_t PAIR_FULL_UNLOAD_BONUS = 200;
 // её делят ПОПОЛАМ водитель и грузчик, соло забирает всю. Нечётный остаток достаётся
 // водителю: рейс и грузовик на нём.
 constexpr int ORDER_PAGE_SIZE = 10; // заказов на странице списка
-// Насколько близко к пикапу депо должен стоять водитель, чтобы взять СЛЕДУЮЩИЙ заказ,
-// не закрывая смену. Груз заказа лежит на базе, поэтому брать его надо здесь же: иначе
-// игрок открыл бы список, уехал через полкарты и поехал бы обратно уже с погрузкой на
-// счётчике простоя. Диалог открывается касанием пикапа — радиус лишь держит игрока на
-// месте, пока он выбирает.
-constexpr float ORDER_DESK_RADIUS = 15.0f;
 
 // Звук прогресса: играет вместе с попапом «что-то засчитано» (коробка, прибытие,
 // бонус). На отказы и провалы НЕ вешаем — там свой красный попап.
@@ -100,9 +94,15 @@ constexpr std::uint32_t PROGRESS_SOUND = 17803;
 constexpr int RESERVE_SECONDS = 30;                 // окно посадки (Reserved)
 constexpr int RETURN_SECONDS = 30;                  // окно возврата за руль — ТОЛЬКО фазы езды
 // Анти-AFK езды: за рулём без единого зачёта чекпоинта -> увольнение (порог выше
-// любого легального межчекпоинтного отрезка), с предупреждением за 30 с.
+// любого легального плеча: база-порт это ~1.5 км, минуты полторы), с предупреждением
+// за 30 с.
 constexpr int DRIVE_NO_PROGRESS_SECONDS = 240;
 constexpr int DRIVE_NO_PROGRESS_WARN_SECONDS = 210;
+// То же для водителя БЕЗ ЦЕЛИ (фаза Idle): грузовик занят, очередь ждёт машину, поэтому
+// потолок нужен. Порог щедрее маршрутного: сюда попадает дорога от точки заказа до базы,
+// а точки ставит дев — она может оказаться в другом конце города.
+constexpr int NO_TARGET_SECONDS = 420;
+constexpr int NO_TARGET_WARN_SECONDS = 390;
 // Анти-AFK пеших фаз: без сданной коробки -> увольнение (коробка близко, цикл
 // «дойти/взять/донести/сдать» ~15-40 с), с предупреждением за 30 с.
 constexpr int FOOT_NO_PROGRESS_SECONDS = 120;
@@ -136,66 +136,27 @@ const Colour ERROR_POPUP_COLOUR{0xFF, 0x5A, 0x5A, 0xFF};
 const char *const BOARDING_TIMER_LABEL = "BOARDING";
 const char *const RETURN_TIMER_LABEL = "RETURN";
 
-// Маршрут ЕЗДА-ТУДА: 14 точек. Прибытие-точки нет — зачёт последнего чекпоинта (14)
-// сразу запускает ПОГРУЗКУ; его стрелка ведёт на склад-зону, парковка свободная.
-// Точка 14 добавлена вплотную к складу: с неё до зоны погрузки ~66 м вместо 137.
-const Vector3 ROUTE_OUT[HaulerJobService::OUT_LENGTH] = {
-    {2218.5100f, -2235.9246f, 13.7202f}, // 1 первая точка после посадки за руль
-    {2264.8379f, -2234.8633f, 13.6613f}, // 2
-    {2283.6428f, -2254.0869f, 13.5273f}, // 3
-    {2227.2112f, -2322.4084f, 13.5487f}, // 4
-    {2159.9729f, -2428.3887f, 13.5483f}, // 5
-    {2167.3706f, -2494.2815f, 13.5479f}, // 6
-    {2213.3196f, -2497.2854f, 13.5832f}, // 7
-    {2222.2620f, -2566.3025f, 13.5687f}, // 8
-    {2229.4343f, -2658.6750f, 13.5619f}, // 9
-    {2353.4309f, -2665.9319f, 13.6710f}, // 10
-    {2478.1963f, -2660.3931f, 13.6818f}, // 11
-    {2487.6196f, -2521.7490f, 13.6805f}, // 12
-    {2662.2156f, -2506.6082f, 13.6654f}, // 13
-    {2745.3328f, -2505.7141f, 13.6646f}, // 14 последний -> старт погрузки (у самого склада)
-};
+// ЕДИНСТВЕННЫЙ чекпоинт плеча «в порт» — сам порт, у ворот склада (замер владельца).
+// Промежуточной разметки нет СОЗНАТЕЛЬНО: дорогу водитель выбирает сам, а раньше её
+// диктовали 14 точек — маршрут был рельсами, и любой объезд стоил увольнения за
+// «нет прогресса». Зачёт этой точки сразу запускает погрузку; её стрелка ведёт на
+// склад-зону, парковка свободная.
+const Vector3 PORT_DRIVE_POINT{2745.3328f, -2505.7141f, 13.6646f};
 
-// Маршрут ЕЗДА-ОБРАТНО: 8 точек. Первая — выездная дорога ИЗ зоны склада (бывшая
-// точка 14 плеча «туда»); финиш-точки нет — зачёт последней (8) сразу запускает
-// РАЗГРУЗКУ, её стрелка ведёт на точку выгрузки базы, парковка свободная.
-//
-// Последняя точка — ТА ЖЕ координата, что ROUTE_OUT[0] (первая точка плеча «туда»): плечо
-// «обратно» замыкается там, где начинается «туда». Прежде плечо кончалось на точке 7,
-// в 97 м от точки выгрузки — фаза разгрузки стартовала посреди дороги, до базы игрока
-// уже ничто не вело (race-чекпоинт со стрелкой снимается зачётом). Теперь неразмеченный
-// хвост 46 м, и он лежит внутри депо, где цель видна.
-const Vector3 ROUTE_BACK[HaulerJobService::BACK_LENGTH] = {
-    {2740.1736f, -2403.9192f, 13.6343f}, // 1 выезд из зоны склада
-    {2619.6836f, -2402.5168f, 13.6672f}, // 2
-    {2528.4968f, -2321.4109f, 23.3411f}, // 3
-    {2352.1296f, -2145.5469f, 18.0327f}, // 4
-    {2293.9658f, -2087.4048f, 13.5040f}, // 5
-    {2237.1128f, -2123.3354f, 13.5015f}, // 6
-    {2204.1184f, -2156.0852f, 13.5616f}, // 7
-    {2218.5100f, -2235.9246f, 13.7202f}, // 8 последний -> старт разгрузки (= ROUTE_OUT[0])
-};
+// ЕДИНСТВЕННЫЙ чекпоинт плеча «на базу» — въезд в депо. Зачёт запускает разгрузку, его
+// стрелка ведёт на точку выгрузки. Он же цель водителя БЕЗ ЗАДАЧИ (фаза Idle): цель
+// рейса выбирают только на базе, и маркер ведёт именно сюда.
+const Vector3 BASE_DRIVE_POINT{2218.5100f, -2235.9246f, 13.7202f};
 
-// Плечо езды для фазы (DriveOut -> туда, DriveBack -> обратно); прочие фазы — нет
-// плеча (nullptr). В Reserved маршрута ещё нет: до руля цель одна — свой грузовик.
-const Vector3 *routeForPhase(HaulerJobService::Phase phase, int &lenOut)
-{
-    if (phase == HaulerJobService::Phase::DriveOut)
-    {
-        lenOut = HaulerJobService::OUT_LENGTH;
-        return ROUTE_OUT;
-    }
-    if (phase == HaulerJobService::Phase::DriveBack)
-    {
-        lenOut = HaulerJobService::BACK_LENGTH;
-        return ROUTE_BACK;
-    }
-    lenOut = 0;
-    return nullptr;
-}
+// «Водитель на базе» — радиус вокруг въезда в депо. Покрывает весь двор с запасом:
+// дальняя площадка в 83 м, точка выгрузки в 46 м, пикап работы в 50 м. Цель рейса
+// выбирается ТОЛЬКО здесь, потому что груз заказа лежит на базе — выбор за полкарты
+// означал бы погрузку, до которой ещё ехать. Мера грубая сознательно: гейт про «ты в
+// депо», а не про сантиметры парковки.
+constexpr float BASE_AREA_RADIUS = 110.0f;
 
-// Куда указывает стрелка ПОСЛЕДНЕГО чекпоинта плеча — ЦЕЛЬ пешей фазы: точка выгрузки
-// базы («обратно») или центр склад-зоны порта («туда»). Доводит к зоне, где грузовик
+// Куда указывает стрелка чекпоинта плеча — ЦЕЛЬ пешей фазы: точка выгрузки базы
+// («обратно») или центр склад-зоны порта («туда»). Доводит к зоне, где грузовик
 // паркуется свободно и начинается разгрузка/погрузка.
 const Vector3 &phaseTarget(HaulerJobService::Phase phase)
 {
@@ -278,6 +239,17 @@ HaulerJobSystem::HaulerJobSystem(ICore &core, const ServiceRegister &serviceRegi
             onPairCommand(player, args.getInt(0));
         },
         {}, "позвать грузчика в пару (водитель портового развозчика)",
+        PlayerCommandService::HelpCategory::Economy);
+
+    // /target — цель рейса. Команда, а не пикап: водитель выбирает её ЗА РУЛЁМ, стоя на
+    // базе, и после каждого сданного рейса возвращается к этому шагу.
+    serviceRegister.getService<PlayerCommandService>().add(
+        "target", {},
+        [this](IPlayer &player, const PlayerCommandService::CommandArgs &)
+        {
+            onTargetCommand(player);
+        },
+        {}, "выбрать цель рейса — порт или заказ бизнеса (водитель развозчика)",
         PlayerCommandService::HelpCategory::Economy);
 
     // /unpair — разойтись. Работу при этом не теряет НИ ОДИН из двоих: водитель
@@ -387,7 +359,7 @@ void HaulerJobSystem::showRoleChoice(IPlayer &player)
     const int playerId = player.getID();
 
     // Пункты видны всегда (правило проекта) — гейт в обработчике по клику.
-    const std::string body = "Водитель\tсвой грузовик; дальше выбирает рейс — порт или заказ бизнеса\n"
+    const std::string body = "Водитель\tгрузовик выдаётся сразу; цель рейса выбирается за рулём (/target)\n"
                              "Грузчик\tбез грузовика, платят за коробки; работает в паре с водителем";
     m_dialogService.show(
         player, makeDialog(DialogStyle_TABLIST, "Кем устроиться", body, "Выбрать", "Отмена"),
@@ -452,9 +424,13 @@ void HaulerJobSystem::startAsLoader(IPlayer &player)
 
 void HaulerJobSystem::startAsDriver(IPlayer &player)
 {
-    // Гейты устройства здесь НЕ проверяем: рейс ещё не выбран, а проверять надо в
-    // момент САМОГО старта — пока висят диалоги выбора, всё могло измениться.
-    showModeChoice(player);
+    // Устройство водителем = СРАЗУ грузовик: что везти, водитель решает уже за рулём
+    // (/target). Выбор рейса на пикапе оставлял бы человека без машины и с целью.
+    if (!driverGatesPass(player))
+    {
+        return;
+    }
+    beginDriverShift(player);
 }
 
 bool HaulerJobSystem::driverGatesPass(IPlayer &player)
@@ -489,17 +465,15 @@ bool HaulerJobSystem::driverGatesPass(IPlayer &player)
     return true;
 }
 
-bool HaulerJobSystem::beginDriverShift(IPlayer &player, HaulerJobService::Mode mode, int orderId)
+bool HaulerJobSystem::beginDriverShift(IPlayer &player)
 {
     const int playerId = player.getID();
 
-    const HaulerJobService::StartOutcome outcome = m_haulerJobService.startWork(
-        playerId,
-        [this](int spot)
-        {
-            return spotClear(spot);
-        },
-        mode, orderId);
+    const HaulerJobService::StartOutcome outcome = m_haulerJobService.startWork(playerId,
+                                                                               [this](int spot)
+                                                                               {
+                                                                                   return spotClear(spot);
+                                                                               });
     if (outcome.result == HaulerJobService::StartResult::AlreadyWorking)
     {
         return false; // гонка кликов: смену успели открыть между гейтом и стартом
@@ -514,12 +488,6 @@ bool HaulerJobSystem::beginDriverShift(IPlayer &player, HaulerJobService::Mode m
         player.sendClientMessage(
             INFO_COLOUR,
             u(fmt::format("Свободных грузовиков в депо сейчас нет. Вы в очереди, место {}", outcome.queuePosition)));
-        if (mode == HaulerJobService::Mode::Orders)
-        {
-            // Заказ уже закреплён за ним: дождавшись грузовика он повезёт ИМЕННО его,
-            // и второму водителю заказ в списке не показывается.
-            player.sendClientMessage(INFO_COLOUR, u("Заказ забронирован за вами — он ждёт вашего грузовика"));
-        }
         return true;
     }
     // Reserved — свободный стоящий грузовик закреплён за игроком.
@@ -527,36 +495,101 @@ bool HaulerJobSystem::beginDriverShift(IPlayer &player, HaulerJobService::Mode m
     return true;
 }
 
-void HaulerJobSystem::showModeChoice(IPlayer &player)
+void HaulerJobSystem::onTargetCommand(IPlayer &player)
+{
+    if (!targetGatesPass(player))
+    {
+        return;
+    }
+    showTargetChoice(player);
+}
+
+bool HaulerJobSystem::targetGatesPass(IPlayer &player)
+{
+    const int playerId = player.getID();
+    if (m_haulerJobService.roleOf(playerId) != HaulerJobService::Role::Driver ||
+        m_haulerJobService.shiftOwnerOf(playerId) != playerId)
+    {
+        player.sendClientMessage(ERROR_COLOUR,
+                                 u("Цель рейса выбирает водитель развозчика — устройтесь у пикапа депо"));
+        return false;
+    }
+    const HaulerJobService::Phase phase = m_haulerJobService.phaseOf(playerId);
+    if (phase == HaulerJobService::Phase::Queued || phase == HaulerJobService::Phase::Reserved)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Сначала сядьте за руль своего грузовика"));
+        return false;
+    }
+    // Цель меняют ТОЛЬКО без активной задачи: иначе водитель бросал бы начатый рейс на
+    // полпути, а взятый заказ висел бы принятым.
+    if (phase != HaulerJobService::Phase::Idle)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Сначала закончите текущий рейс — цель меняют без задачи"));
+        return false;
+    }
+    // За рулём СВОЕГО грузовика — по серверному getDriver, не по заявлению клиента.
+    if (!drivingOwnTruck(playerId))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Цель выбирают за рулём своего грузовика"));
+        return false;
+    }
+    // Груз обоих рейсов начинается на базе (заказ лежит здесь, портовый рейс отсюда
+    // выезжает) — потому и выбор только здесь.
+    if (!atBase(playerId))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Цель рейса выбирают на базе — возвращайтесь в депо"));
+        return false;
+    }
+    // Коробку из рук в руки не передают (то же правило, что у /pair): смена меняет
+    // плечо, и груз в руках носильщика повис бы.
+    if (m_haulerJobService.carryingOf(m_haulerJobService.carrierOf(playerId)))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Сначала донесите коробку"));
+        return false;
+    }
+    return true;
+}
+
+void HaulerJobSystem::showTargetChoice(IPlayer &player)
 {
     const int playerId = player.getID();
     const std::size_t available = availableOrders().size();
 
     // Пункты видны всегда (правило проекта) — гейт в обработчике по клику.
     const std::string body =
-        fmt::format("Рейс в порт\tгруз со склада порта на базу, круги без конца\n"
+        fmt::format("Рейс в порт\tгруз со склада порта на базу\n"
                     "Заказ бизнеса ({})\tгруз с базы в точку владельца; платят за доставку и премию",
                     available);
-    m_dialogService.show(
-        player, makeDialog(DialogStyle_TABLIST, "Какой рейс", body, "Выбрать", "Отмена"),
-        [this, playerId](DialogResponse response, int listItem, StringView)
-        {
-            IPlayer *chooser = m_core.getPlayers().get(playerId);
-            if (!chooser || response != DialogResponse_Left)
-            {
-                return;
-            }
-            if (listItem == 0)
-            {
-                if (!driverGatesPass(*chooser))
-                {
-                    return;
-                }
-                beginDriverShift(*chooser, HaulerJobService::Mode::Port, 0);
-                return;
-            }
-            showOrderList(*chooser, 0);
-        });
+    m_dialogService.show(player, makeDialog(DialogStyle_TABLIST, "Цель рейса", body, "Выбрать", "Отмена"),
+                         [this, playerId](DialogResponse response, int listItem, StringView)
+                         {
+                             IPlayer *chooser = m_core.getPlayers().get(playerId);
+                             if (!chooser || response != DialogResponse_Left)
+                             {
+                                 return;
+                             }
+                             if (listItem == 0)
+                             {
+                                 startPortRun(*chooser);
+                                 return;
+                             }
+                             showOrderList(*chooser, 0);
+                         });
+}
+
+void HaulerJobSystem::startPortRun(IPlayer &player)
+{
+    // Ре-валидация на клике: пока висел диалог, водитель мог выйти из кабины, уехать с
+    // базы или потерять смену.
+    if (!targetGatesPass(player))
+    {
+        return;
+    }
+    if (!m_haulerJobService.startPortRun(player.getID()))
+    {
+        return; // гонка кликов: цель уже выбрана
+    }
+    beginDriveOutPhase(player);
 }
 
 std::vector<const BusinessOrderService::Order *> HaulerJobSystem::availableOrders() const
@@ -592,7 +625,7 @@ void HaulerJobSystem::showOrderList(IPlayer &player, int page)
     {
         player.sendClientMessage(ERROR_COLOUR,
                                  u("Свободных заказов сейчас нет. Возьмите рейс в порт — груз там всегда есть"));
-        showModeChoice(player);
+        showTargetChoice(player);
         return;
     }
 
@@ -650,7 +683,7 @@ void HaulerJobSystem::showOrderList(IPlayer &player, int page)
             }
             if (response != DialogResponse_Left || listItem < 0 || listItem > count)
             {
-                showModeChoice(*chooser);
+                showTargetChoice(*chooser);
                 return;
             }
             if (listItem == count) // последняя строка — следующая страница (по кругу)
@@ -662,66 +695,18 @@ void HaulerJobSystem::showOrderList(IPlayer &player, int page)
         });
 }
 
-bool HaulerJobSystem::canTakeOrderInShift(int playerId) const
-{
-    if (m_haulerJobService.roleOf(playerId) != HaulerJobService::Role::Driver ||
-        m_haulerJobService.shiftOwnerOf(playerId) != playerId)
-    {
-        return false; // не водитель со своей сменой
-    }
-    if (m_haulerJobService.orderIdOf(playerId) != 0)
-    {
-        return false; // заказ на рейс ровно один
-    }
-    const HaulerJobService::Phase phase = m_haulerJobService.phaseOf(playerId);
-    if (phase == HaulerJobService::Phase::Reserved)
-    {
-        return false; // ещё не за рулём: сперва посадка, иначе это обход её окна
-    }
-    // Грузовик обязан существовать: заказ грузят в него.
-    return m_vehicleService.get(m_haulerJobService.vehicleIdOf(playerId)) != nullptr;
-}
-
 void HaulerJobSystem::startAsOrderDriver(IPlayer &player, int orderId)
 {
     const int playerId = player.getID();
-    // Водитель со своим грузовиком берёт следующий заказ, НЕ теряя грузовик и напарника:
-    // смена продолжается, меняется только рейс. Устройство заново в этом случае не
-    // проверяем — оно уже состоялось.
-    const bool continuing = canTakeOrderInShift(playerId);
-    if (!continuing && !driverGatesPass(player))
+    // Ре-валидация цели на клике: пока висел список, водитель мог выйти из кабины,
+    // уехать с базы, начать рейс или потерять смену вовсе.
+    if (!targetGatesPass(player))
     {
         return;
     }
-    if (continuing)
-    {
-        // Коробку из рук в руки не передают (то же правило, что у /pair): смена меняет
-        // плечо, и груз в руках носильщика повис бы.
-        const int carrier = m_haulerJobService.carrierOf(playerId);
-        if (m_haulerJobService.carryingOf(carrier))
-        {
-            player.sendClientMessage(ERROR_COLOUR, u("Сначала донесите коробку, потом берите новый заказ"));
-            return;
-        }
-        if (m_stateService.getState(playerId) != PlayerState_OnFoot)
-        {
-            player.sendClientMessage(ERROR_COLOUR, u("Выйдите из грузовика, чтобы взять заказ"));
-            return;
-        }
-        // Груз заказа лежит НА БАЗЕ — здесь его и берут. Дистанция считается по ПРИНЯТОЙ
-        // сервером позиции (PlayerLocationService, он же ловит телепорт-рывки): «я у
-        // пикапа» подделать нельзя.
-        if (distanceSq2D(m_locationService.getPosition(playerId), EMPLOY_PICKUP_POS) >
-            ORDER_DESK_RADIUS * ORDER_DESK_RADIUS)
-        {
-            player.sendClientMessage(ERROR_COLOUR,
-                                     u("Новый заказ берут у пикапа депо — подойдите к нему и повторите"));
-            return;
-        }
-    }
 
-    // Ре-валидация заказа на клике: пока висел список, его могли взять, снять или
-    // снести вместе с точкой.
+    // Ре-валидация заказа: пока висел список, его могли взять, снять или снести вместе
+    // с точкой.
     const BusinessOrderService::Order *order = m_orderService.get(orderId);
     if (!order || order->driverId >= 0 || m_orderService.boxesLeft(orderId) <= 0)
     {
@@ -735,7 +720,7 @@ void HaulerJobSystem::startAsOrderDriver(IPlayer &player, int orderId)
         showOrderList(player, 0);
         return;
     }
-    // Заказ закрепляем ДО открытия смены: обратный порядок отдал бы один заказ двоим.
+    // Заказ закрепляем ДО перевода фазы: обратный порядок отдал бы один заказ двоим.
     if (!m_orderService.accept(orderId, playerId))
     {
         player.sendClientMessage(ERROR_COLOUR, u("Этот заказ только что взял другой водитель"));
@@ -748,29 +733,12 @@ void HaulerJobSystem::startAsOrderDriver(IPlayer &player, int orderId)
                              u(fmt::format("Заказ взят: {}, {} коробок, премия {}", orderPointName(*order),
                                            m_orderService.boxesLeft(orderId), Money::text(order->bonus))));
 
-    if (continuing)
+    if (!m_haulerJobService.startOrderLeg(playerId, orderId))
     {
-        const int carriedBefore = m_haulerJobService.boxCountOf(playerId);
-        if (!m_haulerJobService.startOrderLeg(playerId, orderId))
-        {
-            m_orderService.release(orderId); // состояние смены изменилось — заказ в пул
-            return;
-        }
-        if (carriedBefore > 0)
-        {
-            // Прошлое плечо обнулено: иначе игрок ждал бы, что уже загруженные коробки
-            // зачтутся заказу.
-            player.sendClientMessage(ERROR_COLOUR, u("Прошлый рейс прерван — груз в кузове больше не в счёт"));
-        }
-        beginLoadingPhase(player); // сервис уже в Loading; здесь цели, попапы, сообщения
+        m_orderService.release(orderId); // гонка кликов — заказ обратно в пул
         return;
     }
-    if (!beginDriverShift(player, HaulerJobService::Mode::Orders, orderId))
-    {
-        m_orderService.release(orderId); // смена не открылась — заказ обратно в пул
-        return;
-    }
-    player.sendClientMessage(INFO_COLOUR, u("Груз лежит на базе: погрузите его и везите в точку"));
+    beginLoadingPhase(player); // сервис уже в Loading; здесь цели, попапы, сообщения
 }
 
 void HaulerJobSystem::onFinishWork(IPlayer &player)
@@ -785,7 +753,7 @@ void HaulerJobSystem::onFinishWork(IPlayer &player)
     }
     if (phase == HaulerJobService::Phase::Queued)
     {
-        releaseOrderOf(playerId);              // бронь заказа не переживает уход из очереди
+        releaseOrderOf(playerId);              // защитно: у ждущего в очереди заказа быть не может
         m_haulerJobService.endShift(playerId); // в очереди грузовика нет — снимать нечего
         clearCounters(playerId);
         m_navLockService.release(playerId);
@@ -1072,11 +1040,13 @@ void HaulerJobSystem::showInfo(IPlayer &player)
     body += "Суть работы\tГрузовик порт—база: водитель везёт, грузчик носит коробки\n";
     body += "Роли\tводитель (свой грузовик) или грузчик (в паре с водителем)\n";
     body += "Вступительный взнос\tнет\n";
-    body += fmt::format("Рейсы\tв порт (круги без конца) или заказ бизнеса — сейчас свободно {}\n",
+    body += "Устройство\tводителю грузовик выдают сразу; цель рейса выбирают за рулём\n";
+    body += fmt::format("Цель рейса\tкоманда /target на базе: порт или заказ бизнеса — сейчас свободно {}\n",
                         availableOrders().size());
+    body += "Маршрут\tодин чекпоинт на плечо — сам порт и база. Дорогу выбираете сами\n";
     body += "Заказ бизнеса\tгруз с базы в точку владельца; премия сверху, пополам с грузчиком\n";
     body += "Погрузка заказа\tНЕ оплачивается (груз берут на базе) — платят прибытие, разгрузка и премия\n";
-    body += "После доставки\tгрузовик остаётся за вами: рейс в порт либо новый заказ у пикапа депо\n";
+    body += "После рейса\tгрузовик остаётся за вами: вернитесь на базу и выберите цель заново (/target)\n";
     body += fmt::format("Водителю\t${} за прибытие в порт и столько же за прибытие на базу\n", PAY_ARRIVAL);
     body += fmt::format("За коробки\t${} за погруженную и ${} за разгруженную — тому, кто нёс\n",
                         PAY_PER_BOX_LOAD, PAY_PER_BOX_UNLOAD);
@@ -1121,19 +1091,19 @@ void HaulerJobSystem::showInfo(IPlayer &player)
     case HaulerJobService::Phase::Reserved:
         status = "грузовик закреплён, идёт посадка";
         break;
+    case HaulerJobService::Phase::Idle:
+        status = atBase(playerId) ? "за рулём на базе, цель рейса не выбрана (/target)"
+                                  : "за рулём без рейса — вернитесь на базу за целью";
+        break;
     case HaulerJobService::Phase::DriveOut:
-        status = fmt::format("едет в порт, чекпоинт {}/{}", m_haulerJobService.driveIndexOf(playerId) + 1,
-                             HaulerJobService::OUT_LENGTH);
+        status = "едет в порт за грузом";
         break;
     case HaulerJobService::Phase::Loading:
         status = fmt::format("грузит {}, коробок {}/{}", orderMode(playerId) ? "заказ на базе" : "на складе порта",
                              m_haulerJobService.boxCountOf(playerId), legBoxes(playerId));
         break;
     case HaulerJobService::Phase::DriveBack:
-        status = orderMode(playerId)
-                     ? std::string("везёт заказ в точку")
-                     : fmt::format("едет на базу, чекпоинт {}/{}", m_haulerJobService.driveIndexOf(playerId) + 1,
-                                   HaulerJobService::BACK_LENGTH);
+        status = orderMode(playerId) ? "везёт заказ в точку" : "везёт груз на базу";
         break;
     case HaulerJobService::Phase::Unloading:
         status = fmt::format("разгружает {}, коробок {}/{}", orderMode(playerId) ? "заказ в точке" : "на базе",
@@ -1245,29 +1215,22 @@ void HaulerJobSystem::onReserved(IPlayer &player)
 void HaulerJobSystem::completeBoarding(IPlayer &player)
 {
     const int playerId = player.getID();
-    m_haulerJobService.completeBoarding(playerId); // Reserved -> DriveOut (площадку НЕ отпускает)
+    m_haulerJobService.completeBoarding(playerId); // Reserved -> Idle (цель ещё не выбрана)
     m_exitSeconds[playerId] = 0;
+    m_driveIdleSeconds[playerId] = 0;
     m_waypointService.clearFor(player); // маркер грузовика больше не нужен
 
-    if (orderMode(playerId))
-    {
-        // Заказу плечо в порт не нужно: товар лежит на базе, погрузка начинается здесь
-        // же. Площадку отпускаем СРАЗУ, не дожидаясь отъезда: окно выезда уволило бы
-        // работника за то, что он честно носит коробки в двух шагах от депо. Отдать её
-        // следующему это не мешает — физическую занятость привод считает сам
-        // (spotClear), и пока грузовик стоит рядом, в площадку никто не заспавнится.
-        m_haulerJobService.releaseSpot(playerId);
-        m_reserveSeconds[playerId] = 0;
-        m_screenTimerService.hide(player);
-        beginLoadingPhase(player); // DriveOut -> Loading, минуя плечо в порт
-        return;
-    }
+    // Площадку отпускаем СРАЗУ, не дожидаясь отъезда: цель рейса водитель выбирает
+    // именно здесь, и окно выезда уволило бы его за то, что он читает диалог. Отдать
+    // площадку следующему это не мешает — физическую занятость привод считает сам
+    // (spotClear), и пока грузовик стоит на ней, в неё никто не заспавнится.
+    m_haulerJobService.releaseSpot(playerId);
+    m_reserveSeconds[playerId] = 0;
+    m_screenTimerService.hide(player);
 
-    // GUI-таймер НЕ гасим: окно идёт до отъезда с площадки — она нужна следующему.
-    showDriveCheckpoint(player); // теперь маршрут: плечо OUT, индекс 0
     player.sendClientMessage(INFO_COLOUR,
-                             u("Вы за рулём — следуйте по чекпоинтам в порт. Отъезжайте с площадки, она нужна "
-                               "другим"));
+                             u("Вы за рулём. Выберите цель рейса командой /target — порт или заказ бизнеса"));
+    m_screenNoticeService.show(player, "choose your run: /target", PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
 }
 
 void HaulerJobSystem::pumpQueue()
@@ -1287,8 +1250,8 @@ void HaulerJobSystem::pumpQueue()
         IPlayer *next = m_core.getPlayers().get(promotion.playerId);
         if (!next)
         {
-            // Продвинутый работник пропал: снять резерв (грузовик остаётся pre-stock) и
-            // отпустить забронированный им заказ — иначе он висел бы принятым навсегда.
+            // Продвинутый работник пропал: снять резерв. Заказ отпускаем защитно — цель
+            // рейса берут за рулём, поэтому у ждущего в очереди её ещё нет.
             releaseOrderOf(promotion.playerId);
             m_haulerJobService.endShift(promotion.playerId);
             clearCounters(promotion.playerId);
@@ -1333,15 +1296,45 @@ void HaulerJobSystem::showDriveCheckpoint(IPlayer &player)
     const int playerId = player.getID();
     const HaulerJobService::Phase phase = m_haulerJobService.phaseOf(playerId);
 
+    // Водитель БЕЗ ЗАДАЧИ: единственная цель — база, там выбирают рейс (/target). Уже на
+    // базе — цели нет вовсе, чекпоинт в двух шагах только мешал бы.
+    if (phase == HaulerJobService::Phase::Idle)
+    {
+        if (atBase(playerId))
+        {
+            m_checkpointService.clearRaceForPlayer(player);
+            return;
+        }
+        m_checkpointService.setRaceForPlayer(player, RaceCheckpointType::RACE_FINISH, BASE_DRIVE_POINT,
+                                             Vector3{0.0f, 0.0f, 0.0f}, MOVE_CP_RADIUS,
+                                             [this](IPlayer &p)
+                                             {
+                                                 onDriveCheckpointEnter(p);
+                                             });
+        return;
+    }
+
+    if (phase == HaulerJobService::Phase::DriveOut)
+    {
+        // В порт — одна точка. RACE_NORMAL: стрелка ведёт на склад-зону, где начнётся
+        // погрузка (парковку игрок выбирает сам).
+        m_checkpointService.setRaceForPlayer(player, RaceCheckpointType::RACE_NORMAL, PORT_DRIVE_POINT,
+                                             phaseTarget(phase), MOVE_CP_RADIUS,
+                                             [this](IPlayer &p)
+                                             {
+                                                 onDriveCheckpointEnter(p);
+                                             });
+        return;
+    }
+    if (phase != HaulerJobService::Phase::DriveBack)
+    {
+        return; // защитно (не фаза езды)
+    }
+
     if (orderMode(playerId))
     {
-        if (phase != HaulerJobService::Phase::DriveBack)
-        {
-            return; // в заказе едут ТОЛЬКО «обратно» — от базы к точке
-        }
-        // Плечо заказа — одна точка, вход бизнеса. RACE_FINISH: стрелке некуда
-        // указывать, дальше рейса нет (nextPosition обязан быть пустым, иначе клиент
-        // покажет обычный маркер со стрелкой).
+        // Заказ везут в точку бизнеса. RACE_FINISH: стрелке некуда указывать, дальше
+        // рейса нет (nextPosition обязан быть пустым, иначе клиент покажет стрелку).
         Vector3 target;
         if (!orderDriveTarget(playerId, target))
         {
@@ -1356,24 +1349,9 @@ void HaulerJobSystem::showDriveCheckpoint(IPlayer &player)
                                              });
         return;
     }
-
-    int len = 0;
-    const Vector3 *route = routeForPhase(phase, len);
-    if (!route)
-    {
-        return; // защитно (не фаза езды)
-    }
-    const int index = m_haulerJobService.driveIndexOf(playerId);
-    if (index < 0 || index >= len)
-    {
-        return;
-    }
-    // Все маршрутные точки — race move (RACE_NORMAL со стрелкой). Обычная точка -> стрелка
-    // на следующую точку плеча; ПОСЛЕДНЯЯ -> стрелка на ЦЕЛЬ пешей фазы (склад-зона / точка
-    // выгрузки). Зачёт последней точки запускает погрузку/разгрузку; парковку грузовика
-    // игрок выбирает сам (чекпоинт зада пересчитывается от живой позиции).
-    const Vector3 &next = (index == len - 1) ? phaseTarget(phase) : route[index + 1];
-    m_checkpointService.setRaceForPlayer(player, RaceCheckpointType::RACE_NORMAL, route[index], next, MOVE_CP_RADIUS,
+    // На базу — одна точка, стрелка на точку выгрузки.
+    m_checkpointService.setRaceForPlayer(player, RaceCheckpointType::RACE_NORMAL, BASE_DRIVE_POINT,
+                                         phaseTarget(phase), MOVE_CP_RADIUS,
                                          [this](IPlayer &p)
                                          {
                                              onDriveCheckpointEnter(p);
@@ -1384,50 +1362,32 @@ void HaulerJobSystem::onDriveCheckpointEnter(IPlayer &player)
 {
     const int playerId = player.getID();
     const HaulerJobService::Phase phase = m_haulerJobService.phaseOf(playerId);
-    if (phase != HaulerJobService::Phase::DriveOut && phase != HaulerJobService::Phase::DriveBack)
-    {
-        return; // не в фазе езды — событие не наше (в Reserved маршрута ещё нет)
-    }
     // Зачёт ТОЛЬКО за рулём СВОЕГО грузовика (серверный getDriver, не заявление клиента).
     if (!drivingOwnTruck(playerId))
     {
         return;
     }
 
-    if (orderMode(playerId))
+    // Приехал на базу без задачи: чекпоинт снимаем и напоминаем про выбор цели. Простой
+    // считается с нуля — дорога сюда и была прогрессом.
+    if (phase == HaulerJobService::Phase::Idle)
     {
-        // Плечо заказа одноточечное: доехал до точки — сразу разгрузка (ехать в порт
-        // заказу не нужно, а DriveOut в этом режиме не наступает вовсе).
-        if (phase == HaulerJobService::Phase::DriveBack)
-        {
-            beginUnloadingPhase(player);
-        }
+        m_checkpointService.clearRaceForPlayer(player);
+        m_driveIdleSeconds[playerId] = 0;
+        player.sendClientMessage(INFO_COLOUR, u("Вы на базе. Выберите цель рейса командой /target"));
+        m_screenNoticeService.show(player, "at base - /target", PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
         return;
     }
-
-    int len = 0;
-    const Vector3 *route = routeForPhase(phase, len);
-    if (!route)
+    // Плечо езды одноточечное: доехал — сразу пешая фаза.
+    if (phase == HaulerJobService::Phase::DriveOut)
     {
+        beginLoadingPhase(player);
         return;
     }
-    const int index = m_haulerJobService.driveIndexOf(playerId);
-    if (index >= len - 1)
+    if (phase == HaulerJobService::Phase::DriveBack)
     {
-        // Достигнута последняя точка плеча — переход в пешую фазу.
-        if (phase == HaulerJobService::Phase::DriveOut)
-        {
-            beginLoadingPhase(player);
-        }
-        else
-        {
-            beginUnloadingPhase(player);
-        }
-        return;
+        beginUnloadingPhase(player);
     }
-    m_haulerJobService.advanceDrive(playerId);
-    m_driveIdleSeconds[playerId] = 0; // есть прогресс — окно простоя с нуля
-    showDriveCheckpoint(player);
 }
 
 void HaulerJobSystem::beginLoadingPhase(IPlayer &player)
@@ -1578,15 +1538,56 @@ void HaulerJobSystem::beginUnloadingPhase(IPlayer &player)
     }
 }
 
-void HaulerJobSystem::completeCyclePhase(IPlayer &player)
+void HaulerJobSystem::beginDriveOutPhase(IPlayer &player)
 {
     const int playerId = player.getID();
-    m_haulerJobService.completeCycle(playerId); // Unloading -> DriveOut, driveIndex=0, boxCount=0
     m_checkpointService.clearForPlayer(player);
     m_driveIdleSeconds[playerId] = 0;
     m_exitSeconds[playerId] = 0;
-    player.sendClientMessage(INFO_COLOUR, u("Новый рейс! Езжайте в порт за грузом"));
-    showDriveCheckpoint(player); // плечо OUT, индекс 0 (точка 1)
+    player.sendClientMessage(INFO_COLOUR, u("Цель — порт. Езжайте на склад за грузом"));
+    m_screenNoticeService.show(player, "drive to the port", PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
+    if (const int partner = m_haulerJobService.partnerOf(playerId); partner >= 0)
+    {
+        if (IPlayer *loader = m_core.getPlayers().get(partner))
+        {
+            loader->sendClientMessage(INFO_COLOUR, u("Водитель взял рейс в порт — вас ждёт погрузка на складе"));
+        }
+    }
+    showDriveCheckpoint(player);
+}
+
+void HaulerJobSystem::finishRunPhase(IPlayer &player)
+{
+    const int playerId = player.getID();
+    m_haulerJobService.finishRun(playerId); // Unloading -> Idle
+    m_checkpointService.clearForPlayer(player);
+    m_driveIdleSeconds[playerId] = 0;
+    m_exitSeconds[playerId] = 0;
+    // Грузовик остаётся за водителем: кончился РЕЙС, а не смена. Следующую цель он
+    // выбирает заново — так один и тот же грузовик ходит и в порт, и по заказам.
+    player.sendClientMessage(INFO_COLOUR, u("Рейс сдан. Грузовик остаётся за вами — выберите цель командой /target"));
+    showIdleTarget(player);
+}
+
+void HaulerJobSystem::showIdleTarget(IPlayer &player)
+{
+    const int playerId = player.getID();
+    showDriveCheckpoint(player); // в Idle это либо чекпоинт базы, либо снятая цель
+    if (atBase(playerId))
+    {
+        m_screenNoticeService.show(player, "choose your run: /target", PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
+        return;
+    }
+    player.sendClientMessage(INFO_COLOUR, u("Цель рейса выбирают на базе — вернитесь в депо"));
+    m_screenNoticeService.show(player, "return to base", PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
+}
+
+bool HaulerJobSystem::atBase(int playerId) const
+{
+    // По ПРИНЯТОЙ сервером позиции (PlayerLocationService ловит и телепорт-рывки):
+    // «я на базе» подделать нельзя.
+    return distanceSq2D(m_locationService.getPosition(playerId), BASE_DRIVE_POINT) <
+           BASE_AREA_RADIUS * BASE_AREA_RADIUS;
 }
 
 // ------------------------------------------------- заказ бизнеса в смене (Orders)
@@ -1727,20 +1728,10 @@ void HaulerJobSystem::completeOrder(IPlayer &driver, IPlayer &carrier)
         carrier.sendClientMessage(INFO_COLOUR, u(done));
     }
 
-    // СМЕНА НЕ КОНЧАЕТСЯ: грузовик остаётся за водителем, пара — в силе. Заказ на рейс
-    // ровно один, поэтому цикл возвращается к портовому (груз в порту есть всегда), а
-    // за новым заказом водитель заезжает к пикапу депо, не теряя грузовик. Первый
-    // чекпоинт плеча «туда» стоит у самого депо — он и ведёт обратно к пикапу.
-    //
-    // Тот же переход, что у портового круга (completeCyclePhase), но со своим
-    // сообщением: игрок должен понять, что грузовик за ним и что делать дальше.
-    m_haulerJobService.completeCycle(driverId); // Unloading -> DriveOut, счётчики плеча с нуля
-    m_checkpointService.clearForPlayer(driver);
-    m_driveIdleSeconds[driverId] = 0;
-    m_exitSeconds[driverId] = 0;
-    driver.sendClientMessage(
-        INFO_COLOUR, u("Грузовик остаётся за вами: дальше рейс в порт — либо новый заказ у пикапа депо"));
-    showDriveCheckpoint(driver);
+    // СМЕНА НЕ КОНЧАЕТСЯ: грузовик остаётся за водителем, пара — в силе. Кончился РЕЙС,
+    // и дальше водитель выбирает цель заново — тем же переходом, что портовый рейс
+    // (finishRunPhase). Он стоит у точки бизнеса, поэтому Idle приведёт его на базу.
+    finishRunPhase(driver);
 }
 
 void HaulerJobSystem::releaseOrderOf(int shiftOwnerId)
@@ -2163,7 +2154,7 @@ void HaulerJobSystem::onPutdownFinished(IPlayer &player)
                                                    HaulerJobService::BOXES_PER_LEG, PAIR_FULL_UNLOAD_BONUS)));
             m_screenNoticeService.show(player, "unload complete", BONUS_POPUP_TIME, CREDIT_POPUP_COLOUR);
         }
-        completeCyclePhase(*driver);
+        finishRunPhase(*driver);
     }
     else
     {
@@ -2388,7 +2379,10 @@ void HaulerJobSystem::tickWorker(IPlayer &player)
 
     const bool driving = drivingOwnTruck(playerId);
 
-    if (phase == HaulerJobService::Phase::DriveOut || phase == HaulerJobService::Phase::DriveBack)
+    // Idle идёт по правилам фазы езды: грузовик за игроком, и место в кабине — его
+    // рабочее место (цель рейса выбирают именно оттуда).
+    if (phase == HaulerJobService::Phase::Idle || phase == HaulerJobService::Phase::DriveOut ||
+        phase == HaulerJobService::Phase::DriveBack)
     {
         if (!driving)
         {
@@ -2453,17 +2447,24 @@ void HaulerJobSystem::tickWorker(IPlayer &player)
         }
     }
 
-    // Анти-AFK за рулём: нет прогресса (зачтённых чекпоинтов / сданных коробок).
+    // Анти-AFK за рулём: прогресс — зачтённый чекпоинт, сданная коробка либо (в Idle)
+    // приезд на базу. Свой порог у фазы без цели: там прогресс — сам выбор рейса.
+    const bool idlePhase = phase == HaulerJobService::Phase::Idle;
+    const int limit = idlePhase ? NO_TARGET_SECONDS : DRIVE_NO_PROGRESS_SECONDS;
+    const int warn = idlePhase ? NO_TARGET_WARN_SECONDS : DRIVE_NO_PROGRESS_WARN_SECONDS;
     const int idle = ++m_driveIdleSeconds[playerId];
-    if (idle == DRIVE_NO_PROGRESS_WARN_SECONDS)
+    if (idle == warn)
     {
-        player.sendClientMessage(ERROR_COLOUR,
-                                 u(fmt::format("Нет прогресса по маршруту. Через {} секунд вас уволят за простой",
-                                               DRIVE_NO_PROGRESS_SECONDS - DRIVE_NO_PROGRESS_WARN_SECONDS)));
+        player.sendClientMessage(
+            ERROR_COLOUR,
+            u(idlePhase ? fmt::format("Цель рейса так и не выбрана (/target). Через {} секунд вас уволят за простой",
+                                      limit - warn)
+                        : fmt::format("Нет прогресса по маршруту. Через {} секунд вас уволят за простой", limit - warn)));
     }
-    else if (idle >= DRIVE_NO_PROGRESS_SECONDS)
+    else if (idle >= limit)
     {
-        dismiss(player, "Вы уволены за простой на маршруте", ERROR_COLOUR);
+        dismiss(player, idlePhase ? "Вы уволены за простой без выбранного рейса" : "Вы уволены за простой на маршруте",
+                ERROR_COLOUR);
         return;
     }
 }
@@ -2474,17 +2475,8 @@ void HaulerJobSystem::failBoarding(IPlayer &player)
 {
     const int playerId = player.getID();
 
-    // В режиме заказа возврата в очередь нет: заказ забронирован за этим водителем, и
-    // держать бронь за тем, кто не сел за руль, нельзя — заказ уходит обратно в список,
-    // а рейс начинается заново с его выбора. Очередь без заказа оставила бы смену без
-    // цели рейса вообще.
-    if (orderMode(playerId))
-    {
-        m_screenNoticeService.show(player, "boarding failed - order released", FAIL_POPUP_TIME, ERROR_POPUP_COLOUR);
-        dismiss(player, "Вы не успели сесть за руль — заказ возвращён в список, грузовик снят", ERROR_COLOUR);
-        return;
-    }
-
+    // Заказа у него быть не может: цель рейса выбирают уже за рулём, а он до руля не
+    // добрался. Поэтому возврат в очередь ничего не «зажимает».
     m_checkpointService.clearRaceForPlayer(player);
     m_waypointService.clearFor(player); // снять маркер грузовика — не залипает в очереди
     m_screenTimerService.hide(player);

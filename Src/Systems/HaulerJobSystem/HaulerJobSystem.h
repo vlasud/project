@@ -85,20 +85,24 @@ class HaulerJobSystem : public BaseSystem
     void onWithdrawMoney(IPlayer &player);
     void showInfo(IPlayer &player);
 
-    // --- выбор рейса (режим смены) ---
-    void showModeChoice(IPlayer &player);            // рейс в порт или заказ бизнеса
+    // --- выбор ЦЕЛИ РЕЙСА (/target, за рулём на базе) ---
+    // Цель выбирается не при устройстве, а в кабине: водитель сперва получает грузовик,
+    // и уже за рулём решает, что везти. Каждый сданный рейс возвращает его к этому шагу.
+    void onTargetCommand(IPlayer &player);
+    void showTargetChoice(IPlayer &player);          // рейс в порт или заказ бизнеса
     void showOrderList(IPlayer &player, int page);   // свободные заказы, страницами
-    void startAsOrderDriver(IPlayer &player, int orderId); // взять заказ и открыть смену
+    void startAsOrderDriver(IPlayer &player, int orderId); // взять заказ и начать его рейс
+    void startPortRun(IPlayer &player);                    // начать рейс в порт
+    // Проверки выбора цели: водитель своей смены, без активной задачи (фаза Idle), за
+    // рулём своего грузовика, на базе, руки носильщика свободны. Сообщение об отказе
+    // отправляет сама — false значит «дальше не идём».
+    bool targetGatesPass(IPlayer &player);
     // Общие проверки устройства ВОДИТЕЛЕМ (сессия, пеший, не занят, лок навигации).
     // Сообщение об отказе отправляет сама — false значит «дальше не идём».
     bool driverGatesPass(IPlayer &player);
-    // Открыть смену водителя выбранного режима. false — старт не состоялся (гонка
-    // кликов), и заказ вызывающий обязан вернуть в пул.
-    bool beginDriverShift(IPlayer &player, HaulerJobService::Mode mode, int orderId);
-    // Может ли игрок взять заказ, НЕ открывая смену заново: он уже водитель со своим
-    // грузовиком и без заказа (довёз предыдущий либо шёл портовым рейсом). Сообщение об
-    // отказе не отправляет — это просто развилка «продолжить смену или начать новую».
-    bool canTakeOrderInShift(int playerId) const;
+    // Открыть смену водителя: грузовик закрепляется сразу, цель рейса — за рулём.
+    // false — старт не состоялся (гонка кликов).
+    bool beginDriverShift(IPlayer &player);
 
     // --- пара «водитель + грузчик» ---
     void onPairCommand(IPlayer &driver, int targetId); // /pair — приглашение
@@ -122,8 +126,8 @@ class HaulerJobSystem : public BaseSystem
 
     // --- резерв/очередь ---
     void onReserved(IPlayer &player);
-    // Сел за руль своего грузовика: Reserved -> DriveOut, окно посадки закрыто,
-    // маркер грузовика снят, показан первый чекпоинт маршрута.
+    // Сел за руль своего грузовика: Reserved -> Idle, окно посадки закрыто, площадка
+    // отпущена, маркер грузовика снят. Дальше водитель выбирает цель (/target).
     void completeBoarding(IPlayer &player);
     void pumpQueue();
     void notifyQueueShift();
@@ -135,7 +139,14 @@ class HaulerJobSystem : public BaseSystem
     void beginLoadingPhase(IPlayer &player);   // прибыл в порт: DriveOut -> Loading
     void beginDriveBackPhase(IPlayer &player); // погрузил 10: Loading -> DriveBack
     void beginUnloadingPhase(IPlayer &player); // приехал на базу: DriveBack -> Unloading
-    void completeCyclePhase(IPlayer &player);  // разгрузил 10: Unloading -> DriveOut (заново)
+    void beginDriveOutPhase(IPlayer &player);  // выбрал порт: Idle -> DriveOut
+    // Разгрузил 10: Unloading -> Idle. Рейс сдан, грузовик остаётся за водителем, цель
+    // следующего рейса он выбирает заново (/target).
+    void finishRunPhase(IPlayer &player);
+    // Водитель без задачи: показать/снять цель «база» и напомнить про /target.
+    void showIdleTarget(IPlayer &player);
+    // Водитель на базе (по ПРИНЯТОЙ сервером позиции) — цель рейса берут только здесь.
+    bool atBase(int playerId) const;
 
     // --- пешая переноска коробки (погрузка/разгрузка) ---
     void onBoxCheckpointEnter(IPlayer &player);

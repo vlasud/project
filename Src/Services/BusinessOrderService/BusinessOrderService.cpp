@@ -1,5 +1,6 @@
 #include "Services/BusinessOrderService/BusinessOrderService.h"
 
+#include "Utils/TimeFormat/TimeFormat.h"
 #include <algorithm>
 
 int BusinessOrderService::perBox(int totalQuantity)
@@ -146,6 +147,9 @@ int BusinessOrderService::create(int businessId, std::vector<Item> items, std::i
     order.id = m_nextId++;
     order.businessId = businessId;
     order.bonus = std::max<std::int64_t>(bonus, 0);
+    // Момент заказа — АБСОЛЮТНЫЙ (unix): владелец должен видеть его и после
+    // рестарта, а строка БД это поле уже хранит (created_at).
+    order.createdAt = TimeFormat::nowUnix();
     order.items = std::move(items);
     const int id = order.id;
     m_orders.emplace(id, std::move(order));

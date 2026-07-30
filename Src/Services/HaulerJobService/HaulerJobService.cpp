@@ -12,9 +12,11 @@ bool validId(int playerId)
 
 bool HaulerJobService::holdsVehicle(Phase phase)
 {
-    // Личный грузовик закреплён/ведётся во всех активных фазах, кроме очереди.
-    return phase == Phase::Reserved || phase == Phase::DriveOut || phase == Phase::Loading ||
-           phase == Phase::DriveBack || phase == Phase::Unloading;
+    // Личный грузовик закреплён/ведётся во всех активных фазах, кроме очереди. Idle
+    // сюда входит обязательно: без выбранной цели грузовик всё равно ЕГО, и гейт руля
+    // опирается ровно на этот список.
+    return phase == Phase::Reserved || phase == Phase::Idle || phase == Phase::DriveOut ||
+           phase == Phase::Loading || phase == Phase::DriveBack || phase == Phase::Unloading;
 }
 
 HaulerJobService::Phase HaulerJobService::phaseOf(int playerId) const
@@ -102,15 +104,6 @@ int HaulerJobService::vehicleIdOf(int playerId) const
         return -1;
     }
     return m_state[playerId].vehicleId;
-}
-
-int HaulerJobService::driveIndexOf(int playerId) const
-{
-    if (!validId(playerId))
-    {
-        return 0;
-    }
-    return m_state[playerId].driveIndex;
 }
 
 int HaulerJobService::boxCountOf(int playerId) const
@@ -258,8 +251,7 @@ void HaulerJobService::removeFromQueue(int playerId)
     }
 }
 
-HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const SpotUsable &usable, Mode mode,
-                                                          int orderId)
+HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const SpotUsable &usable)
 {
     if (!validId(playerId))
     {
@@ -270,9 +262,8 @@ HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const S
     {
         return {StartResult::AlreadyWorking};
     }
-    // Заказ только у режима Orders: во «порт»-рейсе ему нечего означать.
-    const int shiftOrder = mode == Mode::Orders ? std::max(orderId, 0) : 0;
-
+    // Цель рейса на устройстве НЕ выбирается: сперва грузовик, дальше водитель за рулём
+    // берёт порт или заказ (/target). Поэтому режим здесь дефолтный, а заказа нет.
     const int spot = firstFreeSpot(usable);
     if (spot >= 0)
     {
@@ -280,8 +271,6 @@ HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const S
         state = State{};
         state.phase = Phase::Reserved;
         state.role = Role::Driver;
-        state.mode = mode;
-        state.orderId = shiftOrder;
         // Грузовика ещё нет: его спавнит привод и регистрирует через setStanding.
         return {StartResult::Reserved, -1, 0};
     }
@@ -289,8 +278,6 @@ HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const S
     state = State{};
     state.phase = Phase::Queued;
     state.role = Role::Driver;
-    state.mode = mode;
-    state.orderId = shiftOrder;
     m_queue.push_back(playerId);
     return {StartResult::Queued, -1, static_cast<int>(m_queue.size())};
 }
@@ -302,9 +289,29 @@ void HaulerJobService::clearOrder(int playerId)
         return;
     }
     m_state[playerId].orderId = 0;
-    // Заказа нет — рейс снова портовый: груз в порту есть всегда, и смена не остаётся
-    // без цели. Новый заказ водитель берёт у пикапа депо (startOrderLeg).
+    // Без заказа режим Orders ничего не значит: цель выбирается заново (/target).
     m_state[playerId].mode = Mode::Port;
+}
+
+bool HaulerJobService::startPortRun(int playerId)
+{
+    if (!validId(playerId))
+    {
+        return false;
+    }
+    State &state = m_state[playerId];
+    // ТОЛЬКО из Idle: цель меняют без активной задачи, иначе водитель бросал бы
+    // начатый рейс на полпути (и заказ вместе с ним).
+    if (state.phase != Phase::Idle || state.role != Role::Driver || state.vehicleId < 0)
+    {
+        return false;
+    }
+    state.mode = Mode::Port;
+    state.orderId = 0;
+    state.phase = Phase::DriveOut;
+    state.boxCount = 0;
+    state.carrying = false;
+    return true;
 }
 
 bool HaulerJobService::startOrderLeg(int playerId, int orderId)
@@ -314,24 +321,16 @@ bool HaulerJobService::startOrderLeg(int playerId, int orderId)
         return false;
     }
     State &state = m_state[playerId];
-    if (state.role != Role::Driver || state.orderId != 0 || state.vehicleId < 0)
-    {
-        return false;
-    }
-    // Только АКТИВНАЯ фаза с грузовиком: в очереди грузовика нет, а на посадке водитель
-    // ещё не за рулём — переводить его в погрузку было бы обходом окна посадки.
-    if (state.phase != Phase::DriveOut && state.phase != Phase::Loading &&
-        state.phase != Phase::DriveBack && state.phase != Phase::Unloading)
+    if (state.phase != Phase::Idle || state.role != Role::Driver || state.orderId != 0 || state.vehicleId < 0)
     {
         return false;
     }
     state.mode = Mode::Orders;
     state.orderId = orderId;
-    // Груз заказа лежит на базе: рейс начинается сразу с погрузки. Прогресс прошлого
-    // плеча обнуляется — прежний груз в кузове больше не в счёт.
+    // Груз заказа лежит на базе: рейс начинается сразу с погрузки, плеча в порт нет.
     state.phase = Phase::Loading;
-    state.driveIndex = 0;
     state.boxCount = 0;
+    state.carrying = false;
     return true;
 }
 
@@ -410,24 +409,9 @@ void HaulerJobService::completeBoarding(int playerId)
     {
         return;
     }
-    state.phase = Phase::DriveOut;
-    // Площадку НЕ освобождаем: грузовик всё ещё стоит на ней, пока работник не отъедет.
-    // Освободит releaseSpot по факту отъезда (привод следит в тике).
-}
-
-int HaulerJobService::advanceDrive(int playerId)
-{
-    if (!validId(playerId))
-    {
-        return 0;
-    }
-    State &state = m_state[playerId];
-    if (state.phase != Phase::DriveOut && state.phase != Phase::DriveBack)
-    {
-        return state.driveIndex;
-    }
-    ++state.driveIndex;
-    return state.driveIndex;
+    // Сел за руль — цели рейса ещё нет: её выбирают уже здесь, /target. Площадку
+    // отпускает привод (грузовик стоит на ней, но следующему из очереди она нужна).
+    state.phase = Phase::Idle;
 }
 
 void HaulerJobService::beginLoading(int playerId)
@@ -458,7 +442,6 @@ void HaulerJobService::beginDriveBack(int playerId)
         return;
     }
     state.phase = Phase::DriveBack;
-    state.driveIndex = 0;
     state.carrying = false;
 }
 
@@ -478,7 +461,7 @@ void HaulerJobService::beginUnloading(int playerId)
     state.carrying = false;
 }
 
-void HaulerJobService::completeCycle(int playerId)
+void HaulerJobService::finishRun(int playerId)
 {
     if (!validId(playerId))
     {
@@ -489,8 +472,9 @@ void HaulerJobService::completeCycle(int playerId)
     {
         return;
     }
-    state.phase = Phase::DriveOut;
-    state.driveIndex = 0;
+    // Рейс сдан. Грузовик остаётся за водителем, а цель следующего рейса он выбирает
+    // заново (/target) — потому фаза Idle, а не новый круг.
+    state.phase = Phase::Idle;
     state.boxCount = 0;
     state.carrying = false;
 }
@@ -577,17 +561,11 @@ HaulerJobService::Promotion HaulerJobService::promoteQueue(const SpotUsable &usa
     m_queue.pop_front();
 
     m_spots[spot].reservedBy = playerId;
-    State &state = m_state[playerId];
-    // State{} стирает роль, режим и заказ — восстанавливаем явно. Заказ в очереди уже
-    // принят на этого водителя (иначе его увёл бы второй), и дождавшись грузовика он
-    // везёт ИМЕННО его.
-    const Mode mode = state.mode;
-    const int orderId = state.orderId;
-    state = State{};
-    state.phase = Phase::Reserved;
-    state.role = Role::Driver;
-    state.mode = mode;
-    state.orderId = orderId;
+    // State{} стирает роль — восстанавливаем явно. Цели рейса у ждущего в очереди нет
+    // (её выбирают за рулём), поэтому переносить нечего.
+    m_state[playerId] = State{};
+    m_state[playerId].phase = Phase::Reserved;
+    m_state[playerId].role = Role::Driver;
     return {playerId, -1}; // грузовик спавнит привод
 }
 
@@ -598,7 +576,6 @@ void HaulerJobService::detachVehicle(int playerId)
     releaseSpot(playerId);
     State &state = m_state[playerId];
     state.vehicleId = -1;
-    state.driveIndex = 0;
     state.boxCount = 0;
     state.carrying = false;
 }

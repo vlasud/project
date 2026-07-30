@@ -48,9 +48,10 @@ class BusinessOrderService final : public IService
     {
         int id = 0;
         int businessId = 0;
-        std::int64_t bonus = 0; // делится между водителем и грузчиком по завершении
-        int boxesDone = 0;      // сколько коробок уже выгружено в точку
-        int driverId = -1;      // кто везёт прямо сейчас; -1 — лежит в пуле
+        std::int64_t bonus = 0;     // делится между водителем и грузчиком по завершении
+        std::int64_t createdAt = 0; // когда владелец сделал заказ (unix); 0 — из старой строки БД
+        int boxesDone = 0;          // сколько коробок уже выгружено в точку
+        int driverId = -1;          // кто везёт прямо сейчас; -1 — лежит в пуле
         std::vector<Item> items;
     };
 

@@ -1159,12 +1159,14 @@ void BusinessSystem::showManageMenu(IPlayer &player)
 
     // Пункты видны ВСЕГДА (правило проекта): недоступность объясняется по клику, а
     // не прячется. ПОРЯДОК СТРОК = порядок case-веток обработчика.
+    // ПОРЯДОК СТРОК = порядок case-веток обработчика. Инвентаризация и заказ стоят
+    // рядом сознательно: владелец смотрит остатки и тут же добирает товар.
     std::string body;
     body += "Информация\n";
     body += fmt::format("Прибыль (в копилке: ${})\n", business->balance);
     body += "Инвентаризация\n";
-    body += "Улучшения\n";
     body += "Заказать товар\n";
+    body += "Улучшения\n";
     body += "Продать игроку\n";
     body += "Передать игроку\n";
     body += "Отказаться от бизнеса";
@@ -1199,11 +1201,11 @@ void BusinessSystem::showManageMenu(IPlayer &player)
                 showInventory(*owner, businessId);
                 break;
             case 3:
-                owner->sendClientMessage(INFO_COLOUR, u("Улучшения бизнеса ещё в разработке"));
-                showManageMenu(*owner);
+                showOrderMenu(*owner, businessId);
                 break;
             case 4:
-                showOrderMenu(*owner, businessId);
+                owner->sendClientMessage(INFO_COLOUR, u("Улучшения бизнеса ещё в разработке"));
+                showManageMenu(*owner);
                 break;
             case 5:
                 showSellInput(*owner, businessId);
@@ -1790,11 +1792,35 @@ void BusinessSystem::showInventory(IPlayer &player, int businessId)
                          });
 }
 
+std::string BusinessSystem::orderRowStatus(int businessId) const
+{
+    // Заказ у точки один (сделать второй не даёт showOrderConfirm), поэтому берём
+    // первый: ordersOf отдаёт и лежащий в пуле, и тот, что уже везут.
+    const std::vector<const BusinessOrderService::Order *> orders = m_orderService.ordersOf(businessId);
+    if (orders.empty())
+    {
+        return "заказа нет";
+    }
+    const BusinessOrderService::Order *order = orders.front();
+    if (order->driverId >= 0)
+    {
+        // Везут — отмена уже невозможна, и владелец видит это до клика.
+        return fmt::format("заказ везут, {}/{}", order->boxesDone, BusinessOrderService::BOXES_PER_ORDER);
+    }
+    if (order->createdAt <= 0)
+    {
+        return "заказ ждёт развозчика"; // строка БД старого формата, без времени
+    }
+    return fmt::format("заказ от {}", TimeFormat::dateTime(order->createdAt));
+}
+
 void BusinessSystem::showOrderMenu(IPlayer &player, int businessId)
 {
     const int playerId = player.getID();
-    // ПОРЯДОК СТРОК = порядок case-веток обработчика.
-    const std::string body = "Выбрать к заказу\nСделать заказ\nОтменить заказ";
+    // ПОРЯДОК СТРОК = порядок case-веток обработчика. Отмена — оранжевая: это
+    // единственный пункт меню, который отменяет уже оплаченное действие.
+    const std::string body =
+        fmt::format("Выбрать к заказу\nСделать заказ\n{{FFB400}}Отменить заказ ({})", orderRowStatus(businessId));
 
     m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Заказ товара", body, "Выбрать", "Назад"),
                          [this, playerId, businessId](DialogResponse response, int listItem, StringView)
@@ -2176,12 +2202,12 @@ void BusinessSystem::persistOrder(int orderId)
 
 void BusinessSystem::loadOrdersAsync()
 {
-    using OrderRow = std::tuple<int, int, std::int64_t, int, std::string>;
+    using OrderRow = std::tuple<int, int, std::int64_t, int, std::string, std::int64_t>;
     DatabaseManager::selectQuery<std::vector<OrderRow>>(
         [](mysqlx::Schema schema)
         {
             mysqlx::RowResult rows = schema.getTable("business_order")
-                                         .select("id", "business_id", "bonus", "boxes_done", "items")
+                                         .select("id", "business_id", "bonus", "boxes_done", "items", "created_at")
                                          .execute();
             std::vector<OrderRow> result;
             while (mysqlx::Row row = rows.fetchOne())
@@ -2189,7 +2215,8 @@ void BusinessSystem::loadOrdersAsync()
                 try
                 {
                     result.emplace_back(row.get(0).get<int>(), row.get(1).get<int>(), row.get(2).get<std::int64_t>(),
-                                        row.get(3).get<int>(), row.get(4).get<std::string>());
+                                        row.get(3).get<int>(), row.get(4).get<std::string>(),
+                                        row.get(5).get<std::int64_t>());
                 }
                 catch (...)
                 {
@@ -2200,13 +2227,14 @@ void BusinessSystem::loadOrdersAsync()
         },
         [this](std::vector<OrderRow> rows)
         {
-            for (const auto &[id, businessId, bonus, boxesDone, payload] : rows)
+            for (const auto &[id, businessId, bonus, boxesDone, payload, createdAt] : rows)
             {
                 BusinessOrderService::Order order;
                 order.id = id;
                 order.businessId = businessId;
                 order.bonus = bonus;
                 order.boxesDone = boxesDone;
+                order.createdAt = createdAt;
                 // Состав — json; битый разбор теряет ТОЛЬКО этот заказ, а не все.
                 try
                 {

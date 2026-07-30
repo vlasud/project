@@ -42,10 +42,9 @@ class HaulerJobService final : public IService
     // сама собой — свободных стоящих грузовиков просто не появляется. Рабочих мест
     // при этом вдвое больше потолка: на грузовик приходятся водитель и грузчик.
     static constexpr int MAX_TRUCKS = 16;
-    // Чекпоинтов на каждом плече езды (задаются приводом; сервис лишь ведёт индекс
-    // и знает длину для клампа перехода в пешую фазу на последней точке плеча).
-    static constexpr int OUT_LENGTH = 14;  // езда-туда: 14 точек, последняя запускает погрузку
-    static constexpr int BACK_LENGTH = 8;  // езда-обратно: 8 точек, последняя запускает разгрузку
+    // У плеча езды РОВНО ОДИН чекпоинт — конец плеча (порт / база / точка заказа).
+    // Промежуточной разметки нет: дорогу водитель выбирает сам, поэтому индекса
+    // чекпоинта в состоянии тоже нет.
     static constexpr int BOXES_PER_LEG = 10; // коробок за плечо погрузки/разгрузки
 
     // Роль в работе. Смену (грузовик, маршрут, фазу, счётчик коробок) ведёт ВОДИТЕЛЬ;
@@ -62,25 +61,27 @@ class HaulerJobService final : public IService
     {
         NotWorking, // не в смене
         Queued,     // работник, ждёт свободного стоящего грузовика в FIFO-очереди
-        Reserved,   // грузовик закреплён на площадке, ждём посадку + первый чекпоинт
-        DriveOut,   // едет в порт по чекпоинтам туда (площадку не держит)
-        Loading,    // пешком грузит коробки со склада порта в грузовик
-        DriveBack,  // едет обратно на базу по чекпоинтам
-        Unloading,  // пешком разгружает коробки на точку выгрузки базы
+        Reserved,   // грузовик закреплён на площадке, ждём посадку за руль
+        Idle,       // за рулём, ЦЕЛЬ РЕЙСА НЕ ВЫБРАНА (/target) — держит грузовик
+        DriveOut,   // едет в порт (один чекпоинт — сам порт)
+        Loading,    // пешком грузит коробки в грузовик
+        DriveBack,  // едет к месту разгрузки (один чекпоинт — база / точка заказа)
+        Unloading,  // пешком разгружает коробки
         Standby     // грузчик: устроен и ждёт пары либо носит коробки в смене напарника
     };
 
     // ЧТО за рейс делает смена. Фазы у обоих режимов ОДНИ И ТЕ ЖЕ — меняются только
     // концы плеч, поэтому режим это поле смены, а не новая ветка фазовой машины:
-    //   Port:   Reserved -> DriveOut(порт) -> Loading(склад->кузов) -> DriveBack(база)
-    //           -> Unloading(->точка выгрузки базы) -> DriveOut заново
-    //   Orders: Reserved ->      —        -> Loading(база->кузов)   -> DriveBack(точка
-    //           бизнеса) -> Unloading(->прилавок внутри) -> конец рейса
-    // Плечо в порт заказу не нужно: товар лежит на базе, и рейс кончается доставкой.
+    //   Port:   Idle -> DriveOut(порт) -> Loading(склад->кузов) -> DriveBack(база)
+    //           -> Unloading(->точка выгрузки базы) -> Idle
+    //   Orders: Idle ->      —        -> Loading(база->кузов)   -> DriveBack(точка
+    //           бизнеса) -> Unloading(->прилавок внутри) -> Idle
+    // Плечо в порт заказу не нужно: товар лежит на базе. КАЖДЫЙ рейс кончается фазой
+    // Idle: цель выбирается заново (/target), грузовик при этом остаётся за водителем.
     enum class Mode
     {
-        Port,  // штатный бесконечный цикл порт-база
-        Orders // заказ бизнеса: база -> точка владельца, один рейс
+        Port,  // рейс в порт и обратно
+        Orders // заказ бизнеса: база -> точка владельца
     };
 
     Phase phaseOf(int playerId) const;
@@ -93,14 +94,13 @@ class HaulerJobService final : public IService
 
     // Водитель смены, которую обслуживает игрок: он сам (роль водителя с грузовиком)
     // либо его напарник (роль грузчика). -1 — игрок не участвует в активной смене.
-    // Фаза, грузовик, driveIndex и boxCount читаются ПО ЭТОМУ id, а не по игроку.
+    // Фаза, грузовик и boxCount читаются ПО ЭТОМУ id, а не по игроку.
     int shiftOwnerOf(int playerId) const;
     // Кто носит коробки в смене водителя: напарник-грузчик, иначе сам водитель.
     // Пара делит труд — водитель в паре коробки не трогает.
     int carrierOf(int driverId) const;
     bool isWorking(int playerId) const;        // phase != NotWorking
     int vehicleIdOf(int playerId) const;       // -1 — нет грузовика (очередь)
-    int driveIndexOf(int playerId) const;      // индекс чекпоинта текущего плеча езды
     int boxCountOf(int playerId) const;        // коробок сдано на текущем плече (0..BOXES_PER_LEG)
     bool carryingOf(int playerId) const;       // держит коробку (ждём сброса) в Loading/Unloading
     int queuePositionOf(int playerId) const;   // 1-based место в очереди; 0 — не в очереди
@@ -143,18 +143,21 @@ class HaulerJobService final : public IService
     // мире не знает, проверку приносит вызывающий.
     using SpotUsable = std::function<bool(int spot)>;
 
-    // mode/orderId — что за рейс берёт водитель. Заказ к этому моменту УЖЕ принят в
-    // BusinessOrderService (иначе его успел бы взять второй водитель), поэтому здесь
-    // он только запоминается: сервис работы про состав и премию не знает.
-    StartOutcome startWork(int playerId, const SpotUsable &usable, Mode mode, int orderId);
+    // Устроить ВОДИТЕЛЕМ: грузовик закрепляется сразу (или очередь), ЦЕЛЬ рейса не
+    // выбрана — её водитель берёт уже за рулём (Idle -> startPortRun/startOrderLeg).
+    StartOutcome startWork(int playerId, const SpotUsable &usable);
     // Заказ отработан либо возвращён в пул — снять привязку, чтобы teardown не вернул
-    // в пул то, чего уже нет. Смена при этом снова становится ПОРТОВОЙ: смена без
-    // заказа в режиме Orders не имела бы цели рейса.
+    // в пул то, чего уже нет. Режим сбрасывается на Port: без заказа режим Orders не
+    // означал бы ничего, а цель всё равно выбирается заново.
     void clearOrder(int playerId);
-    // Взять заказ, НЕ открывая смену заново: водитель уже в смене со своим грузовиком
-    // и без заказа (довёз предыдущий либо шёл портовым рейсом). Ставит режим Orders и
-    // фазу погрузки — груз заказа лежит на базе. false — не водитель, нет грузовика,
-    // фаза не активная (очередь/посадка) либо заказ уже есть.
+    // Цель выбрана — ПОРТ: Idle -> DriveOut, режим Port, заказ снят, счётчики с нуля.
+    // false — фаза не Idle (цель выбирают только без активной задачи) либо нет
+    // грузовика. Гейты «за рулём» и «на базе» держит привод: они про мир, не про стейт.
+    bool startPortRun(int playerId);
+    // Цель выбрана — ЗАКАЗ: Idle -> Loading (груз заказа лежит на базе), режим Orders.
+    // Заказ к этому моменту УЖЕ принят в BusinessOrderService (иначе его успел бы
+    // взять второй водитель), поэтому здесь он только запоминается: сервис работы про
+    // состав и премию не знает. false — фаза не Idle, нет грузовика либо заказ уже есть.
     bool startOrderLeg(int playerId, int orderId);
 
     // Устроить ГРУЗЧИКОМ: NotWorking -> Standby, роль Loader. Ни грузовика, ни
@@ -172,25 +175,20 @@ class HaulerJobService final : public IService
     // Снять флаг «несёт коробку» (teardown напарника при распаде пары).
     void clearCarry(int playerId);
 
-    // Посадка завершена (первый чекпоинт туда подобран за рулём): Reserved ->
-    // DriveOut, площадка освобождается (грузовик покинул депо). no-op вне Reserved.
+    // Сел за руль: Reserved -> Idle (цель рейса ещё не выбрана). no-op вне Reserved.
     void completeBoarding(int playerId);
 
-    // Зачёт чекпоинта езды: ++driveIndex. Возвращает НОВЫЙ индекс. no-op вне
-    // DriveOut/DriveBack (возвращает текущий индекс).
-    int advanceDrive(int playerId);
-
-    // Плечо езды-туда доехало (вошли в последнюю точку OUT): DriveOut -> Loading,
+    // Доехал до порта (вошёл в чекпоинт плеча «туда»): DriveOut -> Loading,
     // boxCount=0, carrying=false. no-op вне DriveOut.
     void beginLoading(int playerId);
-    // Погрузка окончена (10/10): Loading -> DriveBack, driveIndex=0. no-op вне Loading.
+    // Погрузка окончена (10/10): Loading -> DriveBack. no-op вне Loading.
     void beginDriveBack(int playerId);
-    // Плечо езды-обратно доехало (вошли в последнюю точку BACK): DriveBack ->
-    // Unloading, boxCount=0, carrying=false. no-op вне DriveBack.
+    // Доехал до места разгрузки (база / точка заказа): DriveBack -> Unloading,
+    // boxCount=0, carrying=false. no-op вне DriveBack.
     void beginUnloading(int playerId);
-    // Разгрузка окончена (10/10): Unloading -> DriveOut, driveIndex=0, boxCount=0.
-    // Цикл начинается заново. no-op вне Unloading.
-    void completeCycle(int playerId);
+    // Разгрузка окончена (10/10): Unloading -> Idle, boxCount=0. Рейс сдан, грузовик
+    // остаётся за водителем, цель выбирается заново. no-op вне Unloading.
+    void finishRun(int playerId);
 
     // Взял коробку (вход в чекпоинт-источник пешей фазы): carrying false->true у
     // НОСИЛЬЩИКА. no-op, если он не носильщик смены, вне Loading/Unloading или уже несёт.
@@ -228,10 +226,9 @@ class HaulerJobService final : public IService
     {
         Phase phase = Phase::NotWorking;
         Role role = Role::None;
-        Mode mode = Mode::Port; // режим РЕЙСА (у грузчика не используется)
+        Mode mode = Mode::Port; // режим ТЕКУЩЕГО рейса (в Idle не значит ничего)
         int partnerId = -1;   // вторая половина пары; -1 — соло/без пары
-        int vehicleId = -1;   // закреплённый (Reserved) / ведомый (DriveOut..Unloading) грузовик
-        int driveIndex = 0;   // индекс чекпоинта текущего плеча езды
+        int vehicleId = -1;   // закреплённый (Reserved) / ведомый (Idle..Unloading) грузовик
         int boxCount = 0;     // коробок сдано на текущем плече (ведёт ВОДИТЕЛЬ смены)
         int orderId = 0;      // заказ бизнеса в режиме Orders; 0 — нет
         bool carrying = false; // держит коробку — флаг НОСИЛЬЩИКА, не смены
