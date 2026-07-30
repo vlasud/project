@@ -2,6 +2,7 @@
 
 #include "Macro.h"
 #include "Services/AuctionService/AuctionService.h"
+#include "Services/BusinessOrderService/BusinessOrderService.h"
 #include "Services/BusinessService/BusinessService.h"
 #include "Services/Core/MapIconService/MapIconService.h"
 #include "Services/Core/PickupService/PickupService.h"
@@ -64,6 +65,14 @@ class BusinessSystem : public BaseSystem
     // Правка госцены уже созданного бизнеса (из списка).
     void showPriceEdit(IPlayer &player, int businessId);
     void showDevRemove(IPlayer &player);
+    // Дев-склад: точка -> выдать товар в нужном количестве либо очистить склад целиком.
+    // Нужен для проверки витрины и заказов: без него набить склад можно только оплаченным
+    // заказом, то есть полным рейсом развозчика.
+    void showDevStockPick(IPlayer &player);
+    void showDevStock(IPlayer &player, int businessId);
+    void showDevStockAmount(IPlayer &player, int businessId, std::size_t goodIndex);
+    void showDevStockClear(IPlayer &player, int businessId); // подтверждение очистки
+    void clearDevStock(IPlayer &player, int businessId);
 
     // Завести чекпоинты-прилавки по каталогам ВСЕХ зарегистрированных типов (по
     // одному на интерьер, у которого замерен counter). Зовётся из initialize.
@@ -107,7 +116,21 @@ class BusinessSystem : public BaseSystem
     void showOrderPicker(IPlayer &player, int businessId); // тот же список + колонка заказа
     void showOrderAmountInput(IPlayer &player, int businessId, std::size_t goodIndex); // сколько заказать
     void showOrderConfirm(IPlayer &player, int businessId);                            // что и почём
-    void placeOrder(IPlayer &player, int businessId);                                  // оплата и доставка
+    void showBonusInput(IPlayer &player, int businessId, std::int64_t cost);           // премия развозчикам
+    void placeOrder(IPlayer &player, int businessId, std::int64_t bonus);              // оплата и заказ
+    // Стоимость закупки по черновику игрока, склампленная фактическим местом на
+    // складе. plan — что реально закажем (товар -> количество).
+    std::int64_t planOrder(int playerId, int businessId, std::vector<std::pair<int, int>> &plan) const;
+
+    // --- персист заказов ---
+    void persistOrder(int orderId);
+    void loadOrdersAsync();
+    // Снять все заказы точки и вернуть владельцу деньги (снос точки девом).
+    void refundOrdersOf(int businessId);
+    // Отмена заказа владельцем — только пока его никто не повёз.
+    void cancelOrder(IPlayer &player, int businessId);
+    // Во сколько обошлась закупка заказа (без премии) по ценам его точки.
+    std::int64_t orderCost(const BusinessOrderService::Order &order) const;
     // Черновик заказа игрока: тип предмета -> сколько заказать. Живёт до отправки
     // заказа либо до конца сессии — в БД ему делать нечего.
     std::unordered_map<int, int> &orderDraft(int playerId);
@@ -180,6 +203,7 @@ class BusinessSystem : public BaseSystem
     ScreenNoticeService &m_noticeService;   // попап с названием точки при входе
     AudioService &m_audioService;           // звук входа
     InventoryService &m_inventoryService;   // имена товаров в инвентаризации и заказе
+    BusinessOrderService &m_orderService;   // заказы товара для развозчиков
     PlayerStateService &m_stateService;
     TextLabelService &m_labelService;
     PlayerMoneyService &m_moneyService;

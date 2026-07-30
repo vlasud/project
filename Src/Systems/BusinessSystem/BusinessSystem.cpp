@@ -172,6 +172,7 @@ BusinessSystem::BusinessSystem(ICore &core, const ServiceRegister &serviceRegist
       m_noticeService(serviceRegister.getService<ScreenNoticeService>()),
       m_audioService(serviceRegister.getService<AudioService>()),
       m_inventoryService(serviceRegister.getService<InventoryService>()),
+      m_orderService(serviceRegister.getService<BusinessOrderService>()),
       m_stateService(serviceRegister.getService<PlayerStateService>()),
       m_labelService(serviceRegister.getService<TextLabelService>()),
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
@@ -221,6 +222,9 @@ BusinessSystem::BusinessSystem(ICore &core, const ServiceRegister &serviceRegist
             persistStock(businessId, itemType, quantity);
         });
 
+    // Заказ держит УЖЕ СПИСАННЫЕ у владельца деньги — он обязан пережить рестарт.
+    m_orderService.subscribeChanged([this](int orderId) { persistOrder(orderId); });
+
     // Черновик заказа привязан к слоту игрока — на конце сессии он чужой.
     m_sessionService.subscribeEnd([this](IPlayer &player, const PlayerSessionService::Session &)
                                   { clearOrderDraft(player.getID()); });
@@ -268,6 +272,7 @@ void BusinessSystem::initialize(IComponentList * /*components*/)
     registerCounterCheckpoints();
     loadFromFileAsync();
     loadStockAsync();
+    loadOrdersAsync();
 }
 
 // Чекпоинт-ПРИЛАВОК: встал на него внутри точки — открылась витрина типа.
@@ -331,7 +336,9 @@ void BusinessSystem::onCounterEnter(IPlayer &player, BusinessService::Type type,
 void BusinessSystem::showDevMenu(IPlayer &player)
 {
     const int playerId = player.getID();
-    const std::string body = fmt::format("Создать бизнес\nСписок ({})\nСнести бизнес", m_businessService.count());
+    // ПОРЯДОК СТРОК = порядок case-веток обработчика.
+    const std::string body =
+        fmt::format("Создать бизнес\nСписок ({})\nСнести бизнес\nСклад точки", m_businessService.count());
 
     m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Бизнесы — дев-меню", body, "Выбрать", "Закрыть"),
                          [this, playerId](DialogResponse response, int listItem, StringView)
@@ -351,6 +358,9 @@ void BusinessSystem::showDevMenu(IPlayer &player)
                                  break;
                              case 2:
                                  showDevRemove(*dev);
+                                 break;
+                             case 3:
+                                 showDevStockPick(*dev);
                                  break;
                              default:
                                  break;
@@ -640,6 +650,9 @@ void BusinessSystem::showDevRemove(IPlayer &player)
             }
             // Владение живёт в БД и через removeBusiness не проходит — строку
             // сносим отдельно, иначе она осиротеет и займёт аккаунт впустую.
+            // Заказы снимаем ДО стирания записи: возврат считается по составу и
+            // ценам этой точки, а после removeBusiness их уже не спросить.
+            refundOrdersOf(id);
             eraseOwnershipRow(id);
             // Рантайм-точки снимаем ДО удаления записи: иначе пикапы остались бы
             // висеть без владельца.
@@ -649,6 +662,245 @@ void BusinessSystem::showDevRemove(IPlayer &player)
                 dev->sendClientMessage(DEV_COLOUR, u(fmt::format("Бизнес #{} снесён", id)));
             }
         });
+}
+
+// ------------------------------------------------------------------ дев-склад
+
+void BusinessSystem::showDevStockPick(IPlayer &player)
+{
+    const int playerId = player.getID();
+    if (m_businessService.count() == 0)
+    {
+        player.sendClientMessage(DEV_COLOUR, u("Бизнесов нет"));
+        return;
+    }
+
+    // Снимок id в порядке показа: listItem клиента адресует именно его (как в сносе).
+    std::vector<int> ids;
+    std::string body = "ID\tТип\tНа складе\n";
+    for (const auto &[id, business] : m_businessService.businesses())
+    {
+        // Сумма по всем товарам типа: полный расклад даёт уже склад конкретной точки.
+        int units = 0;
+        for (const BusinessService::GoodDef &good : m_businessService.goods(business.type))
+        {
+            units += m_businessService.stockOf(id, good.itemType);
+        }
+        ids.push_back(id);
+        body += fmt::format("{}\t{}\t{} ед.\n", id, m_businessService.typeName(business.type), units);
+    }
+    body.pop_back();
+
+    m_dialogService.show(player, makeDialog(DialogStyle_TABLIST_HEADERS, "Склад точки — выбор", body, "Открыть", "Назад"),
+                         [this, playerId, ids](DialogResponse response, int listItem, StringView)
+                         {
+                             IPlayer *dev = m_core.getPlayers().get(playerId);
+                             if (!dev)
+                             {
+                                 return;
+                             }
+                             if (response != DialogResponse_Left)
+                             {
+                                 showDevMenu(*dev);
+                                 return;
+                             }
+                             if (listItem < 0 || listItem >= static_cast<int>(ids.size()))
+                             {
+                                 return; // индекс от клиента — по снимку списка
+                             }
+                             showDevStock(*dev, ids[static_cast<std::size_t>(listItem)]);
+                         });
+}
+
+void BusinessSystem::showDevStock(IPlayer &player, int businessId)
+{
+    const int playerId = player.getID();
+    // Ре-валидация: точку могли снести, пока висел выбор.
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business)
+    {
+        player.sendClientMessage(DEV_COLOUR, u(fmt::format("Бизнес #{} не найден", businessId)));
+        return;
+    }
+    const std::vector<BusinessService::GoodDef> &goods = m_businessService.goods(business->type);
+    if (goods.empty())
+    {
+        player.sendClientMessage(DEV_COLOUR, u("У этого типа нет ассортимента"));
+        showDevStockPick(player);
+        return;
+    }
+
+    // Строки товаров, последняя — очистка. Индексы: товар == listItem, очистка == размер.
+    std::string body = "Товар\tНа складе\tЦена\n";
+    for (const BusinessService::GoodDef &good : goods)
+    {
+        body += fmt::format("{}\t{}/{}\t{}\n", m_inventoryService.itemName(good.itemType),
+                            m_businessService.stockOf(businessId, good.itemType), good.stockCap,
+                            Money::text(good.price));
+    }
+    body += "» Очистить склад (все товары в 0)";
+
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_TABLIST_HEADERS,
+                   fmt::format("Склад #{} — {}", businessId, m_businessService.typeName(business->type)), body,
+                   "Выбрать", "Назад"),
+        [this, playerId, businessId, count = static_cast<int>(goods.size())](DialogResponse response, int listItem,
+                                                                            StringView)
+        {
+            IPlayer *dev = m_core.getPlayers().get(playerId);
+            if (!dev)
+            {
+                return;
+            }
+            if (response != DialogResponse_Left || listItem < 0 || listItem > count)
+            {
+                showDevStockPick(*dev);
+                return;
+            }
+            if (listItem == count) // последняя строка — очистка склада
+            {
+                showDevStockClear(*dev, businessId);
+                return;
+            }
+            showDevStockAmount(*dev, businessId, static_cast<std::size_t>(listItem));
+        });
+}
+
+void BusinessSystem::showDevStockAmount(IPlayer &player, int businessId, std::size_t goodIndex)
+{
+    const int playerId = player.getID();
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business)
+    {
+        return;
+    }
+    const std::vector<BusinessService::GoodDef> &goods = m_businessService.goods(business->type);
+    if (goodIndex >= goods.size())
+    {
+        return;
+    }
+    const BusinessService::GoodDef &good = goods[goodIndex];
+    // Потолок выдачи — свободное место: склад клампится в сервисе, и просить больше
+    // бессмысленно (сервис молча срежет разницу).
+    const int room = m_businessService.stockRoom(businessId, good.itemType);
+    if (room <= 0)
+    {
+        player.sendClientMessage(DEV_COLOUR,
+                                 u(fmt::format("Склад по «{}» полон — сперва очистите",
+                                               m_inventoryService.itemName(good.itemType))));
+        showDevStock(player, businessId);
+        return;
+    }
+
+    m_dialogService.showNumberInput(
+        player,
+        makeDialog(DialogStyle_INPUT, m_inventoryService.itemName(good.itemType),
+                   fmt::format("Бизнес #{}\nНа складе: {}/{}\nМожно выдать: {}\n\nСколько выдать? Товар ложится на "
+                               "склад точки сразу и бесплатно.",
+                               businessId, m_businessService.stockOf(businessId, good.itemType), good.stockCap, room),
+                   "Выдать", "Назад"),
+        [this, playerId, businessId, goodIndex, room](DialogResponse response, std::int64_t value)
+        {
+            IPlayer *dev = m_core.getPlayers().get(playerId);
+            if (!dev)
+            {
+                return;
+            }
+            if (response != DialogResponse_Left)
+            {
+                showDevStock(*dev, businessId);
+                return;
+            }
+            // Ре-валидация на клике: точку могли снести, ассортимент типа — сменить.
+            const BusinessService::Business *current = m_businessService.getBusiness(businessId);
+            if (!current)
+            {
+                dev->sendClientMessage(DEV_COLOUR, u(fmt::format("Бизнес #{} не найден", businessId)));
+                return;
+            }
+            const std::vector<BusinessService::GoodDef> &goods = m_businessService.goods(current->type);
+            if (goodIndex >= goods.size())
+            {
+                return;
+            }
+            if (value <= 0 || value > room)
+            {
+                dev->sendClientMessage(DEV_COLOUR, u(fmt::format("Выдать можно от 1 до {}", room)));
+                showDevStockAmount(*dev, businessId, goodIndex);
+                return;
+            }
+            const int itemType = goods[goodIndex].itemType;
+            const int added = m_businessService.addStock(businessId, itemType, static_cast<int>(value));
+            dev->sendClientMessage(DEV_COLOUR,
+                                   u(fmt::format("Бизнес #{}: выдано {} x{}, на складе {}/{}", businessId,
+                                                 m_inventoryService.itemName(itemType), added,
+                                                 m_businessService.stockOf(businessId, itemType),
+                                                 goods[goodIndex].stockCap)));
+            showDevStock(*dev, businessId);
+        });
+}
+
+void BusinessSystem::showDevStockClear(IPlayer &player, int businessId)
+{
+    const int playerId = player.getID();
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business)
+    {
+        return;
+    }
+    // Подтверждение, потому что стираем ОПЛАЧЕННЫЙ игроком товар: закупку ему никто не
+    // вернёт, и промах по строке списка стоил бы ему денег.
+    std::string body = fmt::format("Обнулить ВЕСЬ склад бизнеса #{} ({})?\n\nСейчас лежит:\n", businessId,
+                                   m_businessService.typeName(business->type));
+    for (const BusinessService::GoodDef &good : m_businessService.goods(business->type))
+    {
+        body += fmt::format("- {}: {}\n", m_inventoryService.itemName(good.itemType),
+                            m_businessService.stockOf(businessId, good.itemType));
+    }
+    body += "\nЭто товар, за который владелец заплатил. Возврата не будет.";
+
+    m_dialogService.show(player, makeDialog(DialogStyle_MSGBOX, "Очистить склад", body, "Очистить", "Назад"),
+                         [this, playerId, businessId](DialogResponse response, int, StringView)
+                         {
+                             IPlayer *dev = m_core.getPlayers().get(playerId);
+                             if (!dev)
+                             {
+                                 return;
+                             }
+                             if (response != DialogResponse_Left)
+                             {
+                                 showDevStock(*dev, businessId);
+                                 return;
+                             }
+                             clearDevStock(*dev, businessId);
+                         });
+}
+
+void BusinessSystem::clearDevStock(IPlayer &player, int businessId)
+{
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business)
+    {
+        player.sendClientMessage(DEV_COLOUR, u(fmt::format("Бизнес #{} не найден", businessId)));
+        return;
+    }
+
+    // Списываем через consumeStock: он же уведомляет наблюдателя, и БД получает 0 тем
+    // же путём, что при продаже. Обход ассортимента безопасен — список товаров живёт в
+    // реестре ТИПА, а сервис в цикле правит только остатки конкретной точки.
+    int cleared = 0;
+    for (const BusinessService::GoodDef &good : m_businessService.goods(business->type))
+    {
+        const int stock = m_businessService.stockOf(businessId, good.itemType);
+        if (stock > 0 && m_businessService.consumeStock(businessId, good.itemType, stock))
+        {
+            cleared += stock;
+        }
+    }
+    player.sendClientMessage(DEV_COLOUR,
+                             u(fmt::format("Бизнес #{}: склад очищен, снято {} ед.", businessId, cleared)));
+    showDevStock(player, businessId);
 }
 
 // ------------------------------------------------------------------ рантайм точки
@@ -1427,6 +1679,10 @@ void BusinessSystem::showAbandonConfirm(IPlayer &player, int businessId)
                 owner->sendClientMessage(ERROR_COLOUR, u("Это уже не ваш бизнес"));
                 return;
             }
+            // Ничейная точка не работает и внутрь не пускает — заказ в неё доставить
+            // было бы нельзя ни развозчику, ни новому владельцу. Снимаем заказы ДО
+            // смены владельца: возврат за невывезенную часть уходит тому, кто платил.
+            refundOrdersOf(businessId);
             m_businessService.setOwner(businessId, ""); // персист и лейбл доводит onOwnerChanged
             owner->sendClientMessage(INFO_COLOUR, u("Вы отказались от бизнеса — точка вернулась государству"));
         });
@@ -1538,7 +1794,7 @@ void BusinessSystem::showOrderMenu(IPlayer &player, int businessId)
 {
     const int playerId = player.getID();
     // ПОРЯДОК СТРОК = порядок case-веток обработчика.
-    const std::string body = "Выбрать к заказу\nСделать заказ";
+    const std::string body = "Выбрать к заказу\nСделать заказ\nОтменить заказ";
 
     m_dialogService.show(player, makeDialog(DialogStyle_LIST, "Заказ товара", body, "Выбрать", "Назад"),
                          [this, playerId, businessId](DialogResponse response, int listItem, StringView)
@@ -1560,6 +1816,9 @@ void BusinessSystem::showOrderMenu(IPlayer &player, int businessId)
                                  break;
                              case 1:
                                  showOrderConfirm(*owner, businessId);
+                                 break;
+                             case 2:
+                                 cancelOrder(*owner, businessId);
                                  break;
                              default:
                                  break;
@@ -1717,11 +1976,11 @@ void BusinessSystem::showOrderConfirm(IPlayer &player, int businessId)
         body += fmt::format("{} — {} шт. по {} = {}\n", m_inventoryService.itemName(good.itemType), ordered->second,
                             Money::text(unit), Money::text(cost));
     }
-    body += fmt::format("\nИТОГО: {}\n\nЗакупка стоит {}% от цены продажи.\nПродолжить заказ?", Money::text(total),
-                        ORDER_PRICE_PERCENT);
+    body += fmt::format("\nИТОГО закупка: {}\n\nЗакупка стоит {}% от цены продажи.\nДальше — премия развозчикам.",
+                        Money::text(total), ORDER_PRICE_PERCENT);
 
-    m_dialogService.show(player, makeDialog(DialogStyle_MSGBOX, "Подтверждение заказа", body, "Заказать", "Назад"),
-                         [this, playerId, businessId](DialogResponse response, int, StringView)
+    m_dialogService.show(player, makeDialog(DialogStyle_MSGBOX, "Подтверждение заказа", body, "Далее", "Назад"),
+                         [this, playerId, businessId, total](DialogResponse response, int, StringView)
                          {
                              IPlayer *owner = m_core.getPlayers().get(playerId);
                              if (!owner)
@@ -1733,32 +1992,30 @@ void BusinessSystem::showOrderConfirm(IPlayer &player, int businessId)
                                  showOrderMenu(*owner, businessId);
                                  return;
                              }
-                             placeOrder(*owner, businessId);
+                             showBonusInput(*owner, businessId, total);
                          });
 }
 
-void BusinessSystem::placeOrder(IPlayer &player, int businessId)
+std::int64_t BusinessSystem::planOrder(int playerId, int businessId, std::vector<std::pair<int, int>> &plan) const
 {
-    const int playerId = player.getID();
-    // Ре-валидация на клике: точку могли продать/снести, склад — набить продажами,
-    // пока висело подтверждение.
+    plan.clear();
     const BusinessService::Business *business = m_businessService.getBusiness(businessId);
-    if (!business || business->owner != ownerKeyOf(playerId))
+    if (!business)
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Это уже не ваш бизнес"));
-        clearOrderDraft(playerId);
-        return;
+        return 0;
     }
-
-    // Пересчитываем и КЛАМПИМ по фактическому свободному месту: за время диалога
-    // склад мог измениться, и платить за то, что не влезет, владелец не должен.
-    std::vector<std::pair<int, int>> plan; // товар -> сколько реально закажем
+    const auto draftIt = m_orderDrafts.find(playerId);
+    if (draftIt == m_orderDrafts.end())
+    {
+        return 0;
+    }
+    // КЛАМПИМ по фактическому свободному месту: за время диалогов склад мог
+    // измениться продажами, и платить за то, что не влезет, владелец не должен.
     std::int64_t total = 0;
-    const std::unordered_map<int, int> &draft = orderDraft(playerId);
     for (const BusinessService::GoodDef &good : m_businessService.goods(business->type))
     {
-        const auto ordered = draft.find(good.itemType);
-        if (ordered == draft.end() || ordered->second <= 0)
+        const auto ordered = draftIt->second.find(good.itemType);
+        if (ordered == draftIt->second.end() || ordered->second <= 0)
         {
             continue;
         }
@@ -1770,14 +2027,85 @@ void BusinessSystem::placeOrder(IPlayer &player, int businessId)
         plan.emplace_back(good.itemType, amount);
         total += good.price * ORDER_PRICE_PERCENT / 100 * amount;
     }
-    if (plan.empty() || total <= 0)
+    return total;
+}
+
+void BusinessSystem::showBonusInput(IPlayer &player, int businessId, std::int64_t cost)
+{
+    const int playerId = player.getID();
+    // Потолок премии — доля от закупки. Без него владелец вбил бы любую сумму и
+    // перекачал деньги напарнику-развозчику мимо всякой экономики.
+    const std::int64_t maxBonus = cost * BusinessOrderService::MAX_BONUS_PERCENT / 100;
+
+    m_dialogService.showNumberInput(
+        player,
+        makeDialog(DialogStyle_INPUT, "Премия развозчикам",
+                   fmt::format("Закупка: {}\n\nПремию получат те, кто ПРИВЕЗЁТ заказ.\nЧем она больше, тем "
+                               "охотнее возьмут: список\nу развозчиков отсортирован по премии.\n\n"
+                               "Максимум — {}% от закупки, то есть {}.\n0 — без премии.",
+                               Money::text(cost), BusinessOrderService::MAX_BONUS_PERCENT, Money::text(maxBonus)),
+                   "Заказать", "Назад"),
+        [this, playerId, businessId, cost, maxBonus](DialogResponse response, std::int64_t value)
+        {
+            IPlayer *owner = m_core.getPlayers().get(playerId);
+            if (!owner)
+            {
+                return;
+            }
+            if (response != DialogResponse_Left)
+            {
+                showOrderMenu(*owner, businessId);
+                return;
+            }
+            if (value < 0 || value > maxBonus)
+            {
+                owner->sendClientMessage(ERROR_COLOUR,
+                                         u(fmt::format("Премия — от 0 до {}", Money::text(maxBonus))));
+                showBonusInput(*owner, businessId, cost);
+                return;
+            }
+            placeOrder(*owner, businessId, value);
+        });
+}
+
+void BusinessSystem::placeOrder(IPlayer &player, int businessId, std::int64_t bonus)
+{
+    const int playerId = player.getID();
+    // Ре-валидация на клике: точку могли продать/снести, склад — набить продажами,
+    // пока висели диалоги.
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business || business->owner != ownerKeyOf(playerId))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Это уже не ваш бизнес"));
+        clearOrderDraft(playerId);
+        return;
+    }
+    // ОДИН незавершённый заказ на точку. Два заказа вместе могли бы превысить
+    // потолок склада, и addStock молча срезал бы разницу — владелец заплатил бы за
+    // товар, который некуда положить.
+    if (m_orderService.hasActiveOrder(businessId))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("По этой точке уже есть заказ — дождитесь доставки"));
+        showManageMenu(player);
+        return;
+    }
+
+    std::vector<std::pair<int, int>> plan;
+    const std::int64_t cost = planOrder(playerId, businessId, plan);
+    if (plan.empty() || cost <= 0)
     {
         player.sendClientMessage(ERROR_COLOUR, u("Заказывать нечего — склад уже полон"));
         clearOrderDraft(playerId);
         showManageMenu(player);
         return;
     }
-    // Деньги забираем ДО завоза: обратный порядок завёз бы товар бесплатно.
+    // Премию пересчитываем от АКТУАЛЬНОЙ закупки: состав мог схлопнуться, пока шёл
+    // ввод, и старый потолок стал бы завышенным.
+    const std::int64_t maxBonus = cost * BusinessOrderService::MAX_BONUS_PERCENT / 100;
+    const std::int64_t finalBonus = std::clamp<std::int64_t>(bonus, 0, maxBonus);
+    const std::int64_t total = cost + finalBonus;
+
+    // Деньги забираем ДО создания заказа: обратный порядок отдал бы заказ бесплатно.
     if (!m_moneyService.take(player, static_cast<unsigned long long>(total)))
     {
         player.sendClientMessage(ERROR_COLOUR, u(fmt::format("Не хватает денег: нужно {}", Money::text(total))));
@@ -1785,18 +2113,240 @@ void BusinessSystem::placeOrder(IPlayer &player, int businessId)
         return;
     }
 
-    // ВРЕМЕННО: завоз мгновенный. По задумке заказ уходит в работу «Грузчики», но её
-    // ещё нет — а списать деньги и не привезти товар нельзя. Когда работа появится,
-    // заменяется ровно этот блок: здесь создаётся заказ, а addStock зовёт доставка.
+    std::vector<BusinessOrderService::Item> items;
+    items.reserve(plan.size());
     for (const auto &[itemType, amount] : plan)
     {
-        m_businessService.addStock(businessId, itemType, amount);
+        items.push_back(BusinessOrderService::Item{itemType, amount});
+    }
+    const int orderId = m_orderService.create(businessId, std::move(items), finalBonus);
+    if (orderId <= 0)
+    {
+        // Создать не вышло — деньги немедленно назад, товара не будет.
+        m_moneyService.giveMoney(player, static_cast<unsigned long long>(total));
+        player.sendClientMessage(ERROR_COLOUR, u("Не удалось оформить заказ, деньги возвращены"));
+        return;
     }
     clearOrderDraft(playerId);
 
-    player.sendClientMessage(INFO_COLOUR, u(fmt::format("Заказ оплачен ({}) и уже на складе", Money::text(total))));
-    player.sendClientMessage(INFO_COLOUR, u("Пока заказы доставляются сразу — работа «Грузчики» в разработке"));
+    player.sendClientMessage(INFO_COLOUR,
+                             u(fmt::format("Заказ оформлен: закупка {}, премия {}", Money::text(cost),
+                                           Money::text(finalBonus))));
+    player.sendClientMessage(INFO_COLOUR, u("Товар привезут развозчики — заказ уже в их списке"));
     showManageMenu(player);
+}
+
+void BusinessSystem::persistOrder(int orderId)
+{
+    const BusinessOrderService::Order *order = m_orderService.get(orderId);
+    if (!order)
+    {
+        // Заказа больше нет (доставлен, отменён, точку снесли) — стираем строку.
+        DatabaseManager::throwQueryOrdered(
+            fmt::format("business_order:{}", orderId),
+            [orderId](mysqlx::Schema schema)
+            { schema.getTable("business_order").remove().where("id = :id").bind("id", orderId).execute(); },
+            [orderId](const std::string &error)
+            { LogManager::log(Error, fmt::format("BusinessSystem: не снят заказ {}: {}", orderId, error)); });
+        return;
+    }
+
+    nlohmann::json items = nlohmann::json::array();
+    for (const BusinessOrderService::Item &item : order->items)
+    {
+        items.push_back(nlohmann::json{{"item", item.itemType}, {"qty", item.quantity}});
+    }
+    // Ключ упорядочивания по заказу: создание, прогресс коробок и снятие спорят за
+    // одну строку, а порядок задач в пуле не определён.
+    DatabaseManager::throwQueryOrdered(
+        fmt::format("business_order:{}", orderId),
+        [orderId, businessId = order->businessId, bonus = order->bonus, boxesDone = order->boxesDone,
+         payload = items.dump(), now = TimeFormat::nowUnix()](mysqlx::Schema schema)
+        {
+            schema.getSession()
+                .sql("INSERT INTO business_order (id, business_id, bonus, boxes_done, items, created_at) "
+                     "VALUES (?, ?, ?, ?, ?, ?) "
+                     "ON DUPLICATE KEY UPDATE boxes_done = VALUES(boxes_done), bonus = VALUES(bonus)")
+                .bind(orderId, businessId, bonus, boxesDone, payload, now)
+                .execute();
+        },
+        [orderId](const std::string &error)
+        { LogManager::log(Error, fmt::format("BusinessSystem: не записан заказ {}: {}", orderId, error)); });
+}
+
+void BusinessSystem::loadOrdersAsync()
+{
+    using OrderRow = std::tuple<int, int, std::int64_t, int, std::string>;
+    DatabaseManager::selectQuery<std::vector<OrderRow>>(
+        [](mysqlx::Schema schema)
+        {
+            mysqlx::RowResult rows = schema.getTable("business_order")
+                                         .select("id", "business_id", "bonus", "boxes_done", "items")
+                                         .execute();
+            std::vector<OrderRow> result;
+            while (mysqlx::Row row = rows.fetchOne())
+            {
+                try
+                {
+                    result.emplace_back(row.get(0).get<int>(), row.get(1).get<int>(), row.get(2).get<std::int64_t>(),
+                                        row.get(3).get<int>(), row.get(4).get<std::string>());
+                }
+                catch (...)
+                {
+                    continue; // порченая строка теряет только себя
+                }
+            }
+            return result;
+        },
+        [this](std::vector<OrderRow> rows)
+        {
+            for (const auto &[id, businessId, bonus, boxesDone, payload] : rows)
+            {
+                BusinessOrderService::Order order;
+                order.id = id;
+                order.businessId = businessId;
+                order.bonus = bonus;
+                order.boxesDone = boxesDone;
+                // Состав — json; битый разбор теряет ТОЛЬКО этот заказ, а не все.
+                try
+                {
+                    const nlohmann::json items = nlohmann::json::parse(payload);
+                    if (!items.is_array())
+                    {
+                        continue;
+                    }
+                    for (const nlohmann::json &item : items)
+                    {
+                        if (!item.is_object() || !item.contains("item") || !item.contains("qty"))
+                        {
+                            continue;
+                        }
+                        order.items.push_back(
+                            BusinessOrderService::Item{item["item"].get<int>(), item["qty"].get<int>()});
+                    }
+                }
+                catch (...)
+                {
+                    LogManager::log(Warning, fmt::format("BusinessSystem: заказ {} с битым составом пропущен", id));
+                    continue;
+                }
+                m_orderService.load(std::move(order));
+            }
+        },
+        [](const std::string &error)
+        { LogManager::log(Error, "BusinessSystem: не удалось загрузить заказы: " + error); });
+}
+
+std::int64_t BusinessSystem::orderCost(const BusinessOrderService::Order &order) const
+{
+    const BusinessService::Business *business = m_businessService.getBusiness(order.businessId);
+    if (!business)
+    {
+        return 0;
+    }
+    std::int64_t cost = 0;
+    for (const BusinessOrderService::Item &item : order.items)
+    {
+        for (const BusinessService::GoodDef &good : m_businessService.goods(business->type))
+        {
+            if (good.itemType == item.itemType)
+            {
+                cost += good.price * ORDER_PRICE_PERCENT / 100 * item.quantity;
+                break;
+            }
+        }
+    }
+    return cost;
+}
+
+void BusinessSystem::cancelOrder(IPlayer &player, int businessId)
+{
+    const int playerId = player.getID();
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business || business->owner != ownerKeyOf(playerId))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Это уже не ваш бизнес"));
+        return;
+    }
+
+    // Ищем ИМЕННО свободный заказ: взятый развозчиком отменить нельзя — он уже
+    // едет, а часть коробок могла быть выгружена.
+    const BusinessOrderService::Order *target = nullptr;
+    for (const BusinessOrderService::Order *order : m_orderService.pool())
+    {
+        if (order->businessId == businessId)
+        {
+            target = order;
+            break;
+        }
+    }
+    if (!target)
+    {
+        player.sendClientMessage(ERROR_COLOUR,
+                                 u(m_orderService.hasActiveOrder(businessId)
+                                       ? "Заказ уже везут — отменить нельзя"
+                                       : "У этой точки нет заказа"));
+        showOrderMenu(player, businessId);
+        return;
+    }
+
+    // Возврат считаем по НЕВЫВЕЗЕННОЙ части: коробки, которые уже довезли, лежат на
+    // складе, и деньги за них владелец получил товаром.
+    const int boxesLeft = m_orderService.boxesLeft(target->id);
+    const std::int64_t cost = orderCost(*target);
+    const std::int64_t refund =
+        (cost + target->bonus) * boxesLeft / BusinessOrderService::BOXES_PER_ORDER;
+    m_orderService.remove(target->id);
+
+    if (refund > 0)
+    {
+        m_moneyService.giveMoney(player, static_cast<unsigned long long>(refund));
+    }
+    player.sendClientMessage(INFO_COLOUR,
+                             u(fmt::format("Заказ отменён, возвращено {}", Money::text(refund))));
+    showManageMenu(player);
+}
+
+void BusinessSystem::refundOrdersOf(int businessId)
+{
+    // Точка перестаёт работать (снос девом либо отказ владельца) — везти в неё нечего.
+    // Снимаем ВСЕ её заказы, включая те, что уже везут: заказ в доставке иначе остался
+    // бы висеть на несуществующей точке, и развозчик приехал бы в пустоту.
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    const std::string ownerKey = business ? business->owner : std::string();
+
+    for (const BusinessOrderService::Order *order : m_orderService.ordersOf(businessId))
+    {
+        const int orderId = order->id;
+        // Возврат — по НЕВЫВЕЗЕННОЙ части, как при отмене заказа владельцем: довезённые
+        // коробки владелец уже получил товаром, а склад точки при сносе не компенсируют
+        // (иначе за одно и то же платили бы дважды).
+        const int boxesLeft = m_orderService.boxesLeft(orderId);
+        const std::int64_t refund =
+            (orderCost(*order) + order->bonus) * boxesLeft / BusinessOrderService::BOXES_PER_ORDER;
+        m_orderService.remove(orderId); // после этого order висячий — им больше не пользуемся
+
+        // Наличные сессионные: офлайну вручить некому. Снос точки — редкое дев-
+        // действие, поэтому просто пишем в лог, а не заводим долговую очередь.
+        const int ownerPlayerId = ownerKey.empty()
+                                      ? -1
+                                      : m_sessionService.playerByAccount(
+                                            static_cast<PlayerSessionService::AccountId>(std::stoll(ownerKey)));
+        IPlayer *owner = ownerPlayerId >= 0 ? m_core.getPlayers().get(ownerPlayerId) : nullptr;
+        if (owner && refund > 0)
+        {
+            m_moneyService.giveMoney(*owner, static_cast<unsigned long long>(refund));
+            owner->sendClientMessage(INFO_COLOUR,
+                                     u(fmt::format("Точка больше не работает: за снятый заказ возвращено {}",
+                                                   Money::text(refund))));
+        }
+        else if (refund > 0)
+        {
+            LogManager::log(Warning, fmt::format("BusinessSystem: заказ {} снят с точки {}, владелец офлайн — "
+                                                 "возврат {} не выдан",
+                                                 orderId, businessId, refund));
+        }
+    }
 }
 
 // ------------------------------------------------------------------ лот аукциона

@@ -1,8 +1,11 @@
 #pragma once
 
 #include "Macro.h"
+#include "Services/BusinessOrderService/BusinessOrderService.h"
+#include "Services/BusinessService/BusinessService.h"
 #include "Services/HaulerJobService/HaulerJobService.h"
 #include "Services/HaulerWalletService/HaulerWalletService.h"
+#include "Services/InventoryService/InventoryService.h"
 #include "Services/JobDismissService/JobDismissService.h"
 #include "Services/JobWalletService/JobWalletService.h"
 #include "Services/Core/AttachmentService/AttachmentService.h"
@@ -14,6 +17,7 @@
 #include "Services/Core/PlayerAnimationService/PlayerAnimationService.h"
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
 #include "Services/Core/PlayerHealthService/PlayerHealthService.h"
+#include "Services/Core/PlayerLocationService/PlayerLocationService.h"
 #include "Services/Core/PlayerMoneyService/PlayerMoneyService.h"
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
@@ -52,9 +56,18 @@
 // в езде — нет прогресса по чекпоинтам N с; в пеших — нет сданной коробки M с.
 // Смерть/дисконнект/пропажа грузовика — увольнение (кошелёк неприкосновенен).
 //
+// ВТОРОЙ РЕЖИМ РЕЙСА — ЗАКАЗЫ БИЗНЕСОВ (HaulerJobService::Mode::Orders). Владелец
+// точки оплатил закупку и премию (BusinessOrderService, см. Docs/BusinessOrders.md), а
+// развозчик свозит товар с базы в его точку. Новых фаз нет — заказ ложится на тот же
+// цикл без плеча в порт: погрузка идёт на базе, «обратно» ведёт ко ВХОДУ точки, а
+// разгрузка — к ПРИЛАВКУ внутри интерьера (носильщик ходит внутрь-наружу пикапами
+// бизнеса). Рейс кончается доставкой: премия делится пополам между водителем и
+// грузчиком (соло забирает всю), смена закрывается, заказ снимается.
+//
 // Клиенту не доверяем: «за рулём своего грузовика» — серверный getDriver, вход в
 // чекпоинт — принятая сервером позиция (CheckpointService), занятость площадки —
-// серверный расчёт (anyVehicleNear), стейт «пеший» — PlayerStateService.
+// серверный расчёт (anyVehicleNear), стейт «пеший» — PlayerStateService, «я у нужной
+// точки» — серверный виртуальный мир игрока (интерьер бизнеса, PlayerLocationService).
 class HaulerJobSystem : public BaseSystem
 {
   public:
@@ -66,11 +79,26 @@ class HaulerJobSystem : public BaseSystem
     // --- пикап + диалог ---
     void onPickup(IPlayer &player);
     void showRoleChoice(IPlayer &player); // «Начать работу» -> водитель или грузчик
-    void startAsDriver(IPlayer &player);
+    void startAsDriver(IPlayer &player);  // водитель: выбор рейса (порт / заказ)
     void startAsLoader(IPlayer &player);
     void onFinishWork(IPlayer &player);
     void onWithdrawMoney(IPlayer &player);
     void showInfo(IPlayer &player);
+
+    // --- выбор рейса (режим смены) ---
+    void showModeChoice(IPlayer &player);            // рейс в порт или заказ бизнеса
+    void showOrderList(IPlayer &player, int page);   // свободные заказы, страницами
+    void startAsOrderDriver(IPlayer &player, int orderId); // взять заказ и открыть смену
+    // Общие проверки устройства ВОДИТЕЛЕМ (сессия, пеший, не занят, лок навигации).
+    // Сообщение об отказе отправляет сама — false значит «дальше не идём».
+    bool driverGatesPass(IPlayer &player);
+    // Открыть смену водителя выбранного режима. false — старт не состоялся (гонка
+    // кликов), и заказ вызывающий обязан вернуть в пул.
+    bool beginDriverShift(IPlayer &player, HaulerJobService::Mode mode, int orderId);
+    // Может ли игрок взять заказ, НЕ открывая смену заново: он уже водитель со своим
+    // грузовиком и без заказа (довёз предыдущий либо шёл портовым рейсом). Сообщение об
+    // отказе не отправляет — это просто развилка «продолжить смену или начать новую».
+    bool canTakeOrderInShift(int playerId) const;
 
     // --- пара «водитель + грузчик» ---
     void onPairCommand(IPlayer &driver, int targetId); // /pair — приглашение
@@ -134,6 +162,35 @@ class HaulerJobSystem : public BaseSystem
     // на выходе ставится от текущей позиции. Общая для соло-водителя и грузчика.
     void refreshUnloadSource(IPlayer &carrier);
 
+    // --- заказ бизнеса в смене (режим Orders) ---
+    // Свободные заказы, которые реально можно везти: пул сервиса минус заказы точек,
+    // которых уже нет (дев снёс бизнес). Порядок — как в пуле, по премии убывающе.
+    std::vector<const BusinessOrderService::Order *> availableOrders() const;
+    // Смена везёт заказ. Принимает id ВОДИТЕЛЯ смены (у грузчика режима нет).
+    bool orderMode(int shiftOwnerId) const;
+    // Заказ этой смены либо nullptr: режим не тот, заказ снят (точку снесли) или его
+    // бизнеса больше нет. Все шаги рейса ходят через него — заказ может исчезнуть
+    // между двумя коробками.
+    const BusinessOrderService::Order *orderOfShift(int shiftOwnerId) const;
+    // Куда ЕХАТЬ (вход точки заказа) и куда НОСИТЬ коробки (прилавок внутри интерьера,
+    // либо точка появления внутри, если прилавок у интерьера не замерен).
+    bool orderDriveTarget(int shiftOwnerId, Vector3 &out) const;
+    bool orderDropPoint(int shiftOwnerId, Vector3 &out) const;
+    // Сколько коробок на плече: BOXES_PER_LEG в порту, ОСТАТОК заказа в заказе —
+    // недовезённый заказ возвращается в пул с прогрессом, и второй водитель везёт
+    // только остаток.
+    int legBoxes(int shiftOwnerId) const;
+    // Коробка доставлена в точку: товар на склад точки, прогресс заказу. true — это
+    // была последняя коробка заказа.
+    bool deliverOrderBox(int shiftOwnerId);
+    // Заказ довезён целиком: премия пополам водителю и грузчику (соло забирает всю),
+    // заказ снят, рейс закрыт.
+    void completeOrder(IPlayer &driver, IPlayer &carrier);
+    // Вернуть заказ смены в пул как есть (срыв смены). Идемпотентно.
+    void releaseOrderOf(int shiftOwnerId);
+    // «Магазин 24/7 #3» — точка заказа в диалогах и сообщениях.
+    std::string orderPointName(const BusinessOrderService::Order &order) const;
+
     // --- увольнение/провал посадки ---
     void failBoarding(IPlayer &player);
     void dismiss(IPlayer &player, const std::string &reason, const Colour &colour);
@@ -157,6 +214,10 @@ class HaulerJobSystem : public BaseSystem
     HaulerJobService &m_haulerJobService;
     HaulerWalletService &m_haulerWalletService;
     JobWalletService &m_jobWalletService;
+    BusinessOrderService &m_orderService;     // пул заказов, прогресс, премия
+    BusinessService &m_businessService;        // где точка заказа и её склад
+    InventoryService &m_inventoryService;      // имена товаров в списке заказа
+    PlayerLocationService &m_locationService;  // виртуальный мир: «я в НУЖНОМ интерьере»
     VehicleService &m_vehicleService;
     CheckpointService &m_checkpointService;
     PickupService &m_pickupService;

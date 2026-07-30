@@ -26,6 +26,24 @@ HaulerJobService::Phase HaulerJobService::phaseOf(int playerId) const
     return m_state[playerId].phase;
 }
 
+HaulerJobService::Mode HaulerJobService::modeOf(int playerId) const
+{
+    if (!validId(playerId))
+    {
+        return Mode::Port;
+    }
+    return m_state[playerId].mode;
+}
+
+int HaulerJobService::orderIdOf(int playerId) const
+{
+    if (!validId(playerId))
+    {
+        return 0;
+    }
+    return m_state[playerId].orderId;
+}
+
 bool HaulerJobService::isWorking(int playerId) const
 {
     return phaseOf(playerId) != Phase::NotWorking;
@@ -240,7 +258,8 @@ void HaulerJobService::removeFromQueue(int playerId)
     }
 }
 
-HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const SpotUsable &usable)
+HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const SpotUsable &usable, Mode mode,
+                                                          int orderId)
 {
     if (!validId(playerId))
     {
@@ -251,6 +270,8 @@ HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const S
     {
         return {StartResult::AlreadyWorking};
     }
+    // Заказ только у режима Orders: во «порт»-рейсе ему нечего означать.
+    const int shiftOrder = mode == Mode::Orders ? std::max(orderId, 0) : 0;
 
     const int spot = firstFreeSpot(usable);
     if (spot >= 0)
@@ -259,6 +280,8 @@ HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const S
         state = State{};
         state.phase = Phase::Reserved;
         state.role = Role::Driver;
+        state.mode = mode;
+        state.orderId = shiftOrder;
         // Грузовика ещё нет: его спавнит привод и регистрирует через setStanding.
         return {StartResult::Reserved, -1, 0};
     }
@@ -266,8 +289,50 @@ HaulerJobService::StartOutcome HaulerJobService::startWork(int playerId, const S
     state = State{};
     state.phase = Phase::Queued;
     state.role = Role::Driver;
+    state.mode = mode;
+    state.orderId = shiftOrder;
     m_queue.push_back(playerId);
     return {StartResult::Queued, -1, static_cast<int>(m_queue.size())};
+}
+
+void HaulerJobService::clearOrder(int playerId)
+{
+    if (!validId(playerId))
+    {
+        return;
+    }
+    m_state[playerId].orderId = 0;
+    // Заказа нет — рейс снова портовый: груз в порту есть всегда, и смена не остаётся
+    // без цели. Новый заказ водитель берёт у пикапа депо (startOrderLeg).
+    m_state[playerId].mode = Mode::Port;
+}
+
+bool HaulerJobService::startOrderLeg(int playerId, int orderId)
+{
+    if (!validId(playerId) || orderId <= 0)
+    {
+        return false;
+    }
+    State &state = m_state[playerId];
+    if (state.role != Role::Driver || state.orderId != 0 || state.vehicleId < 0)
+    {
+        return false;
+    }
+    // Только АКТИВНАЯ фаза с грузовиком: в очереди грузовика нет, а на посадке водитель
+    // ещё не за рулём — переводить его в погрузку было бы обходом окна посадки.
+    if (state.phase != Phase::DriveOut && state.phase != Phase::Loading &&
+        state.phase != Phase::DriveBack && state.phase != Phase::Unloading)
+    {
+        return false;
+    }
+    state.mode = Mode::Orders;
+    state.orderId = orderId;
+    // Груз заказа лежит на базе: рейс начинается сразу с погрузки. Прогресс прошлого
+    // плеча обнуляется — прежний груз в кузове больше не в счёт.
+    state.phase = Phase::Loading;
+    state.driveIndex = 0;
+    state.boxCount = 0;
+    return true;
 }
 
 bool HaulerJobService::startLoader(int playerId)
@@ -513,10 +578,17 @@ HaulerJobService::Promotion HaulerJobService::promoteQueue(const SpotUsable &usa
 
     m_spots[spot].reservedBy = playerId;
     State &state = m_state[playerId];
+    // State{} стирает роль, режим и заказ — восстанавливаем явно. Заказ в очереди уже
+    // принят на этого водителя (иначе его увёл бы второй), и дождавшись грузовика он
+    // везёт ИМЕННО его.
+    const Mode mode = state.mode;
+    const int orderId = state.orderId;
     state = State{};
     state.phase = Phase::Reserved;
-    state.role = Role::Driver; // State{} стирает роль — восстанавливаем явно
-    return {playerId, -1};     // грузовик спавнит привод
+    state.role = Role::Driver;
+    state.mode = mode;
+    state.orderId = orderId;
+    return {playerId, -1}; // грузовик спавнит привод
 }
 
 void HaulerJobService::detachVehicle(int playerId)

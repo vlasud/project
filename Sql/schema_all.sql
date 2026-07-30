@@ -628,6 +628,29 @@ CREATE TABLE IF NOT EXISTS `business_stock` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 
+-- ЗАКАЗЫ товара для бизнесов. Хранят УЖЕ СПИСАННЫЕ у владельца деньги (закупку и
+-- премию развозчикам), поэтому обязаны пережить рестарт: потерянный заказ — это
+-- потерянные деньги игрока.
+--
+-- items — состав заказа в JSON ([{"item":1,"qty":20}, ...]). Отдельной таблицей не
+-- делаем: состав всегда читается и пишется целиком вместе с заказом, а join ради
+-- двух строк только добавил бы путей рассинхрона.
+--
+-- boxes_done — прогресс в коробках (0..10). Срыв доставки прогресс НЕ откатывает:
+-- довезённое уже лежит на складе точки, и повторно его везти нельзя.
+-- driver_id в БД НЕТ: кто везёт — рантайм, после рестарта заказ просто в пуле.
+CREATE TABLE IF NOT EXISTS `business_order` (
+    `id`          INT    NOT NULL AUTO_INCREMENT,
+    `business_id` INT    NOT NULL,
+    `bonus`       BIGINT NOT NULL DEFAULT 0,
+    `boxes_done`  INT    NOT NULL DEFAULT 0,
+    `items`       TEXT   NOT NULL,
+    `created_at`  BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`id`),
+    KEY `idx_business` (`business_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
 -- ============ auction.sql ============
 
 -- Аукционы (AuctionService). Применить вручную к схеме геймода.

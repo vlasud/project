@@ -6,6 +6,7 @@
 #include "Services/Core/AttachmentService/AttachmentService.h"
 #include "Services/AuctionService/AuctionService.h"
 #include "Services/BankService/BankService.h"
+#include "Services/BusinessOrderService/BusinessOrderService.h"
 #include "Services/BusinessService/BusinessService.h"
 #include "Services/BusJobService/BusJobService.h"
 #include "Services/BusWalletService/BusWalletService.h"
@@ -240,6 +241,9 @@ void ServiceRegister::registerServices()
     // (24/7 и далее) регистрируют себя сами в конструкторах своих систем, персист
     // businesses.json ведёт BusinessSystem.
     registerService<BusinessService>();
+    // Заказы товара — мост «владелец точки <-> работа развозчика»: читают и меняют
+    // обе фичи, поэтому сервис общий, а не поле внутри одной из них.
+    registerService<BusinessOrderService>();
     // Реестр аукционных категорий (/auc). Без зависимостей; категории (бизнесы и
     // далее) регистрируют себя сами в конструкторах своих систем.
     registerService<AuctionService>();

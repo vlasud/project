@@ -70,7 +70,24 @@ class HaulerJobService final : public IService
         Standby     // грузчик: устроен и ждёт пары либо носит коробки в смене напарника
     };
 
+    // ЧТО за рейс делает смена. Фазы у обоих режимов ОДНИ И ТЕ ЖЕ — меняются только
+    // концы плеч, поэтому режим это поле смены, а не новая ветка фазовой машины:
+    //   Port:   Reserved -> DriveOut(порт) -> Loading(склад->кузов) -> DriveBack(база)
+    //           -> Unloading(->точка выгрузки базы) -> DriveOut заново
+    //   Orders: Reserved ->      —        -> Loading(база->кузов)   -> DriveBack(точка
+    //           бизнеса) -> Unloading(->прилавок внутри) -> конец рейса
+    // Плечо в порт заказу не нужно: товар лежит на базе, и рейс кончается доставкой.
+    enum class Mode
+    {
+        Port,  // штатный бесконечный цикл порт-база
+        Orders // заказ бизнеса: база -> точка владельца, один рейс
+    };
+
     Phase phaseOf(int playerId) const;
+    // Режим и заказ — свойства СМЕНЫ, то есть читаются по shiftOwnerOf (у грузчика
+    // своих нет: он обслуживает рейс напарника).
+    Mode modeOf(int playerId) const;
+    int orderIdOf(int playerId) const; // id заказа BusinessOrderService; 0 — нет
     Role roleOf(int playerId) const;
     int partnerOf(int playerId) const; // напарник по паре; -1 — соло/без пары
 
@@ -126,7 +143,19 @@ class HaulerJobService final : public IService
     // мире не знает, проверку приносит вызывающий.
     using SpotUsable = std::function<bool(int spot)>;
 
-    StartOutcome startWork(int playerId, const SpotUsable &usable);
+    // mode/orderId — что за рейс берёт водитель. Заказ к этому моменту УЖЕ принят в
+    // BusinessOrderService (иначе его успел бы взять второй водитель), поэтому здесь
+    // он только запоминается: сервис работы про состав и премию не знает.
+    StartOutcome startWork(int playerId, const SpotUsable &usable, Mode mode, int orderId);
+    // Заказ отработан либо возвращён в пул — снять привязку, чтобы teardown не вернул
+    // в пул то, чего уже нет. Смена при этом снова становится ПОРТОВОЙ: смена без
+    // заказа в режиме Orders не имела бы цели рейса.
+    void clearOrder(int playerId);
+    // Взять заказ, НЕ открывая смену заново: водитель уже в смене со своим грузовиком
+    // и без заказа (довёз предыдущий либо шёл портовым рейсом). Ставит режим Orders и
+    // фазу погрузки — груз заказа лежит на базе. false — не водитель, нет грузовика,
+    // фаза не активная (очередь/посадка) либо заказ уже есть.
+    bool startOrderLeg(int playerId, int orderId);
 
     // Устроить ГРУЗЧИКОМ: NotWorking -> Standby, роль Loader. Ни грузовика, ни
     // площадки, ни очереди — грузчик ждёт приглашения водителя. false — уже работает.
@@ -199,10 +228,12 @@ class HaulerJobService final : public IService
     {
         Phase phase = Phase::NotWorking;
         Role role = Role::None;
+        Mode mode = Mode::Port; // режим РЕЙСА (у грузчика не используется)
         int partnerId = -1;   // вторая половина пары; -1 — соло/без пары
         int vehicleId = -1;   // закреплённый (Reserved) / ведомый (DriveOut..Unloading) грузовик
         int driveIndex = 0;   // индекс чекпоинта текущего плеча езды
         int boxCount = 0;     // коробок сдано на текущем плече (ведёт ВОДИТЕЛЬ смены)
+        int orderId = 0;      // заказ бизнеса в режиме Orders; 0 — нет
         bool carrying = false; // держит коробку — флаг НОСИЛЬЩИКА, не смены
     };
     struct Spot

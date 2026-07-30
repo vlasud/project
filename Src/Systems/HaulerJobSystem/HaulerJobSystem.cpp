@@ -6,10 +6,15 @@
 #include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
 #include "Utils/Geometry/Geometry.h"
+#include "Utils/MoneyFormat/MoneyFormat.h"
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -77,6 +82,17 @@ constexpr std::int64_t PAY_PER_BOX_UNLOAD = 70;
 // Бонус за полный круг — КАЖДОМУ, и ТОЛЬКО в паре: это рычаг, ради которого пару
 // собирают (один грузовик — два рабочих места).
 constexpr std::int64_t PAIR_FULL_UNLOAD_BONUS = 200;
+
+// Заказы бизнесов. Ставки — те же (прибытие/коробки), сверху идёт ПРЕМИЯ владельца:
+// её делят ПОПОЛАМ водитель и грузчик, соло забирает всю. Нечётный остаток достаётся
+// водителю: рейс и грузовик на нём.
+constexpr int ORDER_PAGE_SIZE = 10; // заказов на странице списка
+// Насколько близко к пикапу депо должен стоять водитель, чтобы взять СЛЕДУЮЩИЙ заказ,
+// не закрывая смену. Груз заказа лежит на базе, поэтому брать его надо здесь же: иначе
+// игрок открыл бы список, уехал через полкарты и поехал бы обратно уже с погрузкой на
+// счётчике простоя. Диалог открывается касанием пикапа — радиус лишь держит игрока на
+// месте, пока он выбирает.
+constexpr float ORDER_DESK_RADIUS = 15.0f;
 
 // Звук прогресса: играет вместе с попапом «что-то засчитано» (коробка, прибытие,
 // бонус). На отказы и провалы НЕ вешаем — там свой красный попап.
@@ -199,6 +215,10 @@ HaulerJobSystem::HaulerJobSystem(ICore &core, const ServiceRegister &serviceRegi
     : BaseSystem(core, serviceRegister), m_haulerJobService(serviceRegister.getService<HaulerJobService>()),
       m_haulerWalletService(serviceRegister.getService<HaulerWalletService>()),
       m_jobWalletService(serviceRegister.getService<JobWalletService>()),
+      m_orderService(serviceRegister.getService<BusinessOrderService>()),
+      m_businessService(serviceRegister.getService<BusinessService>()),
+      m_inventoryService(serviceRegister.getService<InventoryService>()),
+      m_locationService(serviceRegister.getService<PlayerLocationService>()),
       m_vehicleService(serviceRegister.getService<VehicleService>()),
       m_checkpointService(serviceRegister.getService<CheckpointService>()),
       m_pickupService(serviceRegister.getService<PickupService>()),
@@ -367,7 +387,7 @@ void HaulerJobSystem::showRoleChoice(IPlayer &player)
     const int playerId = player.getID();
 
     // Пункты видны всегда (правило проекта) — гейт в обработчике по клику.
-    const std::string body = "Водитель\tсвой грузовик, платят за плечи маршрута\n"
+    const std::string body = "Водитель\tсвой грузовик; дальше выбирает рейс — порт или заказ бизнеса\n"
                              "Грузчик\tбез грузовика, платят за коробки; работает в паре с водителем";
     m_dialogService.show(
         player, makeDialog(DialogStyle_TABLIST, "Кем устроиться", body, "Выбрать", "Отмена"),
@@ -432,40 +452,58 @@ void HaulerJobSystem::startAsLoader(IPlayer &player)
 
 void HaulerJobSystem::startAsDriver(IPlayer &player)
 {
+    // Гейты устройства здесь НЕ проверяем: рейс ещё не выбран, а проверять надо в
+    // момент САМОГО старта — пока висят диалоги выбора, всё могло измениться.
+    showModeChoice(player);
+}
+
+bool HaulerJobSystem::driverGatesPass(IPlayer &player)
+{
     const int playerId = player.getID();
 
     if (!m_sessionService.isActive(playerId))
     {
         player.sendClientMessage(ERROR_COLOUR, u("Авторизуйтесь, чтобы работать"));
-        return;
+        return false;
     }
     // Клиенту не доверяем: гейт на СЕРВЕРНОМ стейте.
     if (m_stateService.getState(playerId) != PlayerState_OnFoot)
     {
         player.sendClientMessage(ERROR_COLOUR, u("Выйдите из транспорта, чтобы устроиться развозчиком"));
-        return;
+        return false;
     }
     if (m_haulerJobService.isWorking(playerId))
     {
         player.sendClientMessage(ERROR_COLOUR, u("Вы уже работаете развозчиком"));
-        return;
+        return false;
     }
     // Взаимное исключение работ: чекпоинт-слот и лок навигации принадлежат ТЕКУЩЕЙ
     // смене. isWorking(развозчик) выше уже ложно, значит держатель лока — ДРУГАЯ
-    // работа. Гейтим ДО списания взноса.
+    // работа.
     if (m_navLockService.isLocked(playerId))
     {
         player.sendClientMessage(
             ERROR_COLOUR, u(fmt::format("Нельзя устроиться развозчиком: {}", m_navLockService.lockReason(playerId))));
-        return;
+        return false;
     }
+    return true;
+}
+
+bool HaulerJobSystem::beginDriverShift(IPlayer &player, HaulerJobService::Mode mode, int orderId)
+{
+    const int playerId = player.getID();
 
     const HaulerJobService::StartOutcome outcome = m_haulerJobService.startWork(
         playerId,
         [this](int spot)
         {
             return spotClear(spot);
-        });
+        },
+        mode, orderId);
+    if (outcome.result == HaulerJobService::StartResult::AlreadyWorking)
+    {
+        return false; // гонка кликов: смену успели открыть между гейтом и стартом
+    }
     // Лок навигации на ВСЮ смену; освобождается на любом её конце.
     m_navLockService.acquire(playerId, "идёт смена портового развозчика");
     // Предзагрузка либы CARRY заранее (первая укладка/подъём иначе не проиграется).
@@ -476,10 +514,263 @@ void HaulerJobSystem::startAsDriver(IPlayer &player)
         player.sendClientMessage(
             INFO_COLOUR,
             u(fmt::format("Свободных грузовиков в депо сейчас нет. Вы в очереди, место {}", outcome.queuePosition)));
-        return;
+        if (mode == HaulerJobService::Mode::Orders)
+        {
+            // Заказ уже закреплён за ним: дождавшись грузовика он повезёт ИМЕННО его,
+            // и второму водителю заказ в списке не показывается.
+            player.sendClientMessage(INFO_COLOUR, u("Заказ забронирован за вами — он ждёт вашего грузовика"));
+        }
+        return true;
     }
     // Reserved — свободный стоящий грузовик закреплён за игроком.
     onReserved(player);
+    return true;
+}
+
+void HaulerJobSystem::showModeChoice(IPlayer &player)
+{
+    const int playerId = player.getID();
+    const std::size_t available = availableOrders().size();
+
+    // Пункты видны всегда (правило проекта) — гейт в обработчике по клику.
+    const std::string body =
+        fmt::format("Рейс в порт\tгруз со склада порта на базу, круги без конца\n"
+                    "Заказ бизнеса ({})\tгруз с базы в точку владельца; платят за доставку и премию",
+                    available);
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_TABLIST, "Какой рейс", body, "Выбрать", "Отмена"),
+        [this, playerId](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *chooser = m_core.getPlayers().get(playerId);
+            if (!chooser || response != DialogResponse_Left)
+            {
+                return;
+            }
+            if (listItem == 0)
+            {
+                if (!driverGatesPass(*chooser))
+                {
+                    return;
+                }
+                beginDriverShift(*chooser, HaulerJobService::Mode::Port, 0);
+                return;
+            }
+            showOrderList(*chooser, 0);
+        });
+}
+
+std::vector<const BusinessOrderService::Order *> HaulerJobSystem::availableOrders() const
+{
+    std::vector<const BusinessOrderService::Order *> orders = m_orderService.pool();
+    // Точку могли снести вместе с непринятым заказом — везти его некуда, и в списке
+    // ему делать нечего (порядок остальных сохраняем: пул уже отсортирован премией).
+    orders.erase(std::remove_if(orders.begin(), orders.end(),
+                                [this](const BusinessOrderService::Order *order)
+                                {
+                                    return !m_businessService.getBusiness(order->businessId) ||
+                                           m_orderService.boxesLeft(order->id) <= 0;
+                                }),
+                 orders.end());
+    return orders;
+}
+
+std::string HaulerJobSystem::orderPointName(const BusinessOrderService::Order &order) const
+{
+    const BusinessService::Business *business = m_businessService.getBusiness(order.businessId);
+    if (!business)
+    {
+        return fmt::format("точка #{}", order.businessId);
+    }
+    return fmt::format("{} #{}", m_businessService.typeName(business->type), order.businessId);
+}
+
+void HaulerJobSystem::showOrderList(IPlayer &player, int page)
+{
+    const int playerId = player.getID();
+    const std::vector<const BusinessOrderService::Order *> orders = availableOrders();
+    if (orders.empty())
+    {
+        player.sendClientMessage(ERROR_COLOUR,
+                                 u("Свободных заказов сейчас нет. Возьмите рейс в порт — груз там всегда есть"));
+        showModeChoice(player);
+        return;
+    }
+
+    const int total = static_cast<int>(orders.size());
+    const int pageCount = (total + ORDER_PAGE_SIZE - 1) / ORDER_PAGE_SIZE;
+    page = std::clamp(page, 0, pageCount - 1);
+    const int first = page * ORDER_PAGE_SIZE;
+    const int count = std::min(ORDER_PAGE_SIZE, total - first);
+
+    // Колонки — то, по чему заказ выбирают: куда ехать, далеко ли это от депо и
+    // сколько за него доплатят. Остаток коробок показываем у недовезённых заказов:
+    // такой заказ вернулся в пул с прогрессом, и вести его быстрее.
+    std::string body = "Точка\tОт депо\tПремия\n";
+    for (int i = first; i < first + count; ++i)
+    {
+        const BusinessOrderService::Order &order = *orders[i];
+        const BusinessService::Business *business = m_businessService.getBusiness(order.businessId);
+        const int metres =
+            business ? static_cast<int>(std::sqrt(distanceSq2D(business->entrance, EMPLOY_PICKUP_POS))) : 0;
+        const int boxes = m_orderService.boxesLeft(order.id);
+        body += fmt::format("{}\t{} м\t{}{}\n", orderPointName(order), metres, Money::text(order.bonus),
+                            boxes < BusinessOrderService::BOXES_PER_ORDER
+                                ? fmt::format(" ({} кор.)", boxes)
+                                : std::string());
+    }
+    if (pageCount > 1)
+    {
+        body += fmt::format("» Следующая страница ({}/{})", page + 1, pageCount);
+    }
+    else
+    {
+        body.pop_back(); // без строки-пагинации хвостовой перевод строки лишний
+    }
+
+    // В обработчик уносим ID, а не указатели: пока висит диалог, заказ могли снять, а
+    // пул — перестроить (указатели на элементы удалённого заказа стали бы висячими).
+    std::vector<int> ids;
+    ids.reserve(static_cast<std::size_t>(count));
+    for (int i = first; i < first + count; ++i)
+    {
+        ids.push_back(orders[static_cast<std::size_t>(i)]->id);
+    }
+
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_TABLIST_HEADERS, fmt::format("Заказы бизнесов {}/{}", page + 1, pageCount), body,
+                   "Взять", "Назад"),
+        [this, playerId, page, pageCount, count, ids = std::move(ids)](DialogResponse response, int listItem,
+                                                                      StringView)
+        {
+            IPlayer *chooser = m_core.getPlayers().get(playerId);
+            if (!chooser)
+            {
+                return;
+            }
+            if (response != DialogResponse_Left || listItem < 0 || listItem > count)
+            {
+                showModeChoice(*chooser);
+                return;
+            }
+            if (listItem == count) // последняя строка — следующая страница (по кругу)
+            {
+                showOrderList(*chooser, (page + 1) % pageCount);
+                return;
+            }
+            startAsOrderDriver(*chooser, ids[static_cast<std::size_t>(listItem)]);
+        });
+}
+
+bool HaulerJobSystem::canTakeOrderInShift(int playerId) const
+{
+    if (m_haulerJobService.roleOf(playerId) != HaulerJobService::Role::Driver ||
+        m_haulerJobService.shiftOwnerOf(playerId) != playerId)
+    {
+        return false; // не водитель со своей сменой
+    }
+    if (m_haulerJobService.orderIdOf(playerId) != 0)
+    {
+        return false; // заказ на рейс ровно один
+    }
+    const HaulerJobService::Phase phase = m_haulerJobService.phaseOf(playerId);
+    if (phase == HaulerJobService::Phase::Reserved)
+    {
+        return false; // ещё не за рулём: сперва посадка, иначе это обход её окна
+    }
+    // Грузовик обязан существовать: заказ грузят в него.
+    return m_vehicleService.get(m_haulerJobService.vehicleIdOf(playerId)) != nullptr;
+}
+
+void HaulerJobSystem::startAsOrderDriver(IPlayer &player, int orderId)
+{
+    const int playerId = player.getID();
+    // Водитель со своим грузовиком берёт следующий заказ, НЕ теряя грузовик и напарника:
+    // смена продолжается, меняется только рейс. Устройство заново в этом случае не
+    // проверяем — оно уже состоялось.
+    const bool continuing = canTakeOrderInShift(playerId);
+    if (!continuing && !driverGatesPass(player))
+    {
+        return;
+    }
+    if (continuing)
+    {
+        // Коробку из рук в руки не передают (то же правило, что у /pair): смена меняет
+        // плечо, и груз в руках носильщика повис бы.
+        const int carrier = m_haulerJobService.carrierOf(playerId);
+        if (m_haulerJobService.carryingOf(carrier))
+        {
+            player.sendClientMessage(ERROR_COLOUR, u("Сначала донесите коробку, потом берите новый заказ"));
+            return;
+        }
+        if (m_stateService.getState(playerId) != PlayerState_OnFoot)
+        {
+            player.sendClientMessage(ERROR_COLOUR, u("Выйдите из грузовика, чтобы взять заказ"));
+            return;
+        }
+        // Груз заказа лежит НА БАЗЕ — здесь его и берут. Дистанция считается по ПРИНЯТОЙ
+        // сервером позиции (PlayerLocationService, он же ловит телепорт-рывки): «я у
+        // пикапа» подделать нельзя.
+        if (distanceSq2D(m_locationService.getPosition(playerId), EMPLOY_PICKUP_POS) >
+            ORDER_DESK_RADIUS * ORDER_DESK_RADIUS)
+        {
+            player.sendClientMessage(ERROR_COLOUR,
+                                     u("Новый заказ берут у пикапа депо — подойдите к нему и повторите"));
+            return;
+        }
+    }
+
+    // Ре-валидация заказа на клике: пока висел список, его могли взять, снять или
+    // снести вместе с точкой.
+    const BusinessOrderService::Order *order = m_orderService.get(orderId);
+    if (!order || order->driverId >= 0 || m_orderService.boxesLeft(orderId) <= 0)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этот заказ уже взяли или он снят"));
+        showOrderList(player, 0);
+        return;
+    }
+    if (!m_businessService.getBusiness(order->businessId))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Точки этого заказа больше нет"));
+        showOrderList(player, 0);
+        return;
+    }
+    // Заказ закрепляем ДО открытия смены: обратный порядок отдал бы один заказ двоим.
+    if (!m_orderService.accept(orderId, playerId))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Этот заказ только что взял другой водитель"));
+        showOrderList(player, 0);
+        return;
+    }
+    // Сообщение о взятом заказе — ДО перевода фазы: дальше говорит уже сама погрузка.
+    // Указатель `order` всё ещё живой (accept правит запись на месте, не вставляет).
+    player.sendClientMessage(INFO_COLOUR,
+                             u(fmt::format("Заказ взят: {}, {} коробок, премия {}", orderPointName(*order),
+                                           m_orderService.boxesLeft(orderId), Money::text(order->bonus))));
+
+    if (continuing)
+    {
+        const int carriedBefore = m_haulerJobService.boxCountOf(playerId);
+        if (!m_haulerJobService.startOrderLeg(playerId, orderId))
+        {
+            m_orderService.release(orderId); // состояние смены изменилось — заказ в пул
+            return;
+        }
+        if (carriedBefore > 0)
+        {
+            // Прошлое плечо обнулено: иначе игрок ждал бы, что уже загруженные коробки
+            // зачтутся заказу.
+            player.sendClientMessage(ERROR_COLOUR, u("Прошлый рейс прерван — груз в кузове больше не в счёт"));
+        }
+        beginLoadingPhase(player); // сервис уже в Loading; здесь цели, попапы, сообщения
+        return;
+    }
+    if (!beginDriverShift(player, HaulerJobService::Mode::Orders, orderId))
+    {
+        m_orderService.release(orderId); // смена не открылась — заказ обратно в пул
+        return;
+    }
+    player.sendClientMessage(INFO_COLOUR, u("Груз лежит на базе: погрузите его и везите в точку"));
 }
 
 void HaulerJobSystem::onFinishWork(IPlayer &player)
@@ -494,6 +785,7 @@ void HaulerJobSystem::onFinishWork(IPlayer &player)
     }
     if (phase == HaulerJobService::Phase::Queued)
     {
+        releaseOrderOf(playerId);              // бронь заказа не переживает уход из очереди
         m_haulerJobService.endShift(playerId); // в очереди грузовика нет — снимать нечего
         clearCounters(playerId);
         m_navLockService.release(playerId);
@@ -501,8 +793,12 @@ void HaulerJobSystem::onFinishWork(IPlayer &player)
         notifyQueueShift();
         return;
     }
-    // Активная смена — штатное увольнение (кошелёк остаётся).
-    dismiss(player, "Смена окончена. Заработок сохранён в кошельке развозчика — заберите через «Забрать деньги»",
+    // Активная смена — штатное увольнение (кошелёк остаётся). Взятый заказ уходит
+    // обратно в список с уже засчитанными коробками (teardownShift).
+    dismiss(player,
+            orderMode(m_haulerJobService.shiftOwnerOf(playerId))
+                ? "Смена окончена, заказ возвращён в список. Заработок сохранён в кошельке развозчика"
+                : "Смена окончена. Заработок сохранён в кошельке развозчика — заберите через «Забрать деньги»",
             INFO_COLOUR);
 }
 
@@ -567,8 +863,9 @@ void HaulerJobSystem::onPairCommand(IPlayer &driver, int targetId)
         *target,
         makeDialog(DialogStyle_MSGBOX, "Приглашение в пару",
                    fmt::format("Водитель {}[{}] зовёт вас грузчиком в свой рейс.\n\nВы будете носить коробки, он "
-                               "— водить. Вам ${} за погруженную коробку и ${} за разгруженную, плюс ${} "
-                               "сверху за полный рейс в паре.",
+                               "— водить. В портовом рейсе вам ${} за погруженную коробку и ${} за разгруженную, "
+                               "плюс ${} сверху за полный рейс в паре.\n\nВ рейсе с заказом бизнеса погрузка на "
+                               "базе не оплачивается, зато премия владельца делится с вами пополам.",
                                driverSafe, driverId, PAY_PER_BOX_LOAD, PAY_PER_BOX_UNLOAD,
                                PAIR_FULL_UNLOAD_BONUS),
                    "Принять", "Отказаться"),
@@ -775,6 +1072,11 @@ void HaulerJobSystem::showInfo(IPlayer &player)
     body += "Суть работы\tГрузовик порт—база: водитель везёт, грузчик носит коробки\n";
     body += "Роли\tводитель (свой грузовик) или грузчик (в паре с водителем)\n";
     body += "Вступительный взнос\tнет\n";
+    body += fmt::format("Рейсы\tв порт (круги без конца) или заказ бизнеса — сейчас свободно {}\n",
+                        availableOrders().size());
+    body += "Заказ бизнеса\tгруз с базы в точку владельца; премия сверху, пополам с грузчиком\n";
+    body += "Погрузка заказа\tНЕ оплачивается (груз берут на базе) — платят прибытие, разгрузка и премия\n";
+    body += "После доставки\tгрузовик остаётся за вами: рейс в порт либо новый заказ у пикапа депо\n";
     body += fmt::format("Водителю\t${} за прибытие в порт и столько же за прибытие на базу\n", PAY_ARRIVAL);
     body += fmt::format("За коробки\t${} за погруженную и ${} за разгруженную — тому, кто нёс\n",
                         PAY_PER_BOX_LOAD, PAY_PER_BOX_UNLOAD);
@@ -824,19 +1126,28 @@ void HaulerJobSystem::showInfo(IPlayer &player)
                              HaulerJobService::OUT_LENGTH);
         break;
     case HaulerJobService::Phase::Loading:
-        status = fmt::format("грузит на складе, коробок {}/{}", m_haulerJobService.boxCountOf(playerId),
-                             HaulerJobService::BOXES_PER_LEG);
+        status = fmt::format("грузит {}, коробок {}/{}", orderMode(playerId) ? "заказ на базе" : "на складе порта",
+                             m_haulerJobService.boxCountOf(playerId), legBoxes(playerId));
         break;
     case HaulerJobService::Phase::DriveBack:
-        status = fmt::format("едет на базу, чекпоинт {}/{}", m_haulerJobService.driveIndexOf(playerId) + 1,
-                             HaulerJobService::BACK_LENGTH);
+        status = orderMode(playerId)
+                     ? std::string("везёт заказ в точку")
+                     : fmt::format("едет на базу, чекпоинт {}/{}", m_haulerJobService.driveIndexOf(playerId) + 1,
+                                   HaulerJobService::BACK_LENGTH);
         break;
     case HaulerJobService::Phase::Unloading:
-        status = fmt::format("разгружает на базе, коробок {}/{}", m_haulerJobService.boxCountOf(playerId),
-                             HaulerJobService::BOXES_PER_LEG);
+        status = fmt::format("разгружает {}, коробок {}/{}", orderMode(playerId) ? "заказ в точке" : "на базе",
+                             m_haulerJobService.boxCountOf(playerId), legBoxes(playerId));
         break;
     }
     body += fmt::format("Ваш статус\t{}\n", status);
+
+    // Заказ смены — у водителя свой, у грузчика заказ его напарника.
+    if (const BusinessOrderService::Order *order = orderOfShift(m_haulerJobService.shiftOwnerOf(playerId)))
+    {
+        body += fmt::format("Заказ рейса\t{}, осталось {} коробок, премия {}\n", orderPointName(*order),
+                            m_orderService.boxesLeft(order->id), Money::text(order->bonus));
+    }
 
     if (m_haulerJobService.roleOf(playerId) == HaulerJobService::Role::Driver)
     {
@@ -937,6 +1248,21 @@ void HaulerJobSystem::completeBoarding(IPlayer &player)
     m_haulerJobService.completeBoarding(playerId); // Reserved -> DriveOut (площадку НЕ отпускает)
     m_exitSeconds[playerId] = 0;
     m_waypointService.clearFor(player); // маркер грузовика больше не нужен
+
+    if (orderMode(playerId))
+    {
+        // Заказу плечо в порт не нужно: товар лежит на базе, погрузка начинается здесь
+        // же. Площадку отпускаем СРАЗУ, не дожидаясь отъезда: окно выезда уволило бы
+        // работника за то, что он честно носит коробки в двух шагах от депо. Отдать её
+        // следующему это не мешает — физическую занятость привод считает сам
+        // (spotClear), и пока грузовик стоит рядом, в площадку никто не заспавнится.
+        m_haulerJobService.releaseSpot(playerId);
+        m_reserveSeconds[playerId] = 0;
+        m_screenTimerService.hide(player);
+        beginLoadingPhase(player); // DriveOut -> Loading, минуя плечо в порт
+        return;
+    }
+
     // GUI-таймер НЕ гасим: окно идёт до отъезда с площадки — она нужна следующему.
     showDriveCheckpoint(player); // теперь маршрут: плечо OUT, индекс 0
     player.sendClientMessage(INFO_COLOUR,
@@ -961,7 +1287,9 @@ void HaulerJobSystem::pumpQueue()
         IPlayer *next = m_core.getPlayers().get(promotion.playerId);
         if (!next)
         {
-            // Продвинутый работник пропал: снять резерв (грузовик остаётся pre-stock).
+            // Продвинутый работник пропал: снять резерв (грузовик остаётся pre-stock) и
+            // отпустить забронированный им заказ — иначе он висел бы принятым навсегда.
+            releaseOrderOf(promotion.playerId);
             m_haulerJobService.endShift(promotion.playerId);
             clearCounters(promotion.playerId);
             m_navLockService.release(promotion.playerId);
@@ -1004,6 +1332,31 @@ void HaulerJobSystem::showDriveCheckpoint(IPlayer &player)
 {
     const int playerId = player.getID();
     const HaulerJobService::Phase phase = m_haulerJobService.phaseOf(playerId);
+
+    if (orderMode(playerId))
+    {
+        if (phase != HaulerJobService::Phase::DriveBack)
+        {
+            return; // в заказе едут ТОЛЬКО «обратно» — от базы к точке
+        }
+        // Плечо заказа — одна точка, вход бизнеса. RACE_FINISH: стрелке некуда
+        // указывать, дальше рейса нет (nextPosition обязан быть пустым, иначе клиент
+        // покажет обычный маркер со стрелкой).
+        Vector3 target;
+        if (!orderDriveTarget(playerId, target))
+        {
+            dismiss(player, "Заказ снят — рейс отменён, заработок сохранён", ERROR_COLOUR);
+            return;
+        }
+        m_checkpointService.setRaceForPlayer(player, RaceCheckpointType::RACE_FINISH, target,
+                                             Vector3{0.0f, 0.0f, 0.0f}, MOVE_CP_RADIUS,
+                                             [this](IPlayer &p)
+                                             {
+                                                 onDriveCheckpointEnter(p);
+                                             });
+        return;
+    }
+
     int len = 0;
     const Vector3 *route = routeForPhase(phase, len);
     if (!route)
@@ -1041,6 +1394,17 @@ void HaulerJobSystem::onDriveCheckpointEnter(IPlayer &player)
         return;
     }
 
+    if (orderMode(playerId))
+    {
+        // Плечо заказа одноточечное: доехал до точки — сразу разгрузка (ехать в порт
+        // заказу не нужно, а DriveOut в этом режиме не наступает вовсе).
+        if (phase == HaulerJobService::Phase::DriveBack)
+        {
+            beginUnloadingPhase(player);
+        }
+        return;
+    }
+
     int len = 0;
     const Vector3 *route = routeForPhase(phase, len);
     if (!route)
@@ -1073,14 +1437,46 @@ void HaulerJobSystem::beginLoadingPhase(IPlayer &player)
     m_checkpointService.clearRaceForPlayer(player);
     m_screenTimerService.hide(player); // в пешей фазе окна езды нет
     m_footIdleSeconds[playerId] = 0;
-    player.sendClientMessage(
-        INFO_COLOUR,
-        u(fmt::format("Вы прибыли в порт. Загрузите {} коробок со склада в грузовик", HaulerJobService::BOXES_PER_LEG)));
-    m_screenNoticeService.show(player, fmt::format("port: load {} boxes into truck", HaulerJobService::BOXES_PER_LEG),
-                               PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
-    // Доехал до порта — плата за плечо. Она принадлежит ВОДИТЕЛЮ: это его работа,
-    // коробки оплачиваются отдельно и носильщику.
-    creditParticipant(playerId, PAY_ARRIVAL, fmt::format("port reached +${}", PAY_ARRIVAL), CREDIT_POPUP_TIME);
+
+    const int boxes = legBoxes(playerId);
+    const bool orders = orderMode(playerId);
+
+    if (orders)
+    {
+        const BusinessOrderService::Order *order = orderOfShift(playerId);
+        if (!order)
+        {
+            dismiss(player, "Заказ снят — рейс отменён, заработок сохранён", ERROR_COLOUR);
+            return;
+        }
+        // Что именно везём — сразу и одним сообщением: состав заказа игрок больше нигде
+        // не увидит, а от него зависит, сколько ходок делать.
+        std::string composition;
+        for (const BusinessOrderService::Item &item : order->items)
+        {
+            composition += fmt::format("{}{} — {} шт.", composition.empty() ? "" : ", ",
+                                       m_inventoryService.itemName(item.itemType), item.quantity);
+        }
+        player.sendClientMessage(INFO_COLOUR,
+                                 u(fmt::format("Груз для {} лежит на базе: загрузите {} коробок с точки погрузки",
+                                               orderPointName(*order), boxes)));
+        player.sendClientMessage(INFO_COLOUR, u(fmt::format("В заказе: {}", composition)));
+        player.sendClientMessage(INFO_COLOUR, u("Погрузка на базе не оплачивается — платят за доставку в точку"));
+        m_screenNoticeService.show(player, fmt::format("base: load {} boxes for the order", boxes), PHASE_POPUP_TIME,
+                                   NEUTRAL_POPUP_COLOUR);
+        // Плата за прибытие в заказе одна — за приезд В ТОЧКУ (см. beginUnloadingPhase):
+        // плеча в порт нет, и платить за посадку в депо не за что.
+    }
+    else
+    {
+        player.sendClientMessage(
+            INFO_COLOUR, u(fmt::format("Вы прибыли в порт. Загрузите {} коробок со склада в грузовик", boxes)));
+        m_screenNoticeService.show(player, fmt::format("port: load {} boxes into truck", boxes), PHASE_POPUP_TIME,
+                                   NEUTRAL_POPUP_COLOUR);
+        // Доехал до порта — плата за плечо. Она принадлежит ВОДИТЕЛЮ: это его работа,
+        // коробки оплачиваются отдельно и носильщику.
+        creditParticipant(playerId, PAY_ARRIVAL, fmt::format("port reached +${}", PAY_ARRIVAL), CREDIT_POPUP_TIME);
+    }
 
     // Коробки грузит НОСИЛЬЩИК смены: соло-водитель сам, в паре — грузчик.
     const int carrierId = m_haulerJobService.carrierOf(playerId);
@@ -1088,10 +1484,11 @@ void HaulerJobSystem::beginLoadingPhase(IPlayer &player)
     {
         if (carrierId != playerId)
         {
-            carrier->sendClientMessage(INFO_COLOUR,
-                                       u(fmt::format("Грузовик в порту. Загрузите {} коробок со склада",
-                                                     HaulerJobService::BOXES_PER_LEG)));
-            m_screenNoticeService.show(*carrier, "port: load the truck", PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
+            carrier->sendClientMessage(
+                INFO_COLOUR, u(orders ? fmt::format("Грузовик под заказ на базе. Загрузите {} коробок", boxes)
+                                      : fmt::format("Грузовик в порту. Загрузите {} коробок со склада", boxes)));
+            m_screenNoticeService.show(*carrier, orders ? "base: load the truck" : "port: load the truck",
+                                       PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
             m_footIdleSeconds[carrierId] = 0;
         }
         showBoxSource(*carrier);
@@ -1105,24 +1502,63 @@ void HaulerJobSystem::beginDriveBackPhase(IPlayer &player)
     m_checkpointService.clearForPlayer(player);
     m_driveIdleSeconds[playerId] = 0;
     m_exitSeconds[playerId] = 0;
-    m_screenNoticeService.show(player, "drive back to base", PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
+    if (orderMode(playerId))
+    {
+        const BusinessOrderService::Order *order = orderOfShift(playerId);
+        if (!order)
+        {
+            dismiss(player, "Заказ снят — рейс отменён, заработок сохранён", ERROR_COLOUR);
+            return;
+        }
+        player.sendClientMessage(INFO_COLOUR,
+                                 u(fmt::format("Груз в кузове. Везите его в {}", orderPointName(*order))));
+        m_screenNoticeService.show(player, "deliver the order", PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
+    }
+    else
+    {
+        m_screenNoticeService.show(player, "drive back to base", PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
+    }
     showDriveCheckpoint(player); // плечо BACK, индекс 0 (выезд из зоны склада)
 }
 
 void HaulerJobSystem::beginUnloadingPhase(IPlayer &player)
 {
     const int playerId = player.getID();
+    // Заказ мог быть снят, пока водитель ехал (владелец отказался от точки, дев её
+    // снёс): выгружать некуда, и узнать об этом лучше на подъезде, а не на первой
+    // коробке. Деньги за путь уже в кошельке, они остаются.
+    if (orderMode(playerId) && !orderOfShift(playerId))
+    {
+        dismiss(player, "Заказ снят, пока вы ехали — рейс отменён, заработок сохранён", ERROR_COLOUR);
+        return;
+    }
     m_haulerJobService.beginUnloading(playerId); // DriveBack -> Unloading, boxCount=0
     m_checkpointService.clearRaceForPlayer(player);
     m_screenTimerService.hide(player);
     m_footIdleSeconds[playerId] = 0;
-    player.sendClientMessage(
-        INFO_COLOUR,
-        u(fmt::format("Вы на базе. Разгрузите {} коробок на точку выгрузки", HaulerJobService::BOXES_PER_LEG)));
-    m_screenNoticeService.show(player, fmt::format("base: unload {} boxes", HaulerJobService::BOXES_PER_LEG),
-                               PHASE_POPUP_TIME, NEUTRAL_POPUP_COLOUR);
-    // Доехал до базы — плата за второе плечо (см. beginLoadingPhase).
-    creditParticipant(playerId, PAY_ARRIVAL, fmt::format("base reached +${}", PAY_ARRIVAL), CREDIT_POPUP_TIME);
+
+    const int boxes = legBoxes(playerId);
+    const bool orders = orderMode(playerId);
+    if (orders)
+    {
+        player.sendClientMessage(
+            INFO_COLOUR, u(fmt::format("Вы у точки. Занесите {} коробок ВНУТРЬ, к прилавку — вход отмечен пикапом",
+                                       boxes)));
+        m_screenNoticeService.show(player, fmt::format("deliver {} boxes to the counter", boxes), PHASE_POPUP_TIME,
+                                   NEUTRAL_POPUP_COLOUR);
+    }
+    else
+    {
+        player.sendClientMessage(INFO_COLOUR,
+                                 u(fmt::format("Вы на базе. Разгрузите {} коробок на точку выгрузки", boxes)));
+        m_screenNoticeService.show(player, fmt::format("base: unload {} boxes", boxes), PHASE_POPUP_TIME,
+                                   NEUTRAL_POPUP_COLOUR);
+    }
+    // Доехал до места разгрузки — плата за плечо (см. beginLoadingPhase). В заказе это
+    // ЕДИНСТВЕННОЕ прибытие: плеча в порт там нет.
+    creditParticipant(playerId, PAY_ARRIVAL,
+                      fmt::format("{} +${}", orders ? "point reached" : "base reached", PAY_ARRIVAL),
+                      CREDIT_POPUP_TIME);
     // Источник коробки — зад грузовика. Ставить его СЕЙЧАС нельзя: зачёт последнего
     // чекпоинта происходит за рулём, и точка примёрзла бы к месту зачёта, а не к месту
     // парковки. Пока носильщик в кабине — цели нет (коробку берут только пешком);
@@ -1153,6 +1589,173 @@ void HaulerJobSystem::completeCyclePhase(IPlayer &player)
     showDriveCheckpoint(player); // плечо OUT, индекс 0 (точка 1)
 }
 
+// ------------------------------------------------- заказ бизнеса в смене (Orders)
+
+bool HaulerJobSystem::orderMode(int shiftOwnerId) const
+{
+    return shiftOwnerId >= 0 && m_haulerJobService.modeOf(shiftOwnerId) == HaulerJobService::Mode::Orders;
+}
+
+const BusinessOrderService::Order *HaulerJobSystem::orderOfShift(int shiftOwnerId) const
+{
+    if (!orderMode(shiftOwnerId))
+    {
+        return nullptr;
+    }
+    const int orderId = m_haulerJobService.orderIdOf(shiftOwnerId);
+    if (orderId <= 0)
+    {
+        return nullptr;
+    }
+    const BusinessOrderService::Order *order = m_orderService.get(orderId);
+    // Заказ мог пропасть между двумя коробками (снос точки девом), и точка вместе с
+    // ним: ни ехать, ни выгружать тогда некуда — вызывающий закрывает рейс.
+    if (!order || !m_businessService.getBusiness(order->businessId))
+    {
+        return nullptr;
+    }
+    return order;
+}
+
+bool HaulerJobSystem::orderDriveTarget(int shiftOwnerId, Vector3 &out) const
+{
+    const BusinessOrderService::Order *order = orderOfShift(shiftOwnerId);
+    if (!order)
+    {
+        return false;
+    }
+    const BusinessService::Business *business = m_businessService.getBusiness(order->businessId);
+    if (!business)
+    {
+        return false;
+    }
+    out = business->entrance; // ехать — ко ВХОДУ точки, коробки носят уже внутрь
+    return true;
+}
+
+bool HaulerJobSystem::orderDropPoint(int shiftOwnerId, Vector3 &out) const
+{
+    const BusinessOrderService::Order *order = orderOfShift(shiftOwnerId);
+    if (!order)
+    {
+        return false;
+    }
+    const BusinessService::Business *business = m_businessService.getBusiness(order->businessId);
+    if (!business || !m_businessService.catalogValid(business->type, business->interiorIndex))
+    {
+        return false;
+    }
+    const BusinessService::CatalogEntry &entry =
+        m_businessService.catalog(business->type)[static_cast<std::size_t>(business->interiorIndex)];
+    // Товар кладут к ПРИЛАВКУ. Прилавок замерен не у каждого интерьера (нулевой вектор
+    // — интерьерных координат (0,0,0) не бывает); там кладём к точке появления внутри:
+    // снабжать нужно ЛЮБУЮ точку, иначе владельцы части интерьеров остаются без
+    // доставки вовсе.
+    const bool measured = entry.counter.x != 0.0f || entry.counter.y != 0.0f || entry.counter.z != 0.0f;
+    out = measured ? entry.counter : entry.insideSpawn;
+    return true;
+}
+
+int HaulerJobSystem::legBoxes(int shiftOwnerId) const
+{
+    const BusinessOrderService::Order *order = orderOfShift(shiftOwnerId);
+    if (!order)
+    {
+        return HaulerJobService::BOXES_PER_LEG;
+    }
+    // ОСТАТОК заказа: сорванный заказ возвращается в пул с прогрессом, и следующий
+    // водитель грузит и везёт только недовезённое.
+    return std::clamp(m_orderService.boxesLeft(order->id), 1, BusinessOrderService::BOXES_PER_ORDER);
+}
+
+bool HaulerJobSystem::deliverOrderBox(int shiftOwnerId)
+{
+    const BusinessOrderService::Order *order = orderOfShift(shiftOwnerId);
+    if (!order)
+    {
+        return false;
+    }
+    const int orderId = order->id;
+    const int businessId = order->businessId;
+    // Содержимое читаем ДО зачёта: deliverBox сдвигает прогресс, и «следующая коробка»
+    // станет уже другой.
+    const std::vector<BusinessOrderService::Item> contents = m_orderService.nextBoxContents(orderId);
+    const bool finished = m_orderService.deliverBox(orderId);
+    for (const BusinessOrderService::Item &item : contents)
+    {
+        // Склад точки клампится потолком товара сам; переполнения не бывает — состав
+        // заказа посчитан по свободному месту, а продажи место только освобождают.
+        m_businessService.addStock(businessId, item.itemType, item.quantity);
+    }
+    return finished;
+}
+
+void HaulerJobSystem::completeOrder(IPlayer &driver, IPlayer &carrier)
+{
+    const int driverId = driver.getID();
+    const int carrierId = carrier.getID();
+    const int orderId = m_haulerJobService.orderIdOf(driverId);
+    const BusinessOrderService::Order *order = m_orderService.get(orderId);
+    const std::int64_t bonus = order ? order->bonus : 0;
+    const std::string point = order ? orderPointName(*order) : std::string("точка");
+    const int partner = m_haulerJobService.partnerOf(driverId);
+
+    // Заказ снимаем ДО выплат и до конца смены: teardown иначе вернул бы уже довезённый
+    // заказ в пул, и его повезли бы второй раз.
+    m_haulerJobService.clearOrder(driverId);
+    m_orderService.remove(orderId);
+
+    // Премия делится ПОПОЛАМ между водителем и грузчиком; соло забирает всю. Нечётный
+    // остаток — водителю: рейс и грузовик на нём.
+    if (bonus > 0)
+    {
+        const std::int64_t loaderShare = partner >= 0 ? bonus / 2 : 0;
+        const std::int64_t driverShare = bonus - loaderShare;
+        creditParticipant(driverId, driverShare, fmt::format("order bonus +${}", driverShare), BONUS_POPUP_TIME);
+        if (partner >= 0)
+        {
+            creditParticipant(partner, loaderShare, fmt::format("order bonus +${}", loaderShare), BONUS_POPUP_TIME);
+        }
+    }
+
+    const std::string done =
+        fmt::format("Заказ доставлен: {}. Премия {} — {}", point, Money::text(bonus),
+                    partner >= 0 ? "пополам с напарником" : "целиком вам");
+    driver.sendClientMessage(INFO_COLOUR, u(done));
+    if (carrierId != driverId)
+    {
+        carrier.sendClientMessage(INFO_COLOUR, u(done));
+    }
+
+    // СМЕНА НЕ КОНЧАЕТСЯ: грузовик остаётся за водителем, пара — в силе. Заказ на рейс
+    // ровно один, поэтому цикл возвращается к портовому (груз в порту есть всегда), а
+    // за новым заказом водитель заезжает к пикапу депо, не теряя грузовик. Первый
+    // чекпоинт плеча «туда» стоит у самого депо — он и ведёт обратно к пикапу.
+    //
+    // Тот же переход, что у портового круга (completeCyclePhase), но со своим
+    // сообщением: игрок должен понять, что грузовик за ним и что делать дальше.
+    m_haulerJobService.completeCycle(driverId); // Unloading -> DriveOut, счётчики плеча с нуля
+    m_checkpointService.clearForPlayer(driver);
+    m_driveIdleSeconds[driverId] = 0;
+    m_exitSeconds[driverId] = 0;
+    driver.sendClientMessage(
+        INFO_COLOUR, u("Грузовик остаётся за вами: дальше рейс в порт — либо новый заказ у пикапа депо"));
+    showDriveCheckpoint(driver);
+}
+
+void HaulerJobSystem::releaseOrderOf(int shiftOwnerId)
+{
+    const int orderId = m_haulerJobService.orderIdOf(shiftOwnerId);
+    if (orderId <= 0)
+    {
+        return;
+    }
+    m_haulerJobService.clearOrder(shiftOwnerId);
+    // Заказ возвращается в пул КАК ЕСТЬ — с премией и уже засчитанными коробками:
+    // довезённое лежит у точки, повторно его не привезут.
+    m_orderService.release(orderId);
+}
+
 // ---------------------------------------------------- пешая переноска коробки
 
 void HaulerJobSystem::showBoxSource(IPlayer &player)
@@ -1166,6 +1769,18 @@ void HaulerJobSystem::showBoxSource(IPlayer &player)
     const HaulerJobService::Phase phase = m_haulerJobService.phaseOf(owner);
     if (phase == HaulerJobService::Phase::Loading)
     {
+        if (orderMode(owner))
+        {
+            // Заказ грузят НА БАЗЕ, с той же точки, куда портовый рейс сдаёт груз: это
+            // и есть погрузочная площадка депо. Обратный путь (точка -> кузов) держит
+            // MIN_CARRY_DISTANCE, см. onBoxPickup.
+            m_checkpointService.setForPlayer(player, BASE_UNLOAD_POS, BOX_CP_RADIUS,
+                                             [this](IPlayer &p)
+                                             {
+                                                 onBoxCheckpointEnter(p);
+                                             });
+            return;
+        }
         // Погрузка: берут со СЛУЧАЙНОЙ точки склада порта (общий источник координат),
         // но не ближе MIN_CARRY_DISTANCE к кузову — иначе грузовик, подогнанный вплотную
         // к точке склада, убирает переноску целиком.
@@ -1224,6 +1839,25 @@ void HaulerJobSystem::showBoxDest(IPlayer &player)
     }
     else if (phase == HaulerJobService::Phase::Unloading)
     {
+        if (orderMode(owner))
+        {
+            // Заказ несут ВНУТРЬ точки, к прилавку. Чекпоинт стоит в координатах
+            // интерьера: попасть в них можно только войдя в бизнес через его пикап, а
+            // «тот ли это бизнес» проверяется по виртуальному миру при входе в чекпоинт
+            // (onBoxCheckpointEnter) — интерьер у всех точек одного типа общий.
+            Vector3 drop;
+            if (!orderDropPoint(owner, drop))
+            {
+                dismissShiftOwner(owner, "Заказ снят — рейс отменён, заработок сохранён");
+                return;
+            }
+            m_checkpointService.setForPlayer(player, drop, BOX_CP_RADIUS,
+                                             [this](IPlayer &p)
+                                             {
+                                                 onBoxCheckpointEnter(p);
+                                             });
+            return;
+        }
         // Разгрузка: несут на точку выгрузки базы.
         m_checkpointService.setForPlayer(player, BASE_UNLOAD_POS, BOX_CP_RADIUS,
                                          [this](IPlayer &p)
@@ -1255,6 +1889,19 @@ void HaulerJobSystem::onBoxCheckpointEnter(IPlayer &player)
     }
     if (m_haulerJobService.carryingOf(playerId))
     {
+        // Приёмник заказа стоит в координатах ИНТЕРЬЕРА, а интерьер у всех точек одного
+        // типа общий — различаются они только виртуальным миром. Без этой проверки
+        // коробку можно было бы сдать в ЛЮБОМ похожем магазине, не доехав до заказчика.
+        // Мир игрока — серверный факт (PlayerLocationService), а не заявление клиента.
+        if (orderMode(owner) && phase == HaulerJobService::Phase::Unloading)
+        {
+            const BusinessOrderService::Order *order = orderOfShift(owner);
+            if (!order || m_locationService.getVirtualWorld(playerId) !=
+                              BusinessService::VW_BASE + order->businessId)
+            {
+                return; // это не интерьер точки заказа — сдавать некуда
+            }
+        }
         onBoxDrop(player); // несёт коробку -> это чекпоинт-приёмник
     }
     else
@@ -1273,15 +1920,22 @@ void HaulerJobSystem::onBoxPickup(IPlayer &player)
     }
 
     // Переноска обязана быть переноской. Один её конец задаёт игрок (зад грузовика),
-    // и подогнав грузовик вплотную к точке выгрузки он стоял бы сразу в обоих чекпоинтах.
-    // Коробку не выдаём: руки свободны, отогнать грузовик можно сразу (на погрузке то же
-    // правило решается выбором дальней точки склада — см. randomWarehousePoint).
+    // и подогнав грузовик вплотную к точке базы он стоял бы сразу в обоих чекпоинтах.
+    // Коробку не выдаём: руки свободны, отогнать грузовик можно сразу (на погрузке в
+    // порту то же правило решается выбором дальней точки склада — randomWarehousePoint).
+    //
+    // Пара точек одна и та же в двух случаях: разгрузка портового рейса (кузов -> точка
+    // базы) и погрузка заказа (точка базы -> кузов).
+    const HaulerJobService::Phase ownerPhase = m_haulerJobService.phaseOf(owner);
+    const bool baseDockLeg = ownerPhase == HaulerJobService::Phase::Unloading
+                                 ? !orderMode(owner)
+                                 : ownerPhase == HaulerJobService::Phase::Loading && orderMode(owner);
     Vector3 rear;
-    if (m_haulerJobService.phaseOf(owner) == HaulerJobService::Phase::Unloading && backOfTruck(owner, rear) &&
+    if (baseDockLeg && backOfTruck(owner, rear) &&
         distanceSq2D(rear, BASE_UNLOAD_POS) < MIN_CARRY_DISTANCE * MIN_CARRY_DISTANCE)
     {
         player.sendClientMessage(ERROR_COLOUR,
-                                 u(fmt::format("Грузовик стоит вплотную к точке выгрузки — отгоните его на {} м",
+                                 u(fmt::format("Грузовик стоит вплотную к точке базы — отгоните его на {} м",
                                                static_cast<int>(MIN_CARRY_DISTANCE))));
         return;
     }
@@ -1305,6 +1959,12 @@ void HaulerJobSystem::onBoxPickup(IPlayer &player)
 void HaulerJobSystem::onLiftFinished(IPlayer &player)
 {
     const int playerId = player.getID();
+    // Одноразовый таймер уже сработал: хэндл гасим СРАЗУ, чтобы teardown, вызванный
+    // из этого же колбэка, не пытался отменить таймер, внутри которого мы находимся.
+    if (playerId >= 0 && playerId < MAX_PLAYERS)
+    {
+        m_pendingTimer[playerId] = TimerService::Handle{};
+    }
     const int owner = m_haulerJobService.shiftOwnerOf(playerId);
     if (owner < 0)
     {
@@ -1359,6 +2019,13 @@ void HaulerJobSystem::creditParticipant(int playerId, std::int64_t amount, const
 void HaulerJobSystem::onPutdownFinished(IPlayer &player)
 {
     const int playerId = player.getID();
+    // Хэндл сработавшего таймера гасим сразу: зачёт коробки может закрыть смену
+    // (доставленный заказ, пропавший грузовик), а teardown отменяет m_pendingTimer —
+    // тот самый таймер, из которого мы вызваны.
+    if (playerId >= 0 && playerId < MAX_PLAYERS)
+    {
+        m_pendingTimer[playerId] = TimerService::Handle{};
+    }
     const int owner = m_haulerJobService.shiftOwnerOf(playerId);
     if (owner < 0)
     {
@@ -1391,34 +2058,78 @@ void HaulerJobSystem::onPutdownFinished(IPlayer &player)
     m_footIdleSeconds[owner] = 0;
     m_driveIdleSeconds[owner] = 0;
 
+    // Сколько коробок на плече: 10 в порту, остаток заказа в заказе (недовезённый
+    // заказ возвращается в пул с прогрессом).
+    const int target = legBoxes(owner);
+    const bool orders = orderMode(owner);
+
     if (phase == HaulerJobService::Phase::Loading)
     {
-        if (count >= HaulerJobService::BOXES_PER_LEG)
+        // Счётчик коробок — экранным попапом (не чат), English.
+        if (orders)
         {
+            // ПОГРУЗКА ЗАКАЗА НЕ ОПЛАЧИВАЕТСЯ. Она идёт на базе, в двух шагах от пикапа:
+            // платная погрузка была бы фермой — взять заказ, загрузить кузов за деньги,
+            // сорвать смену, взять заказ снова, никуда не выезжая. Заработок заказного
+            // рейса весь на другом конце: прибытие, разгрузка и премия владельца.
+            m_screenNoticeService.show(player, fmt::format("loaded {}/{}", count, target), COUNT_POPUP_TIME,
+                                       NEUTRAL_POPUP_COLOUR);
+            m_audioService.playSound(player, PROGRESS_SOUND);
+        }
+        else
+        {
+            // Плата за погрузку идёт ТОМУ, КТО НЁС: в паре это грузчик, соло — сам водитель.
             creditParticipant(playerId, PAY_PER_BOX_LOAD,
-                              fmt::format("loaded {0}/{0} +${1}", HaulerJobService::BOXES_PER_LEG,
-                                          PAY_PER_BOX_LOAD),
-                              COUNT_POPUP_TIME);
-            player.sendClientMessage(
-                INFO_COLOUR, u(fmt::format("Груз в кузове ({0}/{0}). Пора на базу", HaulerJobService::BOXES_PER_LEG)));
+                              fmt::format("loaded {}/{} +${}", count, target, PAY_PER_BOX_LOAD), COUNT_POPUP_TIME);
+        }
+
+        if (count >= target)
+        {
+            player.sendClientMessage(INFO_COLOUR,
+                                     u(orders ? fmt::format("Груз в кузове ({0}/{0}). Пора к точке", target)
+                                              : fmt::format("Груз в кузове ({0}/{0}). Пора на базу", target)));
             if (partner >= 0)
             {
-                driver->sendClientMessage(INFO_COLOUR,
-                                          u(fmt::format("Грузчик загрузил {0}/{0}. Возвращайтесь на базу",
-                                                        HaulerJobService::BOXES_PER_LEG)));
+                driver->sendClientMessage(
+                    INFO_COLOUR, u(orders ? fmt::format("Грузчик загрузил {0}/{0}. Везите заказ в точку", target)
+                                          : fmt::format("Грузчик загрузил {0}/{0}. Возвращайтесь на базу", target)));
             }
             beginDriveBackPhase(*driver);
         }
         else
         {
-            // Счётчик коробок — экранным попапом (не чат), English. Плата за погрузку
-            // идёт ТОМУ, КТО НЁС: в паре это грузчик, соло — сам водитель.
-            creditParticipant(playerId, PAY_PER_BOX_LOAD,
-                              fmt::format("loaded {}/{} +${}", count, HaulerJobService::BOXES_PER_LEG,
-                                          PAY_PER_BOX_LOAD),
-                              COUNT_POPUP_TIME);
             showBoxSource(player); // следующая коробка
         }
+        return;
+    }
+
+    if (orders)
+    {
+        // Разгрузка заказа: коробка идёт НА СКЛАД ТОЧКИ, прогресс считает сам заказ (он
+        // же его и персистит) — счётчик плеча тут вторичен. Заказ мог быть снят между
+        // двумя коробками, поэтому платим ТОЛЬКО за зачёт в живой заказ: сперва
+        // убеждаемся, что он есть, и лишь потом начисляем.
+        if (!orderOfShift(owner))
+        {
+            dismissShiftOwner(owner, "Заказ снят — рейс отменён, заработок сохранён");
+            return;
+        }
+        const int orderId = m_haulerJobService.orderIdOf(owner);
+        // Заказ довезён, если зачёт был последним ЛИБО остатка уже нет: платить за
+        // коробки в завершённый заказ (прогресс бы не двигался) нельзя.
+        const bool finished = deliverOrderBox(owner) || m_orderService.boxesLeft(orderId) <= 0;
+        const BusinessOrderService::Order *live = m_orderService.get(orderId);
+        const int done = live ? live->boxesDone : BusinessOrderService::BOXES_PER_ORDER;
+        creditParticipant(playerId, PAY_PER_BOX_UNLOAD,
+                          fmt::format("delivered {}/{} +${}", done, BusinessOrderService::BOXES_PER_ORDER,
+                                      PAY_PER_BOX_UNLOAD),
+                          CREDIT_POPUP_TIME);
+        if (finished)
+        {
+            completeOrder(*driver, player);
+            return;
+        }
+        showBoxSource(player); // следующая коробка от зада грузовика
         return;
     }
 
@@ -1763,6 +2474,17 @@ void HaulerJobSystem::failBoarding(IPlayer &player)
 {
     const int playerId = player.getID();
 
+    // В режиме заказа возврата в очередь нет: заказ забронирован за этим водителем, и
+    // держать бронь за тем, кто не сел за руль, нельзя — заказ уходит обратно в список,
+    // а рейс начинается заново с его выбора. Очередь без заказа оставила бы смену без
+    // цели рейса вообще.
+    if (orderMode(playerId))
+    {
+        m_screenNoticeService.show(player, "boarding failed - order released", FAIL_POPUP_TIME, ERROR_POPUP_COLOUR);
+        dismiss(player, "Вы не успели сесть за руль — заказ возвращён в список, грузовик снят", ERROR_COLOUR);
+        return;
+    }
+
     m_checkpointService.clearRaceForPlayer(player);
     m_waypointService.clearFor(player); // снять маркер грузовика — не залипает в очереди
     m_screenTimerService.hide(player);
@@ -1828,6 +2550,11 @@ void HaulerJobSystem::teardownShift(IPlayer &player)
     m_stateService.clearSpecialAction(player); // снять carry, если несли
 
     const int vid = m_haulerJobService.vehicleIdOf(playerId);
+
+    // Заказ смены (если рейс был заказной) возвращается в пул КАК ЕСТЬ, с уже
+    // засчитанными коробками. Обязательно ДО endShift: он стирает состояние вместе с
+    // привязкой к заказу, и заказ остался бы забронированным навсегда.
+    releaseOrderOf(playerId);
 
     // Грузовик всегда деспавним: он личный, подавался этому работнику. Оставлять его
     // на площадке было бы возвратом к pre-stock — машина стояла бы ничья и занимала
