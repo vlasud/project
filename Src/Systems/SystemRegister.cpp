@@ -298,7 +298,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     m_systems.push_back(std::make_unique<TaxiJobSystem>(core, serviceRegister));
     // PhoneSystem — ПОСЛЕ работ (они кладут в телефон свои службы) и после
     // PlayerSessionSystem/FactionSystem: номер грузится по старту сессии, а полицию
-    // телефон перечисляет через членство во фракции.
+    // телефон перечисляет через членство во фракции. Свою услугу в витрине 24/7
+    // (продажа телефона) регистрирует сам, и порядок относительно Shop247System тут
+    // не важен: BusinessService держит услуги отдельно от регистрации типа.
     m_systems.push_back(std::make_unique<PhoneSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<JobDismissSystem>(core, serviceRegister));
     // JobWalletSystem (/jobwallet) — тоже после работ: кошельки в список кладут их

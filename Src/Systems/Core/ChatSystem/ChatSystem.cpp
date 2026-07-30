@@ -26,35 +26,6 @@ const ColourBand COLOUR_BANDS[] = {
     {CHAT_RADIUS * CHAT_RADIUS, Colour::FromRGBA(0xA9A9A9FF)},
 };
 
-// Чистка готовой строки чата перед отправкой. Текст и ник приходят от клиента:
-// цветокоды ({RRGGBB}, ~r~) клиент парсит при рендере сам, поэтому игрок иначе
-// перекрасил бы чужую строку или подделал её вид; управляющие байты рвут
-// client message. Работаем побайтово на месте: чат идёт в cp1251 (однобайтовая),
-// все заменяемые символы — ASCII, кириллицу не задеваем.
-void sanitizeChatLine(char *data, std::size_t size)
-{
-    for (std::size_t i = 0; i < size; ++i)
-    {
-        const unsigned char c = static_cast<unsigned char>(data[i]);
-        switch (c)
-        {
-        case '{':
-            data[i] = '(';
-            break;
-        case '}':
-            data[i] = ')';
-            break;
-        case '~':
-            data[i] = '-';
-            break;
-        default:
-            if (c < 0x20 || c == 0x7F)
-                data[i] = ' ';
-            break;
-        }
-    }
-}
-
 Colour colourForDistance(float distSq)
 {
     for (const ColourBand &band : COLOUR_BANDS)
@@ -139,6 +110,16 @@ bool ChatSystemSystem::onPlayerText(IPlayer &player, StringView message)
         break;
     }
 
+    message.remove_suffix(std::max<int>(0, static_cast<int>(message.size()) - MAX_MESSAGE_LENGTH));
+
+    // Реплику могут забрать наблюдатели (телефонный разговор и т.п.) — тогда чат не
+    // делает ничего: ни строки, ни анимации. Спрашиваем ДО них обоих, иначе строка
+    // ушла бы дважды, а анимация разговора сбила бы позу забравшего.
+    if (m_chatService.notifySpeech(playerId, message))
+    {
+        return false;
+    }
+
     // Прерываемая анимация разговора: игрок выходит из неё движением, сервер
     // не переустанавливает (interruptible). В транспорте не проигрываем.
     if (m_stateService.getState(playerId) == PlayerState_OnFoot)
@@ -151,14 +132,14 @@ bool ChatSystemSystem::onPlayerText(IPlayer &player, StringView message)
 
     m_gridService.queryRadius(position, CHAT_RADIUS, gridMask(GridEntityType::Player), m_listeners);
 
-    message.remove_suffix(std::max<int>(0, static_cast<int>(message.size()) - MAX_MESSAGE_LENGTH));
-
     // "- привет, как дела? : Lo_Vlasud[1000]"
     char buffer[CHAT_BUFFER_SIZE] = {0};
     const auto formatted = fmt::format_to_n(buffer, CHAT_BUFFER_SIZE - 1, "- {} : {}[{}]", message, player.getName(),
                                             playerId);
     const std::size_t lineSize = formatted.size < CHAT_BUFFER_SIZE - 1 ? formatted.size : CHAT_BUFFER_SIZE - 1;
-    sanitizeChatLine(buffer, lineSize);
+    // Текст и ник пришли от клиента: цветокоды он парсит при рендере сам, а
+    // управляющие байты рвут client message.
+    Encoding::neutralizeLine(buffer, lineSize);
     const StringView line(buffer, lineSize);
 
     for (const GridService::Result &listener : m_listeners)

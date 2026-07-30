@@ -46,6 +46,24 @@ void BusinessService::registerType(Type type, std::string name, std::string popu
     def.catalog = std::move(catalog);
     def.goods = std::move(goods);
     def.visitorMenu = std::move(visitorMenu);
+    // def.services НЕ трогаем: услугу могли добавить до регистрации типа.
+}
+
+void BusinessService::addService(Type type, ServiceDef service)
+{
+    if (!validType(type) || service.name.empty() || service.popupName.empty() || service.price < 0 || !service.sell)
+    {
+        LogManager::log(Error, "BusinessService: услуга '" + service.name + "' зарегистрирована неполно, пропущена");
+        return;
+    }
+    m_types[static_cast<std::size_t>(type)].services.push_back(std::move(service));
+}
+
+const std::vector<BusinessService::ServiceDef> &BusinessService::services(Type type) const
+{
+    static const std::vector<ServiceDef> EMPTY;
+    // Не через typeRegistered: услуга могла приехать раньше регистрации типа.
+    return validType(type) ? m_types[static_cast<std::size_t>(type)].services : EMPTY;
 }
 
 const std::vector<BusinessService::GoodDef> &BusinessService::goods(Type type) const

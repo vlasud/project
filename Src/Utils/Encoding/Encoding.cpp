@@ -234,6 +234,32 @@ std::string Encoding::neutralizeColorCodes(std::string_view utf8)
     return result;
 }
 
+void Encoding::neutralizeLine(char *data, std::size_t size)
+{
+    if (data == nullptr)
+        return;
+    for (std::size_t i = 0; i < size; ++i)
+    {
+        const unsigned char c = static_cast<unsigned char>(data[i]);
+        switch (c)
+        {
+        case '{':
+            data[i] = '(';
+            break;
+        case '}':
+            data[i] = ')';
+            break;
+        case '~':
+            data[i] = '-';
+            break;
+        default:
+            if (c < 0x20 || c == 0x7F)
+                data[i] = ' ';
+            break;
+        }
+    }
+}
+
 std::string Encoding::utf8Tocp1251(std::string_view input)
 {
     std::string output;

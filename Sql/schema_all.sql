@@ -30,9 +30,14 @@
 --                   скин; при регистрации геймод проставляет дефолт по полу
 --                   (муж 78 / жен 77). Скин 0 (CJ) недопустим — геймод считает
 --                   его невалидным и подменяет мужским дефолтом.
---   phone         — номер телефона (Docs/Phone.md): шестизначный, выдаётся аккаунту
---                   при первом входе и дальше не меняется. NULL — ещё не выдан.
---                   UNIQUE: по номеру звонят, он обязан быть один на сервере.
+--   phone         — номер телефона (Docs/Phone.md): шестизначный. Телефон ПОКУПАЕТСЯ
+--                   в магазине 24/7, автовыдачи нет: NULL — телефона у аккаунта нет.
+--                   Повторная покупка меняет номер (перезапись этого же поля).
+--                   UNIQUE: по номеру звонят, он обязан быть один на сервере, и
+--                   занятость номера ловится именно нарушением этого индекса.
+--   phone_balance — счёт телефона: разговор тарифицируется поминутно (см.
+--                   Docs/Phone.md), пополняется в 24/7. NOT NULL DEFAULT 0 — счёт
+--                   есть всегда, даже пока телефона нет; в минус не уходит.
 CREATE TABLE IF NOT EXISTS `player` (
     `id`            BIGINT          NOT NULL AUTO_INCREMENT,
     `name`          VARCHAR(24)     NOT NULL,
@@ -40,6 +45,7 @@ CREATE TABLE IF NOT EXISTS `player` (
     `sex`           TINYINT UNSIGNED NOT NULL DEFAULT 0,
     `skin`          INT             NOT NULL DEFAULT 78,
     `phone`         BIGINT          NULL DEFAULT NULL,
+    `phone_balance` BIGINT          NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_name` (`name`),
     UNIQUE KEY `uk_player_phone` (`phone`)
@@ -196,13 +202,13 @@ CREATE TABLE IF NOT EXISTS `hauler_wallet` (
     PRIMARY KEY (`account_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
--- Телефон игрока (Docs/Phone.md): выдаётся аккаунту при первом входе, дальше живёт с
--- ним. Для НОВОЙ базы колонка уже есть в CREATE TABLE `player` выше; этот блок — для
--- существующей базы, применять один раз.
+-- Телефон игрока (Docs/Phone.md): ПОКУПАЕТСЯ в магазине 24/7 и живёт с аккаунтом,
+-- повторная покупка меняет номер. Для НОВОЙ базы колонка уже есть в CREATE TABLE
+-- `player` выше; этот блок — для существующей базы, применять один раз.
 --
 -- Колонка NULL-able, а НЕ «NOT NULL DEFAULT 0»: под UNIQUE-индексом все старые строки
 -- получили бы одинаковый 0 и индекс просто не создался бы (duplicate entry). NULL под
--- UNIQUE разрешён в любом количестве — это и есть «номер ещё не выдан».
+-- UNIQUE разрешён в любом количестве — это и есть «телефона нет».
 --
 -- MySQL НЕ поддерживает IF NOT EXISTS в ADD COLUMN/ADD INDEX (это синтаксис MariaDB),
 -- а голый ALTER на уже применённой базе падает с «Duplicate column/key name» и
@@ -219,6 +225,13 @@ SET @has_phone_idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
                          AND INDEX_NAME = 'uk_player_phone');
 SET @sql := IF(@has_phone_idx > 0, 'DO 0',
                'ALTER TABLE `player` ADD UNIQUE INDEX `uk_player_phone` (`phone`)');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @has_phone_balance := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'player'
+                             AND COLUMN_NAME = 'phone_balance');
+SET @sql := IF(@has_phone_balance > 0, 'DO 0',
+               'ALTER TABLE `player` ADD COLUMN `phone_balance` BIGINT NOT NULL DEFAULT 0');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- Кошелёк заработка врача (работа-врач, Docs/MedicJob.md): write-through, забирается

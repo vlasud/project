@@ -1,5 +1,6 @@
 #include "Services/PhoneService/PhoneService.h"
 
+#include <cstddef>
 #include <utility>
 
 namespace
@@ -10,6 +11,10 @@ bool validId(int playerId)
 }
 
 const std::string EMPTY_NAME;
+
+// Сколько протухших дозвонов снимается за один тик. Звонков в игре единицы, а
+// остаток заберёт следующий тик — обход и уведомление остаются ограниченными.
+constexpr std::size_t EXPIRE_BATCH = 32;
 } // namespace
 
 bool PhoneService::validService(Service service)
@@ -66,6 +71,11 @@ std::int64_t PhoneService::phoneOf(int playerId) const
     return m_phone[playerId];
 }
 
+bool PhoneService::hasPhone(int playerId) const
+{
+    return phoneOf(playerId) != NO_PHONE;
+}
+
 int PhoneService::playerByPhone(std::int64_t phone) const
 {
     if (phone == NO_PHONE)
@@ -92,14 +102,275 @@ void PhoneService::setPhone(int playerId, std::int64_t phone)
     m_phone[playerId] = phone;
 }
 
-void PhoneService::resetPlayer(int playerId)
+std::int64_t PhoneService::balanceOf(int playerId) const
+{
+    if (!validId(playerId))
+    {
+        return 0;
+    }
+    return m_balance[playerId];
+}
+
+void PhoneService::setBalance(int playerId, std::int64_t balance)
 {
     if (!validId(playerId))
     {
         return;
     }
+    // Отрицательного счёта не бывает: битая строка в БД не должна дать «долг».
+    m_balance[playerId] = balance > 0 ? balance : 0;
+}
+
+bool PhoneService::takeBalance(int playerId, std::int64_t amount)
+{
+    if (!validId(playerId) || amount <= 0 || m_balance[playerId] < amount)
+    {
+        return false;
+    }
+    m_balance[playerId] -= amount;
+    return true;
+}
+
+int PhoneService::resetPlayer(int playerId)
+{
+    if (!validId(playerId))
+    {
+        return -1;
+    }
     m_phone[playerId] = NO_PHONE;
+    m_balance[playerId] = 0;
     cancelOrdersOf(playerId);
+    m_numberRequest[playerId] = false;
+    m_recall[playerId] = Recall{};
+    return hangup(playerId); // звонок снимается парой; peerId — кому сообщить
+}
+
+bool PhoneService::beginNumberRequest(int playerId)
+{
+    if (!validId(playerId) || m_numberRequest[playerId])
+    {
+        return false;
+    }
+    m_numberRequest[playerId] = true;
+    return true;
+}
+
+void PhoneService::endNumberRequest(int playerId)
+{
+    if (!validId(playerId))
+    {
+        return;
+    }
+    m_numberRequest[playerId] = false;
+}
+
+// ------------------------------------------------------------------ звонки
+
+void PhoneService::clearLink(int playerId)
+{
+    if (!validId(playerId) || m_calls[playerId].state == CallState::None)
+    {
+        return;
+    }
+    m_calls[playerId] = CallLink{};
+    --m_linkCount;
+}
+
+bool PhoneService::paired(int playerId) const
+{
+    if (!validId(playerId))
+    {
+        return false;
+    }
+    const int peerId = m_calls[playerId].peerId;
+    return validId(peerId) && m_calls[peerId].state != CallState::None && m_calls[peerId].peerId == playerId;
+}
+
+bool PhoneService::startCall(int callerId, std::uint32_t callerSerial, std::int64_t callerPhone, int calleeId,
+                             std::uint32_t calleeSerial, std::int64_t calleePhone, TimePoint now)
+{
+    // Звонок самому себе запрещён В СЕРВИСЕ: симметричная запись пары затёрла бы
+    // сама себя и оставила неснимаемую половину.
+    if (!validId(callerId) || !validId(calleeId) || callerId == calleeId)
+    {
+        return false;
+    }
+    if (m_calls[callerId].state != CallState::None || m_calls[calleeId].state != CallState::None)
+    {
+        return false; // одна сторона занята — больше одного звонка на игрока нет
+    }
+
+    CallLink &outgoing = m_calls[callerId];
+    outgoing.state = CallState::Outgoing;
+    outgoing.peerId = calleeId;
+    outgoing.peerSerial = calleeSerial;
+    outgoing.peerPhone = calleePhone;
+    outgoing.startedAt = now;
+    outgoing.initiator = true; // набирал он — он и платит за разговор
+
+    CallLink &incoming = m_calls[calleeId];
+    incoming.state = CallState::Incoming;
+    incoming.peerId = callerId;
+    incoming.peerSerial = callerSerial;
+    incoming.peerPhone = callerPhone;
+    incoming.startedAt = now;
+
+    m_linkCount += 2;
+    m_recall[callerId].phone = calleePhone;
+    m_recall[callerId].at = now;
+    return true;
+}
+
+int PhoneService::answer(int playerId, TimePoint now)
+{
+    if (!validId(playerId) || m_calls[playerId].state != CallState::Incoming)
+    {
+        return -1;
+    }
+    const int peerId = m_calls[playerId].peerId;
+    if (!paired(playerId) || m_calls[peerId].state != CallState::Outgoing)
+    {
+        // Пара рассогласована — снимаем звонок целиком, а не половину.
+        clearLink(playerId);
+        clearLink(peerId);
+        return -1;
+    }
+    m_calls[playerId].state = CallState::Active;
+    m_calls[playerId].startedAt = now;
+    m_calls[peerId].state = CallState::Active;
+    m_calls[peerId].startedAt = now;
+    // Тариф отсчитывается от МОМЕНТА ОТВЕТА: дозвон бесплатен, платит разговор.
+    m_calls[playerId].chargedAt = now;
+    m_calls[peerId].chargedAt = now;
+    return peerId;
+}
+
+int PhoneService::hangup(int playerId)
+{
+    if (!validId(playerId) || m_calls[playerId].state == CallState::None)
+    {
+        return -1;
+    }
+    const int peerId = m_calls[playerId].peerId;
+    const bool hasPeer = paired(playerId);
+    clearLink(playerId);
+    if (!hasPeer)
+    {
+        return -1;
+    }
+    clearLink(peerId);
+    return peerId;
+}
+
+const PhoneService::CallLink *PhoneService::callOf(int playerId) const
+{
+    if (!validId(playerId) || m_calls[playerId].state == CallState::None)
+    {
+        return nullptr;
+    }
+    return &m_calls[playerId];
+}
+
+int PhoneService::recallSecondsLeft(int playerId, std::int64_t phone, TimePoint now) const
+{
+    if (!validId(playerId) || phone == NO_PHONE || m_recall[playerId].phone != phone)
+    {
+        return 0;
+    }
+    const auto passed = now - m_recall[playerId].at;
+    if (passed >= RECALL_COOLDOWN)
+    {
+        return 0;
+    }
+    return static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(RECALL_COOLDOWN - passed).count()) + 1;
+}
+
+void PhoneService::expireRinging(TimePoint now, const RingVisitor &visitor)
+{
+    if (m_linkCount <= 0)
+    {
+        return; // звонков нет — массив не обходим вовсе
+    }
+    // Снятые пары копим и уведомляем ПОСЛЕ обхода: наблюдатель шлёт сообщения, и
+    // видеть полуснятый звонок он не должен.
+    std::array<ExpiredRing, EXPIRE_BATCH> expired{};
+    std::size_t count = 0;
+
+    for (int id = 0; id < MAX_PLAYERS && count < EXPIRE_BATCH; ++id)
+    {
+        if (m_calls[id].state == CallState::None)
+        {
+            continue;
+        }
+        if (!paired(id))
+        {
+            clearLink(id); // осиротевшая половина: держать нечего
+            continue;
+        }
+        if (m_calls[id].state != CallState::Outgoing || now - m_calls[id].startedAt < RING_TIMEOUT)
+        {
+            continue;
+        }
+        const int peerId = m_calls[id].peerId;
+        // Серии снимаем ДО очистки: каждая половина хранит серию ПРОТИВОПОЛОЖНОЙ
+        // стороны, поэтому своя серия лежит у собеседника.
+        ExpiredRing &ring = expired[count++];
+        ring.callerId = id;
+        ring.callerSerial = m_calls[peerId].peerSerial;
+        ring.calleeId = peerId;
+        ring.calleeSerial = m_calls[id].peerSerial;
+        clearLink(id);
+        clearLink(peerId);
+    }
+
+    if (!visitor)
+    {
+        return;
+    }
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        visitor(expired[i]);
+    }
+}
+
+void PhoneService::collectCharges(TimePoint now, const ChargeVisitor &visitor)
+{
+    if (m_linkCount <= 0 || !visitor)
+    {
+        return; // разговоров нет — массив не обходим вовсе
+    }
+    // Как и в expireRinging: сперва обход и сдвиг отметок, потом визитор. Он снимает
+    // деньги и может оборвать звонок, а рвать связку во время обхода нельзя.
+    std::array<CallCharge, EXPIRE_BATCH> due{};
+    std::size_t count = 0;
+
+    for (int id = 0; id < MAX_PLAYERS && count < EXPIRE_BATCH; ++id)
+    {
+        const CallLink &link = m_calls[id];
+        if (link.state != CallState::Active || !link.initiator)
+        {
+            continue; // платит только набиравший, и только за состоявшийся разговор
+        }
+        if (!paired(id) || now - link.chargedAt < CALL_CHARGE_INTERVAL)
+        {
+            continue;
+        }
+        const int peerId = link.peerId;
+        CallCharge &charge = due[count++];
+        charge.payerId = id;
+        // Своя серия лежит у собеседника: каждая половина хранит серию ПРОТИВОПОЛОЖНОЙ.
+        charge.payerSerial = m_calls[peerId].peerSerial;
+        charge.peerId = peerId;
+        charge.peerSerial = link.peerSerial;
+        // Отметку двигаем СРАЗУ: даже если визитор оборвёт звонок, повторного
+        // списания за тот же интервал не будет.
+        m_calls[id].chargedAt = now;
+    }
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        visitor(due[i]);
+    }
 }
 
 // ------------------------------------------------------------------ заказы

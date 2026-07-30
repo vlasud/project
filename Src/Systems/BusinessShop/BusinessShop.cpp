@@ -54,6 +54,7 @@ void BusinessShop::show(IPlayer &player, int businessId)
 {
     const int playerId = player.getID();
     const std::vector<BusinessService::GoodDef> &goods = m_businessService.goods(m_type);
+    const std::vector<BusinessService::ServiceDef> &services = m_businessService.services(m_type);
 
     std::string body = "Товар\tЦена\tНаличие\tУ вас\n";
     for (const BusinessService::GoodDef &good : goods)
@@ -61,6 +62,13 @@ void BusinessShop::show(IPlayer &player, int businessId)
         body += fmt::format("{}\t{}\t{}\t{}\n", m_inventory.itemName(good.itemType), Money::text(good.price),
                             availabilityText(m_businessService.stockOf(businessId, good.itemType), good.stockCap),
                             m_inventory.count(playerId, good.itemType));
+    }
+    // Услуги — ХВОСТОМ списка (на этом держится разбор listItem). Склада у них нет,
+    // поэтому в колонке наличия у всех одно и то же.
+    for (const BusinessService::ServiceDef &service : services)
+    {
+        body += fmt::format("{}\t{}\tУслуга\t{}\n", service.name, Money::text(service.price),
+                            service.status ? service.status(playerId) : std::string("-"));
     }
     body.pop_back();
 
@@ -72,12 +80,20 @@ void BusinessShop::show(IPlayer &player, int businessId)
                              {
                                  return;
                              }
-                             if (listItem < 0 ||
-                                 listItem >= static_cast<int>(m_businessService.goods(m_type).size()))
+                             // Индекс пришёл от клиента — проверяем по ЖИВЫМ спискам.
+                             const std::size_t goodCount = m_businessService.goods(m_type).size();
+                             const std::size_t serviceCount = m_businessService.services(m_type).size();
+                             if (listItem < 0 || static_cast<std::size_t>(listItem) >= goodCount + serviceCount)
                              {
-                                 return; // индекс от клиента — проверяем по живому ассортименту
+                                 return;
                              }
-                             showGood(*buyer, businessId, static_cast<std::size_t>(listItem));
+                             const auto index = static_cast<std::size_t>(listItem);
+                             if (index < goodCount)
+                             {
+                                 showGood(*buyer, businessId, index);
+                                 return;
+                             }
+                             showService(*buyer, businessId, index - goodCount);
                          });
 }
 
@@ -148,6 +164,77 @@ void BusinessShop::showInfo(IPlayer &player, int businessId, std::size_t goodInd
                              if (visitor)
                              {
                                  showGood(*visitor, businessId, goodIndex);
+                             }
+                         });
+}
+
+void BusinessShop::showService(IPlayer &player, int businessId, std::size_t serviceIndex)
+{
+    const std::vector<BusinessService::ServiceDef> &services = m_businessService.services(m_type);
+    if (serviceIndex >= services.size())
+    {
+        return;
+    }
+    const int playerId = player.getID();
+    const BusinessService::ServiceDef &service = services[serviceIndex];
+
+    // ПОРЯДОК СТРОК = порядок case-веток обработчика (в LIST кликабельна каждая).
+    const std::string body = fmt::format("Купить — {}\nИнформация\n\nУ вас: {}", Money::text(service.price),
+                                         service.status ? service.status(playerId) : std::string("-"));
+
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_LIST, service.name, body, "Выбрать", "Назад"),
+        [this, playerId, businessId, serviceIndex](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *buyer = m_core.getPlayers().get(playerId);
+            if (!buyer)
+            {
+                return;
+            }
+            if (response != DialogResponse_Left)
+            {
+                show(*buyer, businessId); // «Назад» — к ассортименту
+                return;
+            }
+            // Список живой: пока висел диалог, услуг могло стать меньше.
+            const std::vector<BusinessService::ServiceDef> &current = m_businessService.services(m_type);
+            if (serviceIndex >= current.size())
+            {
+                return;
+            }
+            switch (listItem)
+            {
+            case 0:
+                // Витрина НЕ списывает деньги и не трогает склад: продажу целиком
+                // ведёт обработчик услуги (он же открывает свои диалоги).
+                current[serviceIndex].sell(*buyer, businessId);
+                break;
+            case 1:
+                showServiceInfo(*buyer, businessId, serviceIndex);
+                break;
+            default:
+                break; // справочные строки и пустая — без действия
+            }
+        });
+}
+
+void BusinessShop::showServiceInfo(IPlayer &player, int businessId, std::size_t serviceIndex)
+{
+    const std::vector<BusinessService::ServiceDef> &services = m_businessService.services(m_type);
+    if (serviceIndex >= services.size())
+    {
+        return;
+    }
+    const int playerId = player.getID();
+    const BusinessService::ServiceDef &service = services[serviceIndex];
+
+    m_dialogService.show(player, makeDialog(DialogStyle_MSGBOX, service.name, service.description, "Назад", ""),
+                         [this, playerId, businessId, serviceIndex](DialogResponse, int, StringView)
+                         {
+                             IPlayer *visitor = m_core.getPlayers().get(playerId);
+                             if (visitor)
+                             {
+                                 showService(*visitor, businessId, serviceIndex);
                              }
                          });
 }

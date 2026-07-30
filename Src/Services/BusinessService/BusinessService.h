@@ -82,6 +82,22 @@ class BusinessService final : public IService
         std::string popupName;   // короткая английская метка для попапа
     };
 
+    // УСЛУГА точки: продаётся механика, а не предмет. Склада у услуги нет
+    // (телефонный номер не кончается), поэтому она НЕ GoodDef. Деньги и доход
+    // проводит сам обработчик: продажа бывает отложенной (номер проверяется в БД) и
+    // может вообще не состояться — витрина об этом ничего знать не должна.
+    struct ServiceDef
+    {
+        std::string name;        // «Телефон», utf-8
+        std::int64_t price = 0;  // отображается в витрине; списывает обработчик
+        std::string description; // справка для витрины (utf-8)
+        std::string popupName;   // короткая английская метка попапа
+        // Что писать в колонке «У вас» (utf-8). Не задан — прочерк.
+        std::function<std::string(int playerId)> status;
+        // Клик по «Купить». Витрина деньги НЕ списывает и склад не трогает.
+        std::function<void(IPlayer &player, int businessId)> sell;
+    };
+
     // Меню бизнеса для ПОСЕТИТЕЛЯ: геймплей типа (у 24/7 — покупка товаров).
     // Зовётся из общего интерфейса «Бизнес», когда игрок внутри.
     using VisitorMenu = std::function<void(IPlayer &player, int businessId)>;
@@ -111,6 +127,12 @@ class BusinessService final : public IService
     // в диалогах и дев-меню.
     void registerType(Type type, std::string name, std::string popupName, std::vector<CatalogEntry> catalog,
                       std::vector<GoodDef> goods, VisitorMenu visitorMenu);
+    // Услугу добавляет система-владелец МЕХАНИКИ (телефон регистрирует себя сам),
+    // а не система типа бизнеса. Порядок относительно registerType не важен: список
+    // услуг живёт отдельно от регистрации типа и ею не затирается — порядок
+    // конструирования систем ничего не гарантирует.
+    void addService(Type type, ServiceDef service);
+    const std::vector<ServiceDef> &services(Type type) const;
     const std::string &typePopupName(Type type) const;
     const std::vector<GoodDef> &goods(Type type) const;
     bool typeRegistered(Type type) const;
@@ -224,6 +246,9 @@ class BusinessService final : public IService
         std::string popupName; // короткое английское, для экранных попапов
         std::vector<CatalogEntry> catalog;
         std::vector<GoodDef> goods;
+        // Услуги живут ВНЕ registerType: их кладут чужие системы, и регистрация
+        // типа (которая может прийти позже) не имеет права их потерять.
+        std::vector<ServiceDef> services;
         VisitorMenu visitorMenu;
     };
 

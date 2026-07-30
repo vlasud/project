@@ -23,6 +23,11 @@
 //
 // Товар продаётся СО СКЛАДА точки: каждая продажа списывает одну единицу, пустой
 // склад продавать отказывается. Пополняет склад владелец через «Заказать товар».
+//
+// УСЛУГИ точки (BusinessService::ServiceDef) идут в списке ПОСЛЕ товаров. Витрина о
+// них знает ровно одно: как показать карточку и кого позвать по «Купить». Деньги и
+// доход проводит сам обработчик услуги — продажа бывает отложенной (проверка в БД) и
+// может не состояться.
 class BusinessShop
 {
   public:
@@ -40,6 +45,11 @@ class BusinessShop
     // Покупка. По успеху ВОЗВРАЩАЕТ в карточку товара, а не закрывает диалог:
     // предметы стековые, и брать их пачкой — обычный сценарий.
     void buy(IPlayer &player, int businessId, std::size_t goodIndex);
+
+    // Карточка услуги и справка по ней — те же два шага, что у товара. Покупку
+    // ведёт обработчик услуги: витрина только зовёт его.
+    void showService(IPlayer &player, int businessId, std::size_t serviceIndex);
+    void showServiceInfo(IPlayer &player, int businessId, std::size_t serviceIndex);
 
     ICore &m_core;
     BusinessService &m_businessService;

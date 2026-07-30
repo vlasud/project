@@ -1,5 +1,7 @@
 #include "Services/Core/PlayerChatService/PlayerChatService.h"
 
+#include <utility>
+
 namespace
 {
 // Темп: burst BURST сообщений подряд, дальше одно на REFILL_INTERVAL.
@@ -79,6 +81,26 @@ PlayerChatService::Check PlayerChatService::tryChat(int playerId, StringView mes
     st.lastMessage.assign(message.data(), message.size());
     st.lastMessageAt = now;
     return {Block::None, 0};
+}
+
+void PlayerChatService::subscribeSpeech(SpeechObserver observer)
+{
+    if (observer)
+        m_speechObservers.push_back(std::move(observer));
+}
+
+bool PlayerChatService::notifySpeech(int playerId, StringView message) const
+{
+    if (!validPlayerId(playerId))
+        return false;
+    for (const SpeechObserver &observer : m_speechObservers)
+    {
+        // Первый забравший реплику останавливает обход: показать её дважды разными
+        // наблюдателями хуже, чем отдать одному.
+        if (observer(playerId, message))
+            return true;
+    }
+    return false;
 }
 
 void PlayerChatService::mute(int playerId, std::chrono::seconds duration)

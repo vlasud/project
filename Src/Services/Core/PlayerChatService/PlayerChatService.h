@@ -5,7 +5,9 @@
 #include "types.hpp"
 #include <array>
 #include <chrono>
+#include <functional>
 #include <string>
+#include <vector>
 
 // Сервис чата: мут и антиспам.
 //
@@ -38,6 +40,22 @@ class PlayerChatService final : public IService
     // запоминает текст). Вызывается чат-системой на каждое сообщение.
     Check tryChat(int playerId, StringView message, TimePoint now);
 
+    // --- наблюдатели реплики ---
+    // Реплика, ПРОШЕДШАЯ мут и антиспам, но ЕЩЁ НЕ разосланная. Кто и зачем слушает,
+    // сервису не важно: подписываются бизнес-системы (телефонный разговор и далее
+    // рация).
+    //
+    // Наблюдатель возвращает true, если ЗАБРАЛ реплику себе — тогда чат не делает
+    // свою рассылку вовсе (ни строки, ни анимации разговора), и показать её игрокам
+    // обязан сам наблюдатель. false — реплика обычная, чат обрабатывает её как всегда.
+    //
+    // message — срез клиентского буфера (cp1251), валиден только на время вызова:
+    // хранить его нельзя.
+    using SpeechObserver = std::function<bool(int playerId, StringView message)>;
+    void subscribeSpeech(SpeechObserver observer);
+    // true — реплику забрал наблюдатель. Обход прекращается на первом забравшем.
+    bool notifySpeech(int playerId, StringView message) const;
+
     // --- мут ---
     void mute(int playerId, std::chrono::seconds duration);
     void unmute(int playerId);
@@ -64,4 +82,5 @@ class PlayerChatService final : public IService
     void addStrike(State &st, TimePoint now);
 
     std::array<State, MAX_PLAYERS> m_state;
+    std::vector<SpeechObserver> m_speechObservers;
 };
