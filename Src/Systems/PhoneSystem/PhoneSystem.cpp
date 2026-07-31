@@ -161,29 +161,6 @@ std::int64_t parsePhoneInput(std::string_view text)
     return value;
 }
 
-// Разбор суммы пополнения. Тот же принцип, что у номера: длина проверяется ДО
-// арифметики, поэтому переполниться нечему. Диапазон проверяет вызывающий.
-//  >0 — сумма, -1 — пусто либо мусор.
-std::int64_t parseAmountInput(std::string_view text)
-{
-    const std::string_view digits = trimmed(text);
-    // Девять цифр с запасом перекрывают TOPUP_MAX и заведомо влезают в int64.
-    if (digits.empty() || digits.size() > 9)
-    {
-        return -1;
-    }
-    std::int64_t value = 0;
-    for (const char c : digits)
-    {
-        if (c < '0' || c > '9')
-        {
-            return -1;
-        }
-        value = value * 10 + (c - '0');
-    }
-    return value > 0 ? value : -1;
-}
-
 // Справка по услуге в витрине 24/7.
 const char *phoneShopDescription()
 {
@@ -444,11 +421,13 @@ void PhoneSystem::showCallMenu(IPlayer &player)
 void PhoneSystem::showDialNumberDialog(IPlayer &player)
 {
     const int playerId = player.getID();
-    m_dialogService.show(
+    // Числовой ввод — через обёртку сервиса: мусор и overflow она отсекает сама,
+    // повторно показывая тот же диалог. Диапазон проверяет dialNumber.
+    m_dialogService.showNumberInput(
         player,
         makeDialog(DialogStyle_INPUT, "Набор номера", "Введите номер телефона игрока, которому хотите позвонить",
                    "Позвонить", "Назад"),
-        [this, playerId](DialogResponse response, int, StringView text)
+        [this, playerId](DialogResponse response, std::int64_t number)
         {
             IPlayer *caller = m_core.getPlayers().get(playerId);
             if (!caller)
@@ -460,13 +439,7 @@ void PhoneSystem::showDialNumberDialog(IPlayer &player)
                 showCallMenu(*caller);
                 return;
             }
-            const std::int64_t parsed = parsePhoneInput(viewOf(text));
-            if (parsed <= 0)
-            {
-                caller->sendClientMessage(ERROR_COLOUR, u("Номер телефона — шесть цифр"));
-                return;
-            }
-            dialNumber(*caller, parsed);
+            dialNumber(*caller, number);
         });
 }
 
@@ -1230,19 +1203,15 @@ void PhoneSystem::showTopUpDialog(IPlayer &player, int businessId, const std::st
         body += "\n" + hint;
     }
 
-    m_dialogService.show(
+    // Числовой ввод — через обёртку сервиса: мусор и overflow она отсекает сама.
+    // Остаётся проверить только диапазон — про него обёртка не знает.
+    m_dialogService.showNumberInput(
         player, makeDialog(DialogStyle_INPUT, "Счёт телефона", body, "Пополнить", "Отмена"),
-        [this, playerId, businessId](DialogResponse response, int, StringView text)
+        [this, playerId, businessId](DialogResponse response, std::int64_t amount)
         {
             IPlayer *buyer = m_core.getPlayers().get(playerId);
             if (!buyer || response != DialogResponse_Left)
             {
-                return;
-            }
-            const std::int64_t amount = parseAmountInput(viewOf(text));
-            if (amount <= 0)
-            {
-                showTopUpDialog(*buyer, businessId, "Сумма — только цифры, без пробелов и знаков");
                 return;
             }
             if (amount < TOPUP_MIN || amount > TOPUP_MAX)
@@ -1329,6 +1298,10 @@ void PhoneSystem::showNumberDialog(IPlayer &player, int businessId, const std::s
         body += "\n" + hint;
     }
 
+    // ЕДИНСТВЕННЫЙ числовой ввод телефона МИМО showNumberInput, и намеренно: здесь
+    // ПУСТОЕ поле — осмысленный ответ «подбери номер сам». Обёртка же считает
+    // нераспарсенный ввод ошибкой и повторяет диалог, то есть случайный номер стал бы
+    // недостижим. Поэтому разбор свой, побайтовый (parsePhoneInput).
     m_dialogService.show(
         player, makeDialog(DialogStyle_INPUT, "Покупка телефона", body, "Купить", "Отмена"),
         [this, playerId, businessId](DialogResponse response, int, StringView text)
