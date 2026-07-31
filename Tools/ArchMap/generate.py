@@ -281,6 +281,82 @@ def attach_docs(modules):
     return docs
 
 
+def server_dir():
+    """Папка сервера лежит рядом с проектом (D:\\workspace\\Server), а не внутри него."""
+    for candidate in (os.path.join(ROOT, "Server"), os.path.join(os.path.dirname(ROOT), "Server")):
+        if os.path.isdir(candidate):
+            return candidate
+    return None
+
+
+def load_json(path):
+    try:
+        return json.loads(read(path))
+    except Exception as error:  # битый или недописанный файл не должен ронять сборку
+        print("не прочитан %s: %s" % (path, error))
+        return None
+
+
+def business_type_names():
+    """Порядок enum Type = число в businesses.json; человеческое имя — из registerType."""
+    header = os.path.join(SRC, "Services", "BusinessService", "BusinessService.h")
+    if not os.path.exists(header):
+        return []
+    block = re.search(r"enum class Type\s*\{(.+?)\}", read(header), re.S)
+    if not block:
+        return []
+    names = []
+    for line in block.group(1).split("\n"):
+        match = re.match(r"\s*(\w+)\s*,", line)
+        if match and match.group(1) != "Count":
+            names.append(match.group(1))
+
+    titles = {}
+    for dirpath, _dirnames, filenames in os.walk(os.path.join(SRC, "Systems")):
+        for filename in filenames:
+            if not filename.endswith(".cpp"):
+                continue
+            for enum_name, title in re.findall(r"registerType\(\s*[\w:]*::(\w+)\s*,\s*\"([^\"]+)\"",
+                                               read(os.path.join(dirpath, filename))):
+                titles[enum_name] = title
+    return [{"key": n, "title": titles.get(n, n)} for n in names]
+
+
+def collect_world():
+    """Точки мира для карты: дома и бизнесы — дев-контент из json сервера."""
+    world = {"houses": [], "businesses": [], "businessTypes": business_type_names(), "places": []}
+
+    catalog = os.path.join(SRC, "Services", "PlaceCatalogService", "PlaceCatalogService.cpp")
+    if os.path.exists(catalog):
+        for name, x, y in re.findall(
+                r"\{\"([^\"]+)\",\s*\{\s*(-?[\d.]+)f,\s*(-?[\d.]+)f", read(catalog)):
+            world["places"].append({"name": name, "x": float(x), "y": float(y)})
+
+    server = server_dir()
+    if not server:
+        return world
+
+    houses = load_json(os.path.join(server, "houses.json"))
+    for house in houses or []:
+        position = house.get("entrance") or []
+        if len(position) >= 2:
+            world["houses"].append({
+                "id": house.get("id"), "x": position[0], "y": position[1],
+                "price": house.get("price", 0), "parking": house.get("parkingCap", 0),
+            })
+
+    raw = load_json(os.path.join(server, "businesses.json")) or {}
+    for business in (raw.get("businesses") if isinstance(raw, dict) else raw) or []:
+        position = business.get("entrance") or []
+        if len(position) >= 2:
+            world["businesses"].append({
+                "id": business.get("id"), "x": position[0], "y": position[1],
+                "price": business.get("price", 0), "type": business.get("type", 0),
+                "balance": business.get("balance", 0),
+            })
+    return world
+
+
 def main():
     tables = collect_tables()
     known = {t["name"] for t in tables}
@@ -306,6 +382,7 @@ def main():
         ),
         "tables": tables,
         "docs": docs,
+        "world": collect_world(),
     }
 
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -330,6 +407,9 @@ def main():
              sum(len(m["commands"]) for m in modules.values()),
              sum(len(m["constants"]) for m in modules.values()),
              len(tables), len(docs)))
+    print("на карте: домов %d, бизнесов %d, ориентиров %d"
+          % (len(payload["world"]["houses"]), len(payload["world"]["businesses"]),
+             len(payload["world"]["places"])))
     print("записано: " + os.path.relpath(OUT, ROOT).replace("\\", "/"))
     return 0
 

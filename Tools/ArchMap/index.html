@@ -65,6 +65,18 @@ input.search:focus{outline:none;border-color:var(--core)}
 .legend{position:absolute;bottom:14px;left:14px;background:rgba(22,27,34,.94);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--dim)}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
 
+/* карта мира */
+#worldWrap{position:absolute;inset:0}
+#wcv{position:absolute;inset:0;width:100%;height:100%;cursor:grab}
+#wcv:active{cursor:grabbing}
+#tip{position:absolute;pointer-events:none;display:none;background:rgba(22,27,34,.97);border:1px solid var(--line);
+     border-radius:8px;padding:8px 11px;font-size:12px;max-width:280px;z-index:5}
+#tip b{display:block;margin-bottom:3px}
+#tip span{color:var(--dim)}
+.dimrow{display:none;margin-top:10px;font-size:12px;color:var(--dim)}
+.dimrow.on{display:block}
+.dimrow input{width:100%;margin-top:4px;accent-color:var(--core)}
+
 /* панель модуля */
 #panel{width:430px;flex:none;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:18px;display:none}
 #panel.on{display:block}
@@ -92,6 +104,7 @@ input.search:focus{outline:none;border-color:var(--core)}
   <nav>
     <button data-view="overview" class="on">Обзор</button>
     <button data-view="map">Карта связей</button>
+    <button data-view="world">Карта мира</button>
     <button data-view="modules">Модули</button>
     <button data-view="commands">Команды</button>
     <button data-view="settings">Настройки</button>
@@ -124,13 +137,37 @@ input.search:focus{outline:none;border-color:var(--core)}
     </div>
   </section>
 
+  <section class="view flat" id="v-world">
+    <div id="worldWrap">
+      <canvas id="wcv"></canvas>
+      <div class="overlay">
+        <div class="filters" id="worldFilters">
+          <button data-f="houses" class="on">дома</button>
+          <button data-f="businesses" class="on">бизнесы</button>
+          <button data-f="places" class="on">ориентиры</button>
+        </div>
+        <div class="filters" style="margin-top:8px">
+          <button id="wFit">вписать объекты</button>
+          <button id="wAll">весь штат</button>
+        </div>
+        <div class="dimrow" id="dimRow">
+          <span>затемнение фона</span>
+          <input type="range" id="wDim" min="0" max="90" step="5">
+        </div>
+        <div class="hint" id="worldStats" style="margin:10px 0 0"></div>
+      </div>
+      <div class="legend" id="worldLegend"></div>
+      <div id="tip"></div>
+    </div>
+  </section>
+
   <section class="view" id="v-modules"></section>
   <section class="view" id="v-commands"></section>
   <section class="view" id="v-settings"></section>
   <section class="view" id="v-data"></section>
 </main>
 
-<script src="data.js?v=20260731142303"></script>
+<script src="data.js?v=20260731151639"></script>
 <script>
 const A = window.ARCH;
 const MOD = {}; A.modules.forEach(m => MOD[m.name] = m);
@@ -148,6 +185,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   current = b.dataset.view;
   q('#v-' + current).classList.add('on');
   if (current === 'map') resizeCanvas();
+  if (current === 'world') resizeWorld();
 });
 
 /* --------------------------------------------------------------- обзор */
@@ -549,12 +587,267 @@ function resizeCanvas(){
   cv.height = r.height;
   draw();
 }
-window.onresize = () => { if (current === 'map') resizeCanvas(); };
+window.onresize = () => {
+  if (current === 'map') resizeCanvas();
+  if (current === 'world') resizeWorld();
+};
+
+/* ------------------------------------------------------------ карта мира */
+// Мир SA — квадрат -3000..3000 по X и Y. У игры Y растёт на север, у канваса вниз,
+// поэтому Y переворачиваем.
+const W = A.world || {houses:[], businesses:[], places:[], businessTypes:[]};
+const WORLD = 3000;
+const wcv = q('#wcv'), wctx = wcv.getContext('2d');
+let wview = {x:0, y:0, k:0.1}, wshow = {houses:true, businesses:true, places:true};
+let wdrag = null, whover = null;
+// Затемнение подложки. Живёт в localStorage: подобрал один раз — держится.
+let dim = 0.45;
+try { const saved = localStorage.getItem('archmap.dim'); if (saved !== null) dim = +saved; } catch (e) {}
+
+// Подпись районов — общеизвестная справка по игре, а не данные проекта, поэтому
+// живёт здесь, а не в выгрузке. Координаты приблизительные: это ориентиры для глаза.
+const REGIONS = [
+  ['ЛОС-САНТОС', 1600, -1600, 1], ['САН-ФИЕРРО', -2000, 500, 1], ['ЛАС-ВЕНТУРАС', 2200, 1600, 1],
+  ['Red County', 800, -300, 0], ['Flint County', -200, -1400, 0], ['Whetstone', -1600, -2200, 0],
+  ['Bone County', 400, 1200, 0], ['Tierra Robada', -1100, 1800, 0], ['Angel Pine', -2100, -2400, 0],
+  ['Palomino Creek', 2300, 100, 0], ['Blueberry', 200, -100, 0], ['Dillimore', 700, -700, 0],
+  ['Mount Chiliad', -2200, -1600, 0], ['Bayside', -2650, 2300, 0], ['El Quebrados', -1500, 2600, 0],
+  ['Fort Carson', -200, 1200, 0], ['Las Payasadas', -200, 2500, 0], ['Montgomery', 1300, 300, 0],
+];
+const TYPE_COLOURS = ['#f5a04c', '#4c8bf5', '#7ee787', '#d2a8ff'];
+
+// Подложка. Настоящей карты игры в репозитории нет и быть не должно (это ассет игры),
+// поэтому по умолчанию рисуем схему. Положите рядом map.jpg или map.png — приложение
+// подхватит её само и растянет на весь мир.
+let mapImg = null;
+(function loadBackdrop(names){
+  if (!names.length) return;
+  const img = new Image();
+  img.onload = () => {
+    mapImg = img;
+    q('#dimRow').classList.add('on'); // ползунок нужен только когда подложка есть
+    drawWorld();
+  };
+  img.onerror = () => loadBackdrop(names.slice(1));
+  img.src = names[0];
+})(['map.jpg', 'map.png', 'map.webp']);
+
+function worldItems(){
+  const out = [];
+  const typeTitle = i => (W.businessTypes[i] || {}).title || ('тип ' + i);
+  if (wshow.houses) W.houses.forEach(h => out.push({
+    kind:'house', x:h.x, y:h.y, colour:'#3fb950',
+    title:'Дом #' + h.id,
+    lines:['Цена: ' + fmtMoney(h.price), 'Парковка: ' + h.parking + ' машин']}));
+  if (wshow.businesses) W.businesses.forEach(b => out.push({
+    kind:'biz', x:b.x, y:b.y, colour:TYPE_COLOURS[b.type % TYPE_COLOURS.length],
+    title:typeTitle(b.type) + ' #' + b.id,
+    lines:['Госцена: ' + fmtMoney(b.price), 'В копилке: ' + fmtMoney(b.balance)]}));
+  if (wshow.places) W.places.forEach(p => out.push({
+    kind:'place', x:p.x, y:p.y, colour:'#8b97a8', title:p.name, lines:[]}));
+  return out;
+}
+const fmtMoney = v => (v || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.') + '$';
+const wx = x => x * wview.k + wview.x;
+const wy = y => -y * wview.k + wview.y;   // Y вниз: экранная ось против игровой
+
+// Подпись с тёмной обводкой. Тонкий, но решающий приём: на светлой подложке любой
+// текст без канта сливается, а подбирать цвет под каждый участок карты невозможно.
+function label(text, x, y, colour, size, align, weight){
+  wctx.font = (weight || '') + size + 'px "Segoe UI",sans-serif';
+  wctx.textAlign = align || 'center';
+  wctx.lineJoin = 'round';
+  wctx.lineWidth = Math.max(3, size / 3.5);
+  wctx.strokeStyle = 'rgba(0,0,0,.8)';
+  wctx.strokeText(text, x, y);
+  wctx.fillStyle = colour;
+  wctx.fillText(text, x, y);
+}
+
+function drawWorld(){
+  const dpr = window.devicePixelRatio || 1;
+  wctx.setTransform(dpr,0,0,dpr,0,0);
+  wctx.clearRect(0,0,wcv.width/dpr,wcv.height/dpr);
+
+  // Подложка либо схема.
+  if (mapImg){
+    const px = wx(-WORLD), py = wy(WORLD), size = 2*WORLD*wview.k;
+    wctx.drawImage(mapImg, px, py, size, size);
+    // Вуаль поверх подложки: настоящая карта светлая, и без затемнения метки с
+    // подписями на ней тонут. Силу крутит ползунок — «слишком ярко» у всех своё.
+    if (dim > 0){
+      wctx.fillStyle = 'rgba(8,11,15,' + dim + ')';
+      wctx.fillRect(px, py, size, size);
+    }
+  } else {
+    wctx.fillStyle = '#121821';
+    wctx.fillRect(wx(-WORLD), wy(WORLD), 2*WORLD*wview.k, 2*WORLD*wview.k);
+    wctx.strokeStyle = '#1c2531'; wctx.lineWidth = 1;
+    for (let g = -WORLD; g <= WORLD; g += 500){
+      wctx.beginPath(); wctx.moveTo(wx(g), wy(WORLD)); wctx.lineTo(wx(g), wy(-WORLD)); wctx.stroke();
+      wctx.beginPath(); wctx.moveTo(wx(-WORLD), wy(g)); wctx.lineTo(wx(WORLD), wy(g)); wctx.stroke();
+    }
+    wctx.strokeStyle = '#2b3644';
+    wctx.strokeRect(wx(-WORLD), wy(WORLD), 2*WORLD*wview.k, 2*WORLD*wview.k);
+    REGIONS.forEach(([name, x, y, big]) =>
+      label(name, wx(x), wy(y), big ? 'rgba(160,173,190,.75)' : 'rgba(110,123,142,.7)',
+            big ? 15 : 11, 'center', big ? '600 ' : ''));
+  }
+
+  // Метки рисуем в ЭКРАННОМ размере: при любом зуме они одинаково читаемы.
+  const items = worldItems();
+  items.forEach(it => {
+    const x = wx(it.x), y = wy(it.y);
+    if (x < -40 || y < -40 || x > wcv.width / dpr || y > wcv.height / dpr) return;
+    const on = whover === it;
+    if (it.kind === 'place'){
+      // Тёмный кант вокруг точки — иначе серое на светлой карте не видно.
+      wctx.beginPath(); wctx.arc(x, y, on ? 5 : 3.5, 0, 7);
+      wctx.fillStyle = on ? '#ffffff' : '#c3ccd8'; wctx.fill();
+      wctx.strokeStyle = 'rgba(0,0,0,.75)'; wctx.lineWidth = 1.5; wctx.stroke();
+      if (wview.k > 0.12 || on){
+        label(it.title, x + 9, y + 4, on ? '#ffffff' : '#dbe3ec', 11, 'left');
+      }
+      return;
+    }
+    drawPin(x, y, it, on);
+  });
+
+  q('#worldStats').innerHTML =
+    'домов: <b style="color:#3fb950">' + W.houses.length + '</b> · ' +
+    'бизнесов: <b style="color:#f5a04c">' + W.businesses.length + '</b>' +
+    (mapImg ? '' : '<br>подложка схематичная: положите map.jpg рядом с index.html');
+}
+
+// Иконки: домик — коробка с двускатной крышей, бизнес — витрина с маркизой.
+function drawPin(x, y, it, on){
+  const s = on ? 1.25 : 1, w = 13 * s, h = 11 * s;
+  wctx.save();
+  wctx.translate(x, y - h);
+  wctx.shadowColor = 'rgba(0,0,0,.75)'; wctx.shadowBlur = 5;
+  wctx.fillStyle = it.colour;
+  wctx.strokeStyle = 'rgba(0,0,0,.55)'; wctx.lineWidth = 1;
+
+  if (it.kind === 'house'){
+    wctx.beginPath();                       // крыша
+    wctx.moveTo(-w/2 - 1.5, -1); wctx.lineTo(0, -h*0.75); wctx.lineTo(w/2 + 1.5, -1);
+    wctx.closePath(); wctx.fill(); wctx.stroke();
+    wctx.fillRect(-w/2 + 1.5, -1, w - 3, h*0.62);   // стены
+    wctx.strokeRect(-w/2 + 1.5, -1, w - 3, h*0.62);
+    wctx.fillStyle = 'rgba(0,0,0,.5)';              // дверь
+    wctx.fillRect(-2 * s, h*0.16, 4 * s, h*0.45);
+  } else {
+    wctx.fillRect(-w/2 + 1, -1, w - 2, h*0.62);     // корпус
+    wctx.strokeRect(-w/2 + 1, -1, w - 2, h*0.62);
+    wctx.beginPath();                                // маркиза
+    wctx.moveTo(-w/2 - 1.5, -1); wctx.lineTo(-w/2 + 2, -h*0.62); wctx.lineTo(w/2 - 2, -h*0.62);
+    wctx.lineTo(w/2 + 1.5, -1); wctx.closePath(); wctx.fill(); wctx.stroke();
+    wctx.fillStyle = 'rgba(0,0,0,.5)';               // витрина
+    wctx.fillRect(-w/2 + 3, h*0.1, w - 6, h*0.4);
+  }
+  wctx.restore();
+
+  wctx.shadowBlur = 0;
+  wctx.fillStyle = it.colour;                        // острие метки
+  wctx.beginPath(); wctx.moveTo(x, y); wctx.lineTo(x - 3*s, y - 5*s); wctx.lineTo(x + 3*s, y - 5*s);
+  wctx.closePath(); wctx.fill();
+}
+
+function worldAt(px, py){
+  let best = null, bd = 22 * 22;
+  worldItems().forEach(it => {
+    const d = (wx(it.x) - px) ** 2 + (wy(it.y) - py - 8) ** 2;
+    if (d < bd){ bd = d; best = it; }
+  });
+  return best;
+}
+
+function fitWorld(objectsOnly){
+  const items = objectsOnly ? worldItems().filter(i => i.kind !== 'place') : [];
+  const r = q('#worldWrap').getBoundingClientRect();
+  if (!items.length){
+    wview.k = Math.min(r.width, r.height) / (2 * WORLD) * 0.92;
+    wview.x = r.width/2; wview.y = r.height/2;
+  } else {
+    const xs = items.map(i => i.x), ys = items.map(i => i.y);
+    const pad = 260;
+    const w = Math.max(...xs) - Math.min(...xs) + pad * 2, h = Math.max(...ys) - Math.min(...ys) + pad * 2;
+    wview.k = Math.min(r.width / w, r.height / h, 2.2);
+    wview.x = r.width/2 - (Math.min(...xs) + (Math.max(...xs) - Math.min(...xs))/2) * wview.k;
+    wview.y = r.height/2 + (Math.min(...ys) + (Math.max(...ys) - Math.min(...ys))/2) * wview.k;
+  }
+  drawWorld();
+}
+
+wcv.onmousedown = e => wdrag = {x:e.clientX, y:e.clientY, vx:wview.x, vy:wview.y};
+window.addEventListener('mouseup', () => wdrag = null);
+wcv.onmousemove = e => {
+  const r = wcv.getBoundingClientRect();
+  if (wdrag){
+    wview.x = wdrag.vx + (e.clientX - wdrag.x); wview.y = wdrag.vy + (e.clientY - wdrag.y);
+    drawWorld(); return;
+  }
+  const it = worldAt(e.clientX - r.left, e.clientY - r.top);
+  const tip = q('#tip');
+  if (it){
+    tip.style.display = 'block';
+    tip.style.left = (e.clientX - r.left + 16) + 'px';
+    tip.style.top = (e.clientY - r.top + 12) + 'px';
+    tip.innerHTML = '<b>' + esc(it.title) + '</b>' +
+      it.lines.map(l => '<span>' + esc(l) + '</span><br>').join('') +
+      '<span style="color:var(--dim2)">x ' + it.x.toFixed(1) + ' · y ' + it.y.toFixed(1) + '</span>';
+  } else tip.style.display = 'none';
+  if (it !== whover){ whover = it; drawWorld(); }
+};
+wcv.onmouseleave = () => { q('#tip').style.display = 'none'; whover = null; drawWorld(); };
+wcv.onwheel = e => {
+  e.preventDefault();
+  const r = wcv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const k = Math.min(6, Math.max(0.02, wview.k * (e.deltaY < 0 ? 1.15 : 0.87)));
+  wview.x = mx - (mx - wview.x) * k / wview.k; wview.y = my - (my - wview.y) * k / wview.k;
+  wview.k = k; drawWorld();
+};
+q('#worldFilters').onclick = e => {
+  if (e.target.tagName !== 'BUTTON') return;
+  const f = e.target.dataset.f;
+  wshow[f] = !wshow[f];
+  e.target.classList.toggle('on', wshow[f]);
+  drawWorld();
+};
+q('#wFit').onclick = () => fitWorld(true);
+q('#wAll').onclick = () => fitWorld(false);
+q('#wDim').value = Math.round(dim * 100);
+q('#wDim').oninput = e => {
+  dim = +e.target.value / 100;
+  try { localStorage.setItem('archmap.dim', dim); } catch (err) {}
+  drawWorld();
+};
+
+q('#worldLegend').innerHTML =
+  '<div><i style="background:#3fb950"></i>дом</div>' +
+  W.businessTypes.map((t, i) => '<div><i style="background:' + TYPE_COLOURS[i % TYPE_COLOURS.length] +
+    '"></i>' + esc(t.title) + '</div>').join('') +
+  '<div><i style="background:#8b97a8"></i>ориентир</div>';
+
+let worldFitted = false;
+function resizeWorld(){
+  const dpr = window.devicePixelRatio || 1;
+  const r = q('#worldWrap').getBoundingClientRect();
+  if (!r.width || !r.height) return;   // раздел ещё скрыт — размеров нет, вписывать не во что
+  wcv.width = r.width * dpr; wcv.height = r.height * dpr;
+  if (!worldFitted){
+    worldFitted = true;
+    fitWorld(true);   // стартуем на объектах: весь штат почти пуст, смотреть там нечего
+    return;
+  }
+  drawWorld();
+}
 
 /* --------------------------------------------------------------- запуск */
 overview(); modules(); commands(); settings(); dataView();
 cv.width = window.innerWidth; cv.height = window.innerHeight - 50;
 buildGraph();
+// Карту мира вписываем при первом её показе: пока раздел скрыт, размеров у него нет.
 </script>
 </body>
 </html>
