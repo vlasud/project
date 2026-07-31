@@ -58,6 +58,8 @@ class PhoneService final : public IService
     // ЗВОНЯЩИЙ — иначе входящим звонком можно было бы обнулить чужой счёт.
     static constexpr std::int64_t CALL_COST = 3;
     static constexpr std::chrono::seconds CALL_CHARGE_INTERVAL{5};
+    // Одно отправленное SMS. Списывается с отправителя и только по факту доставки.
+    static constexpr std::int64_t SMS_COST = 5;
 
     enum class CallState
     {

@@ -73,6 +73,7 @@ class PhoneSystem : public BaseSystem
     void onAcceptJobCommand(IPlayer &worker, int orderNumber);
     void onPickupCommand(IPlayer &player);
     void onHangupCommand(IPlayer &player);
+    void onSmsCommand(IPlayer &sender, StringView numberArg, StringView text);
 
     // --- вызовы служб ---
     void placeServiceCall(IPlayer &player, PhoneService::Service service);

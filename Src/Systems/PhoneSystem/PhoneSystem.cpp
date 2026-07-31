@@ -87,6 +87,8 @@ constexpr std::size_t PHONE_LINE_SIZE = 128 + 1;
 // Реплика в трубке длиннее чата: строка несёт ещё и метку с ником и id
 // («[Телефон] текст : Ник[id]»), поэтому текст режется сильнее.
 constexpr std::size_t PHONE_MAX_TEXT = 85;
+// То же для SMS: метка короче на два байта — «[SMS] текст : Ник[id]».
+constexpr std::size_t SMS_MAX_TEXT = 89;
 
 std::string safeName(IPlayer &player)
 {
@@ -347,6 +349,17 @@ PhoneSystem::PhoneSystem(ICore &core, const ServiceRegister &serviceRegister)
             onHangupCommand(player);
         },
         {}, "положить трубку: сбросить или завершить звонок", PlayerCommandService::HelpCategory::Misc);
+
+    // Номер параметром-строкой, а не Int: разбираем своим побайтовым парсером, тем
+    // же, что и на наборе. Текст — последний параметр, поэтому забирает весь хвост.
+    commands.add(
+        "sms", {{PlayerCommandService::Param::String, "номер телефона"},
+                {PlayerCommandService::Param::String, "сообщение"}},
+        [this](IPlayer &player, const PlayerCommandService::CommandArgs &args)
+        {
+            onSmsCommand(player, args.getString(0), args.getString(1));
+        },
+        {}, "отправить SMS на номер", PlayerCommandService::HelpCategory::Misc);
 
     commands.add(
         "acceptjob", {{PlayerCommandService::Param::Int, "номер вызова"}},
@@ -925,6 +938,78 @@ void PhoneSystem::onHangupCommand(IPlayer &player)
     default:
         break;
     }
+}
+
+void PhoneSystem::onSmsCommand(IPlayer &sender, StringView numberArg, StringView text)
+{
+    const int senderId = sender.getID();
+    if (!requirePhone(sender))
+    {
+        return;
+    }
+    const std::int64_t phone = parsePhoneInput(viewOf(numberArg));
+    if (phone <= 0 || phone < PhoneService::PHONE_MIN || phone > PhoneService::PHONE_MAX)
+    {
+        sender.sendClientMessage(ERROR_COLOUR, u("Номер телефона — шесть цифр: /sms 123456 текст"));
+        return;
+    }
+    if (phone == m_phoneService.phoneOf(senderId))
+    {
+        sender.sendClientMessage(ERROR_COLOUR, u("Это ваш собственный номер"));
+        return;
+    }
+    // Пробелы клиент отдаёт как есть: сообщение из одних пробелов — пустое.
+    if (trimmed(viewOf(text)).empty())
+    {
+        sender.sendClientMessage(ERROR_COLOUR, u("Пустое сообщение отправить нельзя"));
+        return;
+    }
+    if (m_phoneService.balanceOf(senderId) < PhoneService::SMS_COST)
+    {
+        sender.sendClientMessage(ERROR_COLOUR,
+                                 u(fmt::format("На счету телефона нет {} на SMS",
+                                               Money::text(PhoneService::SMS_COST))));
+        sender.sendClientMessage(ERROR_COLOUR, u("Пополнить счёт можно в магазине 24/7"));
+        return;
+    }
+
+    const int targetId = m_phoneService.playerByPhone(phone);
+    IPlayer *target = targetId >= 0 ? m_core.getPlayers().get(targetId) : nullptr;
+    const PlayerSessionService::Session *targetSession =
+        targetId >= 0 ? m_sessionService.get(targetId) : nullptr;
+    if (!target || !targetSession)
+    {
+        // Тот же текст, что и на наборе: иначе перебором номеров сканируется база.
+        sender.sendClientMessage(ERROR_COLOUR, u("Абонент вне зоны действия сети"));
+        return;
+    }
+
+    // Деньги снимаем ТОЛЬКО когда доставка уже гарантирована: адресат найден и жив.
+    if (!m_phoneService.takeBalance(senderId, PhoneService::SMS_COST))
+    {
+        sender.sendClientMessage(ERROR_COLOUR, u("На счету телефона не хватило денег на SMS"));
+        return;
+    }
+
+    if (text.size() > SMS_MAX_TEXT)
+    {
+        text.remove_suffix(text.size() - SMS_MAX_TEXT);
+    }
+    // Строка целиком в cp1251: текст и ник — клиентские байты. Текст АРГУМЕНТ формата.
+    char buffer[PHONE_LINE_SIZE] = {0};
+    const auto formatted = fmt::format_to_n(buffer, PHONE_LINE_SIZE - 1, "[SMS] {} : {}[{}]", text, sender.getName(),
+                                            senderId);
+    const std::size_t lineSize = formatted.size < PHONE_LINE_SIZE - 1 ? formatted.size : PHONE_LINE_SIZE - 1;
+    Encoding::neutralizeLine(buffer, lineSize);
+    target->sendClientMessage(PHONE_LINE_COLOUR, StringView(buffer, lineSize));
+
+    const std::int64_t left = m_phoneService.balanceOf(senderId);
+    if (const PlayerSessionService::Session *session = m_sessionService.get(senderId))
+    {
+        persistBalance(session->accountId, left);
+    }
+    sender.sendClientMessage(INFO_COLOUR, u(fmt::format("SMS отправлено на номер {}. Списано {}, на счету {}", phone,
+                                                        Money::text(PhoneService::SMS_COST), Money::text(left))));
 }
 
 void PhoneSystem::notifyPeer(int peerId, std::uint32_t peerSerial, const std::string &message)
