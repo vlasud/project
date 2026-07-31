@@ -75,11 +75,21 @@ class BusinessService final : public IService
     // меню владельца (инвентаризация, заказ), и вторая копия разъехалась бы.
     struct GoodDef
     {
+        // Для обычного товара — тип предмета из реестра вещей. Для товара БЕЗ
+        // ПРЕДМЕТА (телефон) предмета за этим числом нет: оно работает только как
+        // КЛЮЧ СКЛАДА точки, и такой товар обязан задать своё name.
         int itemType;
         std::int64_t price;
         int stockCap;            // максимум этого товара на складе одной точки
         std::string description; // справка для витрины (utf-8)
         std::string popupName;   // короткая английская метка для попапа
+        // Имя товара БЕЗ предмета (utf-8). Пусто — имя берётся из реестра вещей.
+        std::string name;
+        // Продажа товара БЕЗ предмета: витрина проверяет наличие на складе и отдаёт
+        // управление сюда — деньги, склад и доход проводит сам обработчик, потому что
+        // такая продажа бывает отложенной (телефон занимает номер в БД). Пусто —
+        // обычный товар, витрина продаёт его сама.
+        std::function<void(IPlayer &player, int businessId)> sell;
     };
 
     // УСЛУГА точки: продаётся механика, а не предмет. Склада у услуги нет
@@ -133,6 +143,10 @@ class BusinessService final : public IService
     // конструирования систем ничего не гарантирует.
     void addService(Type type, ServiceDef service);
     const std::vector<ServiceDef> &services(Type type) const;
+    // Дописать товар в ассортимент типа ИЗВНЕ (система-владелец механики регистрирует
+    // свой товар сама, как телефон в 24/7). Порядок относительно registerType не
+    // важен: тот дописывает свои товары, а не затирает уже добавленные.
+    void addGood(Type type, GoodDef good);
     const std::string &typePopupName(Type type) const;
     const std::vector<GoodDef> &goods(Type type) const;
     bool typeRegistered(Type type) const;
@@ -267,3 +281,12 @@ class BusinessService final : public IService
     int stockCapOf(int businessId, int itemType) const;
     std::vector<OwnerChangedObserver> m_ownerChangedObservers;
 };
+
+// Имя товара для UI. У товара БЕЗ предмета оно своё, у обычного берётся из реестра
+// вещей. Правило одно на весь проект (витрина и меню владельца), поэтому живёт рядом
+// с самим GoodDef, а не копией в каждом файле. Реестр вещей сюда не тянем: сервис
+// бизнеса про него не знает, имя предмета передаёт вызывающий.
+inline const std::string &goodDisplayName(const BusinessService::GoodDef &good, const std::string &itemName)
+{
+    return good.name.empty() ? itemName : good.name;
+}

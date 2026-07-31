@@ -734,7 +734,7 @@ void BusinessSystem::showDevStock(IPlayer &player, int businessId)
     std::string body = "Товар\tНа складе\tЦена\n";
     for (const BusinessService::GoodDef &good : goods)
     {
-        body += fmt::format("{}\t{}/{}\t{}\n", m_inventoryService.itemName(good.itemType),
+        body += fmt::format("{}\t{}/{}\t{}\n", goodDisplayName(good, m_inventoryService.itemName(good.itemType)),
                             m_businessService.stockOf(businessId, good.itemType), good.stockCap,
                             Money::text(good.price));
     }
@@ -788,14 +788,14 @@ void BusinessSystem::showDevStockAmount(IPlayer &player, int businessId, std::si
     {
         player.sendClientMessage(DEV_COLOUR,
                                  u(fmt::format("Склад по «{}» полон — сперва очистите",
-                                               m_inventoryService.itemName(good.itemType))));
+                                               goodDisplayName(good, m_inventoryService.itemName(good.itemType)))));
         showDevStock(player, businessId);
         return;
     }
 
     m_dialogService.showNumberInput(
         player,
-        makeDialog(DialogStyle_INPUT, m_inventoryService.itemName(good.itemType),
+        makeDialog(DialogStyle_INPUT, goodDisplayName(good, m_inventoryService.itemName(good.itemType)),
                    fmt::format("Бизнес #{}\nНа складе: {}/{}\nМожно выдать: {}\n\nСколько выдать? Товар ложится на "
                                "склад точки сразу и бесплатно.",
                                businessId, m_businessService.stockOf(businessId, good.itemType), good.stockCap, room),
@@ -834,7 +834,9 @@ void BusinessSystem::showDevStockAmount(IPlayer &player, int businessId, std::si
             const int added = m_businessService.addStock(businessId, itemType, static_cast<int>(value));
             dev->sendClientMessage(DEV_COLOUR,
                                    u(fmt::format("Бизнес #{}: выдано {} x{}, на складе {}/{}", businessId,
-                                                 m_inventoryService.itemName(itemType), added,
+                                                 goodDisplayName(goods[goodIndex],
+                                                                 m_inventoryService.itemName(itemType)),
+                                                 added,
                                                  m_businessService.stockOf(businessId, itemType),
                                                  goods[goodIndex].stockCap)));
             showDevStock(*dev, businessId);
@@ -855,7 +857,7 @@ void BusinessSystem::showDevStockClear(IPlayer &player, int businessId)
                                    m_businessService.typeName(business->type));
     for (const BusinessService::GoodDef &good : m_businessService.goods(business->type))
     {
-        body += fmt::format("- {}: {}\n", m_inventoryService.itemName(good.itemType),
+        body += fmt::format("- {}: {}\n", goodDisplayName(good, m_inventoryService.itemName(good.itemType)),
                             m_businessService.stockOf(businessId, good.itemType));
     }
     body += "\nЭто товар, за который владелец заплатил. Возврата не будет.";
@@ -1776,7 +1778,7 @@ void BusinessSystem::showInventory(IPlayer &player, int businessId)
     std::string body = "Товар\tНа складе\n";
     for (const BusinessService::GoodDef &good : m_businessService.goods(business->type))
     {
-        body += fmt::format("{}\t{}/{}\n", m_inventoryService.itemName(good.itemType),
+        body += fmt::format("{}\t{}/{}\n", goodDisplayName(good, m_inventoryService.itemName(good.itemType)),
                             m_businessService.stockOf(businessId, good.itemType), good.stockCap);
     }
     body.pop_back();
@@ -1866,7 +1868,7 @@ void BusinessSystem::showOrderPicker(IPlayer &player, int businessId)
     for (const BusinessService::GoodDef &good : m_businessService.goods(business->type))
     {
         const auto ordered = draft.find(good.itemType);
-        body += fmt::format("{}\t{}/{}\t{}\n", m_inventoryService.itemName(good.itemType),
+        body += fmt::format("{}\t{}/{}\t{}\n", goodDisplayName(good, m_inventoryService.itemName(good.itemType)),
                             m_businessService.stockOf(businessId, good.itemType), good.stockCap,
                             ordered == draft.end() ? 0 : ordered->second);
     }
@@ -1916,14 +1918,14 @@ void BusinessSystem::showOrderAmountInput(IPlayer &player, int businessId, std::
     if (room <= 0)
     {
         player.sendClientMessage(ERROR_COLOUR,
-                                 u(fmt::format("Склад по «{}» полон", m_inventoryService.itemName(good.itemType))));
+                                 u(fmt::format("Склад по «{}» полон", goodDisplayName(good, m_inventoryService.itemName(good.itemType)))));
         showOrderPicker(player, businessId);
         return;
     }
 
     m_dialogService.showNumberInput(
         player,
-        makeDialog(DialogStyle_INPUT, m_inventoryService.itemName(good.itemType),
+        makeDialog(DialogStyle_INPUT, goodDisplayName(good, m_inventoryService.itemName(good.itemType)),
                    fmt::format("На складе: {}/{}\nМожно дозаказать: {}\nЦена закупки: {} за штуку\n\n"
                                "Сколько заказать? 0 — убрать из заказа.",
                                m_businessService.stockOf(businessId, good.itemType), good.stockCap, room,
@@ -1999,7 +2001,7 @@ void BusinessSystem::showOrderConfirm(IPlayer &player, int businessId)
         const std::int64_t unit = good.price * ORDER_PRICE_PERCENT / 100;
         const std::int64_t cost = unit * ordered->second;
         total += cost;
-        body += fmt::format("{} — {} шт. по {} = {}\n", m_inventoryService.itemName(good.itemType), ordered->second,
+        body += fmt::format("{} — {} шт. по {} = {}\n", goodDisplayName(good, m_inventoryService.itemName(good.itemType)), ordered->second,
                             Money::text(unit), Money::text(cost));
     }
     body += fmt::format("\nИТОГО закупка: {}\n\nЗакупка стоит {}% от цены продажи.\nДальше — премия развозчикам.",

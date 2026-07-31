@@ -44,9 +44,28 @@ void BusinessService::registerType(Type type, std::string name, std::string popu
     def.name = std::move(name);
     def.popupName = std::move(popupName);
     def.catalog = std::move(catalog);
-    def.goods = std::move(goods);
     def.visitorMenu = std::move(visitorMenu);
-    // def.services НЕ трогаем: услугу могли добавить до регистрации типа.
+    // Товары типа идут ПЕРВЫМИ, уже добавленные извне (addGood) — следом: порядок
+    // детерминирован независимо от того, чей конструктор отработал раньше.
+    // def.goods/def.services НЕ затираем: их могли дописать до регистрации типа.
+    std::vector<GoodDef> merged = std::move(goods);
+    merged.insert(merged.end(), std::make_move_iterator(def.goods.begin()),
+                  std::make_move_iterator(def.goods.end()));
+    def.goods = std::move(merged);
+}
+
+void BusinessService::addGood(Type type, GoodDef good)
+{
+    // Товар БЕЗ предмета обязан принести и своё имя, и свой обработчик продажи:
+    // витрина не сможет ни назвать его, ни продать.
+    const bool itemless = !good.name.empty() || static_cast<bool>(good.sell);
+    if (!validType(type) || good.price < 0 || good.stockCap <= 0 || good.popupName.empty() ||
+        (itemless && (good.name.empty() || !good.sell)))
+    {
+        LogManager::log(Error, "BusinessService: товар '" + good.name + "' зарегистрирован неполно, пропущен");
+        return;
+    }
+    m_types[static_cast<std::size_t>(type)].goods.push_back(std::move(good));
 }
 
 void BusinessService::addService(Type type, ServiceDef service)

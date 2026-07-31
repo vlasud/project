@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS `player` (
     `skin`          INT             NOT NULL DEFAULT 78,
     `phone`         BIGINT          NULL DEFAULT NULL,
     `phone_balance` BIGINT          NOT NULL DEFAULT 0,
+    `last_seen`     DATETIME        NULL DEFAULT NULL,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_name` (`name`),
     UNIQUE KEY `uk_player_phone` (`phone`)
@@ -233,6 +234,26 @@ SET @has_phone_balance := (SELECT COUNT(*) FROM information_schema.COLUMNS
 SET @sql := IF(@has_phone_balance > 0, 'DO 0',
                'ALTER TABLE `player` ADD COLUMN `phone_balance` BIGINT NOT NULL DEFAULT 0');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @has_last_seen := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'player'
+                         AND COLUMN_NAME = 'last_seen');
+SET @sql := IF(@has_last_seen > 0, 'DO 0',
+               'ALTER TABLE `player` ADD COLUMN `last_seen` DATETIME NULL DEFAULT NULL');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- Друзья (Docs/Friends.md). Дружба ВЗАИМНАЯ и хранится ДВУМЯ строками (a->b и b->a):
+-- так список друзей аккаунта — это обычный SELECT по account_id без OR и UNION, а
+-- удаление снимает обе строки одним DELETE. FK на player с каскадом: удалённый
+-- аккаунт не оставляет висячих дружб.
+CREATE TABLE IF NOT EXISTS `player_friend` (
+    `account_id` BIGINT   NOT NULL,
+    `friend_id`  BIGINT   NOT NULL,
+    `since`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`account_id`, `friend_id`),
+    CONSTRAINT `fk_friend_account` FOREIGN KEY (`account_id`) REFERENCES `player` (`id`) ON DELETE CASCADE,
+    CONSTRAINT `fk_friend_friend` FOREIGN KEY (`friend_id`) REFERENCES `player` (`id`) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 -- Кошелёк заработка врача (работа-врач, Docs/MedicJob.md): write-through, забирается
 -- на пикапе больницы. Как bus_wallet/port_wallet/hauler_wallet.

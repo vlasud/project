@@ -17,6 +17,7 @@
 #include "Services/FamilyService/FamilyService.h"
 #include "Services/HouseService/HouseService.h"
 #include "Services/ParkedVehicleService/ParkedVehicleService.h"
+#include "Services/FriendService/FriendService.h"
 #include "Services/InventoryService/InventoryService.h"
 #include "Services/JobDismissService/JobDismissService.h"
 #include "Services/JobWalletService/JobWalletService.h"
@@ -230,6 +231,9 @@ void ServiceRegister::registerServices()
     // Телефон: номера игроков и вызовы служб (/c, /acceptjob). Без зависимостей;
     // службы регистрируют себя сами в конструкторах своих систем.
     registerService<PhoneService>();
+    // Друзья: список друзей игроков онлайн и заявки. Без зависимостей — чистый
+    // контейнер состояния, БД и сообщения на приводе FriendSystem.
+    registerService<FriendService>();
     // Работа-таксист: фаза смены, 7 точек спавна, очередь и состояние поездки
     // (пассажир, назначение, депозит). Без зависимостей; машины/чекпоинты/деньги —
     // на приводе TaxiJobSystem.

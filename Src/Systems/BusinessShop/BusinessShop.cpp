@@ -56,19 +56,17 @@ void BusinessShop::show(IPlayer &player, int businessId)
     const std::vector<BusinessService::GoodDef> &goods = m_businessService.goods(m_type);
     const std::vector<BusinessService::ServiceDef> &services = m_businessService.services(m_type);
 
-    std::string body = "Товар\tЦена\tНаличие\tУ вас\n";
+    std::string body = "Товар\tЦена\tНаличие\n";
     for (const BusinessService::GoodDef &good : goods)
     {
-        body += fmt::format("{}\t{}\t{}\t{}\n", m_inventory.itemName(good.itemType), Money::text(good.price),
-                            availabilityText(m_businessService.stockOf(businessId, good.itemType), good.stockCap),
-                            m_inventory.count(playerId, good.itemType));
+        body += fmt::format("{}\t{}\t{}\n", goodDisplayName(good, m_inventory.itemName(good.itemType)), Money::text(good.price),
+                            availabilityText(m_businessService.stockOf(businessId, good.itemType), good.stockCap));
     }
     // Услуги — ХВОСТОМ списка (на этом держится разбор listItem). Склада у них нет,
     // поэтому в колонке наличия у всех одно и то же.
     for (const BusinessService::ServiceDef &service : services)
     {
-        body += fmt::format("{}\t{}\tУслуга\t{}\n", service.name, Money::text(service.price),
-                            service.status ? service.status(playerId) : std::string("-"));
+        body += fmt::format("{}\t{}\tУслуга\n", service.name, Money::text(service.price));
     }
     body.pop_back();
 
@@ -111,14 +109,19 @@ void BusinessShop::showGood(IPlayer &player, int businessId, std::size_t goodInd
     // В LIST кликабельна КАЖДАЯ строка, поэтому справочных строк в теле нет: цена и
     // наличие вписаны в сами пункты, название товара — в заголовок.
     // ПОРЯДОК СТРОК = порядок case-веток обработчика.
-    const std::string body =
-        fmt::format("Купить — {}\nИнформация\n\nВ продаже: {}\nУ вас сейчас: {}", Money::text(good.price),
-                    availabilityText(stock, good.stockCap), m_inventory.count(playerId, good.itemType));
+    std::string body = fmt::format("Купить — {}\nИнформация\n\nВ продаже: {}", Money::text(good.price),
+                                   availabilityText(stock, good.stockCap));
+    // «У вас сейчас» осмысленно только у товара с предметом: у товара БЕЗ предмета
+    // (телефон) считать в инвентаре нечего.
+    if (!good.sell)
+    {
+        body += fmt::format("\nУ вас сейчас: {}", m_inventory.count(playerId, good.itemType));
+    }
 
     m_dialogService.show(
         // Без u(): makeDialog сам прогоняет все поля через utf8Tocp1251, повторная
         // конвертация дала бы мусор.
-        player, makeDialog(DialogStyle_LIST, m_inventory.itemName(good.itemType), body, "Выбрать", "Назад"),
+        player, makeDialog(DialogStyle_LIST, goodDisplayName(good, m_inventory.itemName(good.itemType)), body, "Выбрать", "Назад"),
         [this, playerId, businessId, goodIndex](DialogResponse response, int listItem, StringView)
         {
             IPlayer *buyer = m_core.getPlayers().get(playerId);
@@ -156,7 +159,7 @@ void BusinessShop::showInfo(IPlayer &player, int businessId, std::size_t goodInd
     const BusinessService::GoodDef &good = goods[goodIndex];
 
     m_dialogService.show(player,
-                         makeDialog(DialogStyle_MSGBOX, m_inventory.itemName(good.itemType), good.description,
+                         makeDialog(DialogStyle_MSGBOX, goodDisplayName(good, m_inventory.itemName(good.itemType)), good.description,
                                     "Назад", ""),
                          [this, playerId, businessId, goodIndex](DialogResponse, int, StringView)
                          {
@@ -253,8 +256,15 @@ void BusinessShop::buy(IPlayer &player, int businessId, std::size_t goodIndex)
     if (m_businessService.stockOf(businessId, good.itemType) <= 0)
     {
         player.sendClientMessage(ERROR_COLOUR, u(fmt::format("{} закончились — товар не завезли",
-                                                             m_inventory.itemName(good.itemType))));
+                                                             goodDisplayName(good, m_inventory.itemName(good.itemType)))));
         showGood(player, businessId, goodIndex);
+        return;
+    }
+    // Товар БЕЗ предмета продаёт себя сам: его продажа бывает отложенной (телефон
+    // занимает номер в БД), поэтому деньги, склад и доход проводит обработчик.
+    if (good.sell)
+    {
+        good.sell(player, businessId);
         return;
     }
     // Стек полон — отказ ДО списания денег: иначе игрок платил бы за то, что не
@@ -262,7 +272,7 @@ void BusinessShop::buy(IPlayer &player, int businessId, std::size_t goodIndex)
     if (m_inventory.count(playerId, good.itemType) >= m_inventory.maxStack(good.itemType))
     {
         player.sendClientMessage(ERROR_COLOUR,
-                                 u(fmt::format("Больше {} у вас не поместится", m_inventory.itemName(good.itemType))));
+                                 u(fmt::format("Больше {} у вас не поместится", goodDisplayName(good, m_inventory.itemName(good.itemType)))));
         showGood(player, businessId, goodIndex); // карточка остаётся открытой и на отказе
         return;
     }
@@ -300,7 +310,7 @@ void BusinessShop::buy(IPlayer &player, int businessId, std::size_t goodIndex)
     m_audioService.playSound(player, PURCHASE_SOUND);
 
     player.sendClientMessage(INFO_COLOUR,
-                             u(fmt::format("Куплено: {} за {}. Теперь у вас {}", m_inventory.itemName(good.itemType),
+                             u(fmt::format("Куплено: {} за {}. Теперь у вас {}", goodDisplayName(good, m_inventory.itemName(good.itemType)),
                                            Money::text(good.price), m_inventory.count(playerId, good.itemType))));
     // ВОЗВРАЩАЕМ В КАРТОЧКУ, а не в список и не в закрытый диалог: предметы стековые,
     // и брать их пачкой — обычный сценарий, кнопка «Купить» остаётся под пальцем.

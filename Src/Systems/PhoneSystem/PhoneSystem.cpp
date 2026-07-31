@@ -241,21 +241,18 @@ PhoneSystem::PhoneSystem(ICore &core, const ServiceRegister &serviceRegister)
 
     // Телефон продаётся в 24/7 как УСЛУГА точки. Регистрирует её система-владелец
     // механики (как MedkitSystem — свой предмет), магазин не правится.
-    BusinessService::ServiceDef phone;
+    BusinessService::GoodDef phone;
+    phone.itemType = STOCK_PHONE; // ключ склада: предмета за этим числом нет
     phone.name = "Телефон";
     phone.price = PHONE_PRICE;
+    phone.stockCap = PHONE_STOCK_CAP;
     phone.description = phoneShopDescription();
     phone.popupName = "Phone";
-    phone.status = [this](int playerId)
-    {
-        const std::int64_t own = m_phoneService.phoneOf(playerId);
-        return own == PhoneService::NO_PHONE ? std::string("нет") : std::to_string(own);
-    };
     phone.sell = [this](IPlayer &player, int businessId)
     {
         beginPurchase(player, businessId);
     };
-    m_businessService.addService(BusinessService::Type::Shop247, std::move(phone));
+    m_businessService.addGood(BusinessService::Type::Shop247, std::move(phone));
 
     // Вторая услуга той же точки: пополнение счёта. Отдельной строкой витрины —
     // купить телефон и положить на счёт это разные действия.
@@ -1271,6 +1268,13 @@ void PhoneSystem::beginPurchase(IPlayer &player, int businessId)
         player.sendClientMessage(ERROR_COLOUR, u("Авторизуйтесь, чтобы купить телефон"));
         return;
     }
+    // Телефоны на точке кончились — отказ СРАЗУ. Витрина это уже проверила, но между
+    // её проверкой и подтверждением диалога проходит время.
+    if (m_businessService.stockOf(businessId, STOCK_PHONE) <= 0)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Телефоны закончились — товар не завезли"));
+        return;
+    }
     // Денег не хватает — отказ СРАЗУ: ни диалога, ни запроса в БД.
     if (!m_moneyService.canAfford(playerId, static_cast<unsigned long long>(PHONE_PRICE)))
     {
@@ -1445,6 +1449,15 @@ void PhoneSystem::claimNumber(IPlayer &player, int businessId, std::int64_t desi
                 buyer->sendClientMessage(ERROR_COLOUR,
                                          u(fmt::format("Не хватает денег: телефон стоит {}",
                                                        Money::text(PHONE_PRICE))));
+                return;
+            }
+            // Склад списываем ПОСЛЕ денег, но ДО выдачи номера: последний телефон
+            // могли забрать, пока мы ходили в БД за номером.
+            if (!m_businessService.consumeStock(businessId, STOCK_PHONE, 1))
+            {
+                m_moneyService.giveMoney(*buyer, static_cast<unsigned long long>(PHONE_PRICE));
+                rollbackNumber(accountId, claimed, previous, playerId, serial);
+                buyer->sendClientMessage(ERROR_COLOUR, u("Последний телефон только что забрали"));
                 return;
             }
             completePurchase(*buyer, businessId, claimed);

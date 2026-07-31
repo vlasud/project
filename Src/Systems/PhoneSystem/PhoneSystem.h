@@ -60,6 +60,12 @@ class PhoneSystem : public BaseSystem
     // Цена телефона в 24/7. Телефон и есть номер, поэтому повторная покупка — это
     // смена номера за те же деньги.
     static constexpr std::int64_t PHONE_PRICE = 1000;
+    // Ключ склада телефонов у точки. Это НЕ тип предмета: телефон в инвентаре не
+    // лежит («телефон есть» = есть номер), но на складе магазина он кончается и
+    // владелец его дозаказывает. Значение не должно совпадать с типами вещей
+    // (1 — аптечка, 2 — инструменты), иначе склады слиплись бы.
+    static constexpr int STOCK_PHONE = 1001;
+    static constexpr int PHONE_STOCK_CAP = 20;
 
     PhoneSystem(ICore &core, const ServiceRegister &serviceRegister);
 

@@ -22,6 +22,7 @@
 #include "Systems/JobDismissSystem/JobDismissSystem.h"
 #include "Systems/JobWalletSystem/JobWalletSystem.h"
 #include "Systems/MedicJobSystem/MedicJobSystem.h"
+#include "Systems/FriendSystem/FriendSystem.h"
 #include "Systems/PhoneSystem/PhoneSystem.h"
 #include "Systems/TaxiJobSystem/TaxiJobSystem.h"
 #include "Systems/CarMenuSystem/CarMenuSystem.h"
@@ -302,6 +303,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // (продажа телефона) регистрирует сам, и порядок относительно Shop247System тут
     // не важен: BusinessService держит услуги отдельно от регистрации типа.
     m_systems.push_back(std::make_unique<PhoneSystem>(core, serviceRegister));
+    // FriendSystem — после PlayerSessionSystem: список друзей грузится по старту
+    // сессии, а оповещение о входе ищет друзей онлайн через обратный индекс сессий.
+    m_systems.push_back(std::make_unique<FriendSystem>(core, serviceRegister));
     m_systems.push_back(std::make_unique<JobDismissSystem>(core, serviceRegister));
     // JobWalletSystem (/jobwallet) — тоже после работ: кошельки в список кладут их
     // конструкторы. Напоминание о деньгах шлётся по сигналу загрузки кошелька, а не
