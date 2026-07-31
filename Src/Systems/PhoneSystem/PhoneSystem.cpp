@@ -1603,16 +1603,10 @@ void PhoneSystem::loadPhone(IPlayer &player, const PlayerSessionService::Session
             {
                 return; // телефона нет — молчим, счёт без номера ни на что не влияет
             }
+            // Молча: на входе игрока и так встречает пачка сообщений, а свой номер и
+            // остаток он видит в заголовке /c и в витрине 24/7.
             m_phoneService.setPhone(playerId, phone);
             m_phoneService.setBalance(playerId, balance);
-            if (IPlayer *owner = m_core.getPlayers().get(playerId))
-            {
-                owner->sendClientMessage(INFO_COLOUR,
-                                         u(fmt::format("Ваш номер телефона: {}. Позвонить — /c", phone)));
-                owner->sendClientMessage(INFO_COLOUR,
-                                         u(fmt::format("На счету телефона {}. Пополнить — в магазине 24/7",
-                                                       Money::text(m_phoneService.balanceOf(playerId)))));
-            }
         },
         [](const std::string &error)
         {

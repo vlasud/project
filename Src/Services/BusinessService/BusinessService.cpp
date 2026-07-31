@@ -68,6 +68,20 @@ void BusinessService::addGood(Type type, GoodDef good)
     m_types[static_cast<std::size_t>(type)].goods.push_back(std::move(good));
 }
 
+void BusinessService::setTypeMapIcon(Type type, int icon)
+{
+    if (!validType(type) || icon < 0)
+    {
+        return;
+    }
+    m_types[static_cast<std::size_t>(type)].mapIcon = icon;
+}
+
+int BusinessService::typeMapIcon(Type type) const
+{
+    return validType(type) ? m_types[static_cast<std::size_t>(type)].mapIcon : 0;
+}
+
 void BusinessService::addService(Type type, ServiceDef service)
 {
     if (!validType(type) || service.name.empty() || service.popupName.empty() || service.price < 0 || !service.sell)
@@ -357,6 +371,29 @@ bool BusinessService::setPrice(int id, std::int64_t price)
     return true;
 }
 
+bool BusinessService::setFuelPoint(int id, const Vector3 &point, float radius)
+{
+    const auto it = m_businesses.find(id);
+    if (it == m_businesses.end())
+    {
+        return false;
+    }
+    // Неположительный радиус трактуем как «точки нет»: одно состояние, а не пара
+    // «координаты есть, радиус нулевой».
+    if (radius <= 0.0f)
+    {
+        it->second.fuelPoint = Vector3(0.0f, 0.0f, 0.0f);
+        it->second.fuelRadius = 0.0f;
+    }
+    else
+    {
+        it->second.fuelPoint = point;
+        it->second.fuelRadius = radius;
+    }
+    notifyChanged();
+    return true;
+}
+
 bool BusinessService::setOwner(int id, const std::string &ownerKey)
 {
     const auto it = m_businesses.find(id);
@@ -442,6 +479,14 @@ std::int64_t BusinessService::withdrawBalance(int id)
     return amount;
 }
 
+void BusinessService::subscribeLoaded(LoadedObserver observer)
+{
+    if (observer)
+    {
+        m_loadedObservers.push_back(std::move(observer));
+    }
+}
+
 void BusinessService::subscribeChanged(ChangedObserver observer)
 {
     if (observer)
@@ -475,6 +520,10 @@ std::string BusinessService::serialize() const
         item["vw"] = business.virtualWorld;
         item["price"] = business.price;
         item["balance"] = business.balance;
+        // Колонка АЗС — дев-контент, как вход и выход. У остальных типов нули, они
+        // ничего не значат и на загрузке дают «точка не задана».
+        item["fuelPoint"] = {business.fuelPoint.x, business.fuelPoint.y, business.fuelPoint.z};
+        item["fuelRadius"] = business.fuelRadius;
         // owner в json НЕ идёт: владение живёт в БД (business_owner), а Business::
         // owner — лишь зеркало. Иначе два источника правды разъехались бы.
         array.push_back(std::move(item));
@@ -511,4 +560,11 @@ void BusinessService::finalizeLoad()
         maxId = std::max(maxId, id);
     }
     m_nextId = std::min(maxId + 1, MAX_BUSINESS_ID + 1);
+
+    // Данные готовы — можно строить обвязку по точкам. notifyChanged здесь НЕ зовём:
+    // он означает «сохрани файл», и загрузка тут же переписала бы его собой.
+    for (const LoadedObserver &observer : m_loadedObservers)
+    {
+        observer();
+    }
 }

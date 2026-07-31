@@ -93,6 +93,12 @@ constexpr float INSIDE_EXIT_DISTANCE = 2.0f;
 // выше денег в игре всё равно не бывает, а int64 гарантированно не переполнится.
 constexpr std::int64_t MAX_PRICE = 100000000;
 
+// Колонка АЗС. Радиус по умолчанию — с запасом на длину машины, чтобы не приходилось
+// становиться пятачок в пятачок; границы — чтобы дев не задал ни ноль, ни пол-города.
+constexpr float DEFAULT_FUEL_RADIUS = 8.0f;
+constexpr float MIN_FUEL_RADIUS = 2.0f;
+constexpr float MAX_FUEL_RADIUS = 50.0f;
+
 // Разобрать businesses.json — ОПИСАНИЕ точек (дев-контент). Ни владение, ни ставки
 // здесь не читаются: и то и другое — динамика, её место в БД.
 // ok=false — файл битый (вызывающий уводит его в .bak).
@@ -146,6 +152,14 @@ std::vector<BusinessService::Business> parse(const std::string &content, bool &o
             business.virtualWorld = item.value("vw", BusinessService::VW_BASE + business.id);
             business.price = item.value("price", static_cast<std::int64_t>(0));
             business.balance = item.value("balance", static_cast<std::int64_t>(0));
+            // Колонка АЗС: нет в файле — точки просто не задано (старые записи).
+            const auto fuelPoint = item.value("fuelPoint", nlohmann::json::array());
+            if (fuelPoint.is_array() && fuelPoint.size() == 3)
+            {
+                business.fuelPoint =
+                    Vector3(fuelPoint[0].get<float>(), fuelPoint[1].get<float>(), fuelPoint[2].get<float>());
+            }
+            business.fuelRadius = item.value("fuelRadius", 0.0f);
             // owner/bids из файла НЕ читаем даже если они там есть (наследие сборки
             // до переезда динамики в БД): их источник — business_owner и auction_*.
             parsed.push_back(std::move(business));
@@ -288,41 +302,60 @@ void BusinessSystem::initialize(IComponentList * /*components*/)
 // конструкторах, и полный список каталогов известен только после их прогона.
 void BusinessSystem::registerCounterCheckpoints()
 {
+    // Одна физическая точка — ОДИН чекпоинт, даже если её делят разные типы бизнеса:
+    // АЗС сидит в тех же комнатах, что и 24/7, и второй Def в тех же координатах
+    // дал бы стопку, из которой стрим выбирает произвольный. Раньше это выглядело
+    // как «в АЗС стоит красный чекпоинт, который не реагирует»: срабатывал Def
+    // магазина и отвергал посетителя заправки по типу.
+    std::vector<Vector3> registered;
+    const auto alreadyThere = [&registered](const Vector3 &point)
+    {
+        for (const Vector3 &known : registered)
+        {
+            const float dx = known.x - point.x, dy = known.y - point.y, dz = known.z - point.z;
+            if (dx * dx + dy * dy + dz * dz < 0.01f)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
     for (const BusinessService::Type type : m_businessService.registeredTypes())
     {
-        const std::vector<BusinessService::CatalogEntry> &catalog = m_businessService.catalog(type);
-        for (std::size_t index = 0; index < catalog.size(); ++index)
+        for (const BusinessService::CatalogEntry &entry : m_businessService.catalog(type))
         {
-            const Vector3 &counter = catalog[index].counter;
+            const Vector3 &counter = entry.counter;
             if (counter.x == 0.0f && counter.y == 0.0f && counter.z == 0.0f)
             {
                 continue; // прилавок у интерьера не замерен — чекпоинта нет
             }
+            if (alreadyThere(counter))
+            {
+                continue;
+            }
+            registered.push_back(counter);
             m_checkpointService.add(counter, COUNTER_CHECKPOINT_RADIUS,
-                                    [this, type, index](IPlayer &player)
+                                    [this](IPlayer &player)
                                     {
-                                        onCounterEnter(player, type, index);
+                                        onCounterEnter(player);
                                     });
         }
     }
 }
 
-void BusinessSystem::onCounterEnter(IPlayer &player, BusinessService::Type type, std::size_t interiorIndex)
+void BusinessSystem::onCounterEnter(IPlayer &player)
 {
     // Какой именно бизнес — по виртуальному миру игрока: у каждого он свой
-    // (VW_BASE + id), и это серверный факт, а не клиентское заявление.
+    // (VW_BASE + id), и это серверный факт, а не клиентское заявление. Тип берём
+    // ОТТУДА ЖЕ, а не из регистрации чекпоинта: одну и ту же комнату делят разные
+    // типы, и прилавок в ней обслуживает того, чей мир у вошедшего.
     const int virtualWorld = m_locationService.getVirtualWorld(player.getID());
     const int businessId = virtualWorld - BusinessService::VW_BASE;
     const BusinessService::Business *business = m_businessService.getBusiness(businessId);
     if (!business)
     {
         return; // игрок не внутри точки (совпадение координат в другом мире)
-    }
-    // Чекпоинт принадлежит конкретному интерьеру конкретного типа: в чужом бизнесе,
-    // случайно совпавшем по координатам, витрину не открываем.
-    if (business->type != type || static_cast<std::size_t>(business->interiorIndex) != interiorIndex)
-    {
-        return;
     }
     if (business->owner.empty())
     {
@@ -529,7 +562,7 @@ void BusinessSystem::showDevList(IPlayer &player)
     body.pop_back();
 
     m_dialogService.show(
-        player, makeDialog(DialogStyle_TABLIST_HEADERS, "Бизнесы", body, "Гос. цена", "Закрыть"),
+        player, makeDialog(DialogStyle_TABLIST_HEADERS, "Бизнесы", body, "Выбрать", "Закрыть"),
         [this, playerId, ids](DialogResponse response, int listItem, StringView)
         {
             IPlayer *dev = m_core.getPlayers().get(playerId);
@@ -541,7 +574,7 @@ void BusinessSystem::showDevList(IPlayer &player)
             {
                 return; // индекс от клиента — по снимку, с которым строился список
             }
-            showPriceEdit(*dev, ids[static_cast<std::size_t>(listItem)]);
+            showBusinessActions(*dev, ids[static_cast<std::size_t>(listItem)]);
         });
 }
 
@@ -599,6 +632,170 @@ void BusinessSystem::showPriceEdit(IPlayer &player, int businessId)
                                    u(fmt::format("Бизнес #{}: гос. цена теперь ${}", businessId, price)));
             showDevList(*dev);
         });
+}
+
+void BusinessSystem::showBusinessActions(IPlayer &player, int businessId)
+{
+    const int playerId = player.getID();
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business)
+    {
+        player.sendClientMessage(DEV_COLOUR, u(fmt::format("Бизнес #{} не найден", businessId)));
+        return;
+    }
+
+    const bool hasFuelPoint = business->fuelRadius > 0.0f;
+    // Пункты видны у ЛЮБОГО типа: недоступность объясняем при клике, а не прячем —
+    // иначе дев гадает, куда делась колонка (конвенция диалогов проекта).
+    const std::string body =
+        fmt::format("Гос. цена — ${}\nКолонка АЗС: {}\nРадиус колонки: {}\nУбрать колонку", business->price,
+                    hasFuelPoint ? fmt::format("{:.1f} {:.1f} {:.1f}", business->fuelPoint.x, business->fuelPoint.y,
+                                               business->fuelPoint.z)
+                                 : std::string("не задана"),
+                    hasFuelPoint ? fmt::format("{:.1f} м", business->fuelRadius) : std::string("—"));
+
+    m_dialogService.show(
+        player,
+        makeDialog(DialogStyle_LIST, fmt::format("Бизнес #{} — {}", businessId,
+                                                 m_businessService.typeName(business->type)),
+                   body, "Выбрать", "Назад"),
+        [this, playerId, businessId](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *dev = m_core.getPlayers().get(playerId);
+            if (!dev)
+            {
+                return;
+            }
+            if (response != DialogResponse_Left)
+            {
+                showDevList(*dev);
+                return;
+            }
+            switch (listItem)
+            {
+            case 0:
+                showPriceEdit(*dev, businessId);
+                break;
+            case 1:
+                setFuelPointHere(*dev, businessId);
+                break;
+            case 2:
+                showFuelRadiusInput(*dev, businessId);
+                break;
+            case 3:
+                clearFuelPoint(*dev, businessId);
+                break;
+            default:
+                break;
+            }
+        });
+}
+
+// Колонка ставится ТУДА, ГДЕ СТОИТ ДЕВ: координаты вводить руками бессмысленно —
+// точку выбирают глазами, стоя на месте будущей заправки.
+void BusinessSystem::setFuelPointHere(IPlayer &player, int businessId)
+{
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business)
+    {
+        player.sendClientMessage(DEV_COLOUR, u(fmt::format("Бизнес #{} не найден", businessId)));
+        return;
+    }
+    if (business->type != BusinessService::Type::GasStation)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Колонка бывает только у АЗС"));
+        showBusinessActions(player, businessId);
+        return;
+    }
+
+    const Vector3 position = m_locationService.getPosition(player.getID());
+    // Радиус сохраняем прежний, а у новой точки берём разумный по умолчанию: дев
+    // ставит колонку одним кликом, а подгоняет радиус отдельным пунктом.
+    const float radius = business->fuelRadius > 0.0f ? business->fuelRadius : DEFAULT_FUEL_RADIUS;
+    m_businessService.setFuelPoint(businessId, position, radius);
+    player.sendClientMessage(DEV_COLOUR,
+                             u(fmt::format("Бизнес #{}: колонка здесь, радиус {:.1f} м", businessId, radius)));
+    showBusinessActions(player, businessId);
+}
+
+void BusinessSystem::showFuelRadiusInput(IPlayer &player, int businessId)
+{
+    const int playerId = player.getID();
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business)
+    {
+        return;
+    }
+    if (business->type != BusinessService::Type::GasStation)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Колонка бывает только у АЗС"));
+        showBusinessActions(player, businessId);
+        return;
+    }
+    if (business->fuelRadius <= 0.0f)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Сначала задайте саму колонку — встаньте на место и выберите её"));
+        showBusinessActions(player, businessId);
+        return;
+    }
+
+    m_dialogService.showNumberInput(
+        player,
+        makeDialog(DialogStyle_INPUT, fmt::format("Бизнес #{} — радиус колонки", businessId),
+                   fmt::format("Сейчас: {:.1f} м\n\nВведите радиус в метрах (от {} до {})", business->fuelRadius,
+                               static_cast<int>(MIN_FUEL_RADIUS), static_cast<int>(MAX_FUEL_RADIUS)),
+                   "Сохранить", "Назад"),
+        [this, playerId, businessId](DialogResponse response, std::int64_t value)
+        {
+            IPlayer *dev = m_core.getPlayers().get(playerId);
+            if (!dev)
+            {
+                return;
+            }
+            if (response != DialogResponse_Left)
+            {
+                showBusinessActions(*dev, businessId);
+                return;
+            }
+            if (value < static_cast<std::int64_t>(MIN_FUEL_RADIUS) ||
+                value > static_cast<std::int64_t>(MAX_FUEL_RADIUS))
+            {
+                dev->sendClientMessage(ERROR_COLOUR,
+                                       u(fmt::format("Радиус — от {} до {} метров", static_cast<int>(MIN_FUEL_RADIUS),
+                                                     static_cast<int>(MAX_FUEL_RADIUS))));
+                showFuelRadiusInput(*dev, businessId);
+                return;
+            }
+            // Бизнес могли снести, пока висел диалог.
+            const BusinessService::Business *current = m_businessService.getBusiness(businessId);
+            if (!current || current->fuelRadius <= 0.0f)
+            {
+                dev->sendClientMessage(DEV_COLOUR, u("Колонки у этого бизнеса уже нет"));
+                return;
+            }
+            m_businessService.setFuelPoint(businessId, current->fuelPoint, static_cast<float>(value));
+            dev->sendClientMessage(DEV_COLOUR,
+                                   u(fmt::format("Бизнес #{}: радиус колонки {} м", businessId, value)));
+            showBusinessActions(*dev, businessId);
+        });
+}
+
+void BusinessSystem::clearFuelPoint(IPlayer &player, int businessId)
+{
+    const BusinessService::Business *business = m_businessService.getBusiness(businessId);
+    if (!business)
+    {
+        return;
+    }
+    if (business->fuelRadius <= 0.0f)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Колонка и так не задана"));
+        showBusinessActions(player, businessId);
+        return;
+    }
+    m_businessService.setFuelPoint(businessId, Vector3(0.0f, 0.0f, 0.0f), 0.0f);
+    player.sendClientMessage(DEV_COLOUR, u(fmt::format("Бизнес #{}: колонка убрана", businessId)));
+    showBusinessActions(player, businessId);
 }
 
 void BusinessSystem::showDevRemove(IPlayer &player)
@@ -928,7 +1125,10 @@ void BusinessSystem::spawnBusiness(const BusinessService::Business &business)
             onEnterPickup(id, player);
         },
         0);
-    runtime.mapIcon = m_mapIconService.addGlobal(BUSINESS_MAP_ICON, business.entrance, Colour::White(),
+    // Иконку задаёт сам тип (АЗС — своя, 47); нет своей — общая бизнес-иконка.
+    const int typeIcon = m_businessService.typeMapIcon(business.type);
+    runtime.mapIcon = m_mapIconService.addGlobal(typeIcon > 0 ? typeIcon : BUSINESS_MAP_ICON, business.entrance,
+                                                 Colour::White(),
                                                  MapIconStyle_Global, MapIconService::RADAR_STREAM_DISTANCE);
     // Текст в основном мире (vw 0), у входа: тип, номер и статус. На спавне бизнес
     // ВСЕГДА ничейный (владение приходит из БД позже и перерисует лейбл), поэтому
@@ -936,10 +1136,15 @@ void BusinessSystem::spawnBusiness(const BusinessService::Business &business)
     runtime.label = m_labelService.add(u(labelText(business, {})), business.entrance, BUSINESS_LABEL_COLOUR,
                                        BUSINESS_LABEL_DRAW_DISTANCE, BUSINESS_LABEL_TEST_LOS);
 
-    // Пикап выхода — ЗА СПИНОЙ вошедшего: тот же приём, что и у выхода наружу (там
-    // точка за спиной создателя). Угол округляем — пикап обязан лежать на оси.
+    // Пикап выхода: ЗАМЕР важнее правила. Где дверь замерена — ставим ровно туда,
+    // иначе считаем «за спиной» вошедшего (тот же приём, что и у выхода наружу).
+    // Угол округляем — расчётный пикап обязан лежать на оси.
+    const bool exitMeasured =
+        entry.exitPickup.x != 0.0f || entry.exitPickup.y != 0.0f || entry.exitPickup.z != 0.0f;
     const Vector3 exitPickupPos =
-        Geometry::backOf(entry.insideSpawn, Geometry::snapToQuarterTurn(entry.insideAngle), INSIDE_EXIT_DISTANCE);
+        exitMeasured ? entry.exitPickup
+                     : Geometry::backOf(entry.insideSpawn, Geometry::snapToQuarterTurn(entry.insideAngle),
+                                        INSIDE_EXIT_DISTANCE);
     runtime.exitPickup = m_pickupService.add(
         EXIT_PICKUP_MODEL, PICKUP_TYPE, exitPickupPos,
         [this, id = business.id](IPlayer &player)

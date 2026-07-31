@@ -62,6 +62,11 @@ constexpr float TRUCK_REAR_OFFSET = 4.5f;
 // Радиусы чекпоинтов. Все маршрутные точки — race move (RACE_NORMAL со стрелкой), как
 // move автобуса; финишных «стоп»-точек нет (парковка свободная); пешие — стандартные.
 constexpr float MOVE_CP_RADIUS = 4.0f;
+// Чекпоинт ДОСТАВКИ у точки бизнеса — заметно шире остальных. Вход в бизнес стоит
+// не на проезжей части: к самой двери на грузовике не подъедешь, и круг в 4 метра
+// там ловится с трудом или не ловится вовсе. Порт и база такой проблемы не имеют —
+// их точки специально стоят на асфальте, поэтому расширяем только доставку.
+constexpr float ORDER_CP_RADIUS = MOVE_CP_RADIUS * 5.0f;
 constexpr float BOX_CP_RADIUS = 3.0f;
 
 // Минимальное расстояние «взять -> положить» для ОДНОЙ коробки. Один конец переноски
@@ -1342,7 +1347,7 @@ void HaulerJobSystem::showDriveCheckpoint(IPlayer &player)
             return;
         }
         m_checkpointService.setRaceForPlayer(player, RaceCheckpointType::RACE_FINISH, target,
-                                             Vector3{0.0f, 0.0f, 0.0f}, MOVE_CP_RADIUS,
+                                             Vector3{0.0f, 0.0f, 0.0f}, ORDER_CP_RADIUS,
                                              [this](IPlayer &p)
                                              {
                                                  onDriveCheckpointEnter(p);

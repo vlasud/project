@@ -65,9 +65,13 @@ class BusinessService final : public IService
         // интерьерных координат (0,0,0) не бывает) — чекпоинта у точки нет, витрина
         // открывается только через меню бизнеса.
         //
-        // Точки пикапа ВЫХОДА здесь нет намеренно: выходы из интерьеров считаются,
-        // а не замеряются (см. Docs/Business.md). Статичны вход, угол и прилавок.
         Vector3 counter{};
+        // ПИКАП ВЫХОДА, если он ЗАМЕРЕН. По умолчанию выход считается — «за спиной»
+        // от точки спавна на INSIDE_EXIT_DISTANCE, и для большинства комнат этого
+        // хватает. Но правило приблизительное, и там, где дверь дальше расчётной
+        // точки, замер важнее формулы. НЕ ЗАДАН (нулевой вектор — интерьерных
+        // координат (0,0,0) не бывает) — считаем по правилу.
+        Vector3 exitPickup{};
     };
 
     // Товар на полке ТИПА: что продаём, почём и сколько влезает на склад точки.
@@ -129,6 +133,11 @@ class BusinessService final : public IService
         // заказ пополняет. Зеркало БД (business_stock), в json НЕ пишется — это
         // динамика, а json дев-контент.
         std::unordered_map<int, int> stock;
+        // КОЛОНКА АЗС: круг, внутри которого водитель заправляется (/buyfuel).
+        // Нулевой радиус — точка НЕ ЗАДАНА: у свежей станции колонки нет, её ставит
+        // дев. Дев-контент, живёт в businesses.json рядом с входом и выходом.
+        Vector3 fuelPoint{};
+        float fuelRadius = 0.0f;
     };
 
     // --- реестр типов (из конструкторов систем-владельцев типов) ---
@@ -147,6 +156,10 @@ class BusinessService final : public IService
     // свой товар сама, как телефон в 24/7). Порядок относительно registerType не
     // важен: тот дописывает свои товары, а не затирает уже добавленные.
     void addGood(Type type, GoodDef good);
+    // Иконка типа на радаре. 0 — своей нет, привод возьмёт общую бизнес-иконку.
+    // Задаёт САМ тип: общий привод про АЗС и магазины ничего не знает.
+    void setTypeMapIcon(Type type, int icon);
+    int typeMapIcon(Type type) const;
     const std::string &typePopupName(Type type) const;
     const std::vector<GoodDef> &goods(Type type) const;
     bool typeRegistered(Type type) const;
@@ -192,6 +205,8 @@ class BusinessService final : public IService
     // Сменить стартовую планку торгов (дев-правка уже созданного бизнеса).
     // Отрицательная клампится к нулю. false — бизнеса нет.
     bool setPrice(int id, std::int64_t price);
+    // Колонка АЗС. radius <= 0 снимает точку. false — бизнеса нет.
+    bool setFuelPoint(int id, const Vector3 &point, float radius);
     // Сменить владельца в ПАМЯТИ (зеркало БД). "" — снять владение. false — бизнеса
     // нет. Запись в business_owner делает привод по subscribeOwnerChanged — ЕДИНАЯ
     // точка персиста владения для всех путей (итог аукциона, снос, выселение).
@@ -240,6 +255,15 @@ class BusinessService final : public IService
     using ChangedObserver = std::function<void()>;
     void subscribeChanged(ChangedObserver observer);
 
+    // Контент точек ЗАГРУЖЕН (json прочитан, бизнесы разложены). Отдельный канал от
+    // subscribeChanged намеренно: тот значит «контент ИЗМЕНИЛИ, сохрани файл», и на
+    // загрузке звать его нельзя — файл переписал бы сам себя. А тем, кто строит по
+    // точкам свою обвязку (таблички АЗС), нужен именно момент готовности данных:
+    // порядок initialize() между системами не гарантирован, и опираться на него
+    // нельзя.
+    using LoadedObserver = std::function<void()>;
+    void subscribeLoaded(LoadedObserver observer);
+
     // --- сериализация JSON ---
     std::string serialize() const;
 
@@ -264,6 +288,10 @@ class BusinessService final : public IService
         // типа (которая может прийти позже) не имеет права их потерять.
         std::vector<ServiceDef> services;
         VisitorMenu visitorMenu;
+        // Иконка радара; 0 — своей нет. Как и услуги, живёт ВНЕ registerType: её
+        // ставят из конструктора системы типа, порядок относительно регистрации
+        // не гарантирован.
+        int mapIcon = 0;
     };
 
     static bool validType(Type type);
@@ -275,6 +303,7 @@ class BusinessService final : public IService
     bool m_ownershipLoaded = false; // зеркало business_owner легло в память
     TypeDef m_types[static_cast<std::size_t>(Type::Count)];
     std::vector<ChangedObserver> m_changedObservers;
+    std::vector<LoadedObserver> m_loadedObservers;
     std::vector<IncomeObserver> m_incomeObservers;
     std::vector<StockObserver> m_stockObservers;
     // Потолок товара у типа этой точки; -1 — товара нет в ассортименте.

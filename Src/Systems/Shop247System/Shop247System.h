@@ -19,6 +19,12 @@
 class Shop247System : public BaseSystem
 {
   public:
+    // ЗАМЕРЕННЫЕ интерьеры магазина. Публичные, потому что АЗС сидит в ТЕХ ЖЕ
+    // комнатах (отдельного интерьера у заправки в SA нет) и обязана брать те же
+    // цифры: свои, «примерно такие же», уводят пикап выхода в стену, а прилавок —
+    // мимо чекпоинта. Один замер — один источник.
+    static std::vector<BusinessService::CatalogEntry> interiors();
+
     Shop247System(ICore &core, const ServiceRegister &serviceRegister);
 
   private:

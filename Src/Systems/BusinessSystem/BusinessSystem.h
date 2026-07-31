@@ -64,6 +64,11 @@ class BusinessSystem : public BaseSystem
     void showDevList(IPlayer &player);
     // Правка госцены уже созданного бизнеса (из списка).
     void showPriceEdit(IPlayer &player, int businessId);
+    // Действия над КОНКРЕТНЫМ бизнесом (клик по строке списка): цена и колонка АЗС.
+    void showBusinessActions(IPlayer &player, int businessId);
+    void setFuelPointHere(IPlayer &player, int businessId); // колонка = там, где стоит дев
+    void showFuelRadiusInput(IPlayer &player, int businessId);
+    void clearFuelPoint(IPlayer &player, int businessId);
     void showDevRemove(IPlayer &player);
     // Дев-склад: точка -> выдать товар в нужном количестве либо очистить склад целиком.
     // Нужен для проверки витрины и заказов: без него набить склад можно только оплаченным
@@ -79,7 +84,9 @@ class BusinessSystem : public BaseSystem
     void registerCounterCheckpoints();
     // Вошёл на прилавок: определяем бизнес по виртуальному миру игрока и открываем
     // витрину его типа.
-    void onCounterEnter(IPlayer &player, BusinessService::Type type, std::size_t interiorIndex);
+    // Игрок встал на прилавок. Чекпоинт один на физическую точку — какой это бизнес
+    // и какого он типа, решает виртуальный мир вошедшего.
+    void onCounterEnter(IPlayer &player);
 
     // --- рантайм точки ---
     void spawnBusiness(const BusinessService::Business &business);
