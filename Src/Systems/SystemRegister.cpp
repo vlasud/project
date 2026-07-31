@@ -58,6 +58,7 @@
 #include "Systems/BusinessSystem/BusinessSystem.h"
 #include "Systems/GasStationSystem/GasStationSystem.h"
 #include "Systems/Shop247System/Shop247System.h"
+#include "Systems/FuelCanSystem/FuelCanSystem.h"
 #include "Systems/ToolkitSystem/ToolkitSystem.h"
 #include "Systems/Core/LocationDebugSystem/LocationDebugSystem.h"
 #include "Systems/Core/MapIconSystem/MapIconSystem.h"
@@ -368,6 +369,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // /repair. Нужны GridSystem/VehicleSystem (поиск ближайшей машины и её починка) и
     // PlayerAnimationSystem — все зарегистрированы выше.
     m_systems.push_back(std::make_unique<ToolkitSystem>(core, serviceRegister));
+    // Канистра с бензином (третий предмет): те же зависимости, что у инструментов —
+    // отличается только эффект (доливает топливо вместо починки).
+    m_systems.push_back(std::make_unique<FuelCanSystem>(core, serviceRegister));
     // Магазин 24/7 — ТИП бизнеса: регистрирует себя в BusinessService в конструкторе.
     // Обязан идти ДО BusinessSystem: тот на initialize грузит businesses.json и
     // заводит точки, а для этого каталог типа уже должен быть в реестре. Предметы

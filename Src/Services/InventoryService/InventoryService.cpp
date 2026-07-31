@@ -25,6 +25,58 @@ void InventoryService::registerItem(int itemType, std::string name, int maxStack
     m_registry.push_back(ItemDef{itemType, std::move(name), maxStack});
 }
 
+void InventoryService::setUseHandler(int itemType, UseHandler handler)
+{
+    if (findDef(itemType) == nullptr || !handler)
+    {
+        LogManager::log(Error, fmt::format("InventoryService: use handler for unknown itemType {}", itemType));
+        return;
+    }
+    for (UseDef &def : m_useHandlers)
+    {
+        if (def.itemType == itemType)
+        {
+            def.handler = std::move(handler); // повтор — баг регистрации, но не роняем
+            return;
+        }
+    }
+    m_useHandlers.push_back(UseDef{itemType, std::move(handler)});
+}
+
+bool InventoryService::isUsable(int itemType) const
+{
+    for (const UseDef &def : m_useHandlers)
+    {
+        if (def.itemType == itemType)
+        {
+            return static_cast<bool>(def.handler);
+        }
+    }
+    return false;
+}
+
+bool InventoryService::use(IPlayer &player, int itemType)
+{
+    // Предмета нет — применять нечего; проверяем ДО обработчика, чтобы каждый
+    // владелец предмета не повторял это у себя.
+    if (count(player.getID(), itemType) <= 0)
+    {
+        return false;
+    }
+    for (const UseDef &def : m_useHandlers)
+    {
+        if (def.itemType == itemType && def.handler)
+        {
+            // Копия обработчика: он может тронуть реестр (в т.ч. переустановить себя),
+            // а вызывать из-под ссылки на элемент вектора после этого нельзя.
+            const UseHandler handler = def.handler;
+            handler(player);
+            return true;
+        }
+    }
+    return false;
+}
+
 const std::vector<InventoryService::ItemDef> &InventoryService::registeredItems() const
 {
     return m_registry;

@@ -45,6 +45,9 @@ class InventorySystem : public BaseSystem, public PlayerConnectEventHandler
     void persistItems(IPlayer &player, const PlayerSessionService::Session &session);
 
     // Дев-меню /idev.
+    // Инвентарь игрока (/inv): список НЕНУЛЕВЫХ предметов, выбор строки применяет
+    // предмет. Порядок строк = порядок в снимке, на нём держится разбор listItem.
+    void showInventory(IPlayer &player);
     void showDevMenu(IPlayer &player);
     void showDevAmountInput(IPlayer &player, int itemType);
 

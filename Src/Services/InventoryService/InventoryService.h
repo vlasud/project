@@ -2,7 +2,9 @@
 
 #include "Macro.h"
 #include "Services/IService.h"
+#include "player.hpp"
 #include <array>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,10 +40,28 @@ class InventoryService final : public IService
         int maxStack = 1;
     };
 
+    // Что делает предмет, когда его применяют из инвентаря. Ставит СИСТЕМА-ВЛАДЕЛЕЦ
+    // предмета (аптечка лечит, инструменты чинят) — сервис про эффекты не знает и
+    // сам предмет не тратит: списывает его тот же обработчик, по факту применения.
+    using UseHandler = std::function<void(IPlayer &player)>;
+
+    struct UseDef
+    {
+        int itemType = 0;
+        UseHandler handler;
+    };
+
     // --- реестр типов (из конструкторов систем-владельцев предметов) ---
     // itemType > 0 и уникален; maxStack >= 1. Повтор/нарушение инвариантов
     // игнорируется с warning — реестр кодовый, дубликат это баг регистрации.
     void registerItem(int itemType, std::string name, int maxStack);
+    // Действие «использовать» для уже зарегистрированного типа. Без него предмет в
+    // инвентаре просто лежит (применять нечем).
+    void setUseHandler(int itemType, UseHandler handler);
+    bool isUsable(int itemType) const;
+    // Применить предмет. false — тип не зарегистрирован, применять нечем либо
+    // предмета у игрока нет. Сам предмет НЕ списывается: это решает обработчик.
+    bool use(IPlayer &player, int itemType);
     const std::vector<ItemDef> &registeredItems() const;
     int maxStack(int itemType) const; // 0 — тип не зарегистрирован
     // Имя зарегистрированного типа (utf-8); пусто — тип не зарегистрирован.
@@ -84,5 +104,6 @@ class InventoryService final : public IService
     using PlayerItems = std::vector<Stack>;
 
     std::vector<ItemDef> m_registry;            // кодовый реестр типов (мало записей)
+    std::vector<UseDef> m_useHandlers;           // действия «использовать» (записей ещё меньше)
     std::array<PlayerItems, MAX_PLAYERS> m_items;
 };

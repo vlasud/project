@@ -42,6 +42,10 @@ InventorySystem::InventorySystem(ICore &core, const ServiceRegister &serviceRegi
             persistItems(player, session);
         });
 
+    serviceRegister.getService<PlayerCommandService>().add(
+        "inv", {}, [this](IPlayer &player, const PlayerCommandService::CommandArgs &) { showInventory(player); }, {},
+        "инвентарь: посмотреть и применить вещи", PlayerCommandService::HelpCategory::Misc);
+
     // Единое дев-меню выдачи вещей; доступ только разработчику (admin level 6) —
     // иначе любой игрок выдавал бы себе предметы. Скрыта из /help (для дева — /ahelp).
     serviceRegister.getService<PlayerCommandService>().add(
@@ -160,6 +164,66 @@ void InventorySystem::persistItems(IPlayer &player, const PlayerSessionService::
 }
 
 // ------------------------------------------------------------------ дев-меню /idev
+
+void InventorySystem::showInventory(IPlayer &player)
+{
+    const int playerId = player.getID();
+    // Снимок ненулевых стеков: пустые строки в инвентаре не нужны, а порядок снимка
+    // задаёт нумерацию строк диалога.
+    const std::vector<std::pair<int, int>> stacks = m_inventoryService.snapshot(playerId);
+
+    if (stacks.empty())
+    {
+        Dialog empty;
+        empty.style = DialogStyle_MSGBOX;
+        empty.title = u("Инвентарь");
+        empty.body = u("У вас пока ничего нет.");
+        empty.leftButton = u("Закрыть");
+        empty.rightButton = u("");
+        m_dialogService.show(player, empty, [](DialogResponse, int, StringView) {});
+        return;
+    }
+
+    // Две колонки: название и количество. Заголовков нет — они тут ничего не
+    // объясняют, строка и так читается («Аптечка   3 шт.»).
+    std::string body;
+    for (const auto &[itemType, quantity] : stacks)
+        body += fmt::format("{}\t{} шт.\n", m_inventoryService.itemName(itemType), quantity);
+    body.pop_back();
+
+    Dialog dialog;
+    dialog.style = DialogStyle_TABLIST;
+    dialog.title = u("Инвентарь");
+    dialog.body = u(body);
+    dialog.leftButton = u("Применить");
+    dialog.rightButton = u("Закрыть");
+
+    m_dialogService.show(
+        player, dialog,
+        [this, playerId](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *owner = m_core.getPlayers().get(playerId);
+            if (!owner || response != DialogResponse_Left)
+                return;
+            // Индекс от клиента — сверяем со СВЕЖИМ снимком: за время показа диалога
+            // предмет мог кончиться (аптечка ушла на /healme, вещь списалась).
+            const std::vector<std::pair<int, int>> current = m_inventoryService.snapshot(playerId);
+            if (listItem < 0 || listItem >= static_cast<int>(current.size()))
+                return;
+
+            const int itemType = current[static_cast<std::size_t>(listItem)].first;
+            if (!m_inventoryService.isUsable(itemType))
+            {
+                owner->sendClientMessage(ERROR_COLOUR,
+                                         u(fmt::format("{} — это не то, что можно применить",
+                                                       m_inventoryService.itemName(itemType))));
+                return;
+            }
+            // Эффект и списание — на владельце предмета: все его проверки (штраф
+            // после смерти у аптечки, машина рядом у инструментов) остаются в силе.
+            m_inventoryService.use(*owner, itemType);
+        });
+}
 
 void InventorySystem::showDevMenu(IPlayer &player)
 {

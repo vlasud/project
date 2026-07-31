@@ -63,6 +63,9 @@ ToolkitSystem::ToolkitSystem(ICore &core, const ServiceRegister &serviceRegister
     // Регистрация типа предмета в базовой системе вещей — как у аптечки. Выдача
     // дев-меню (/idev) подхватит новый тип сама, отдельной команды не нужно.
     m_inventory.registerItem(ITEM_TOOLKIT, "Инструменты", TOOLKIT_MAX);
+    // Применение из инвентаря (/inv) — та же механика, что и /repair: проверки
+    // (вне машины, смотрит на неё, машина рядом и повреждена) там же.
+    m_inventory.setUseHandler(ITEM_TOOLKIT, [this](IPlayer &player) { repair(player); });
 
     static_assert(TOOLKIT_MAX == 3, "справка в shopDescription называет размер стека — обнови текст");
 

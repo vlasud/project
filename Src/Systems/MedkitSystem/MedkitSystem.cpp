@@ -40,6 +40,9 @@ MedkitSystem::MedkitSystem(ICore &core, const ServiceRegister &serviceRegister)
     // Регистрация типа предмета в базовой системе вещей (как фракция себя в
     // FactionService). Имя — utf-8 (отображение/дев-меню конвертируют сами).
     m_inventory.registerItem(ITEM_MEDKIT, "Аптечка", MEDKIT_MAX);
+    // Применение из инвентаря (/inv) — та же механика, что и /healme: все проверки и
+    // списание живут в одном месте.
+    m_inventory.setUseHandler(ITEM_MEDKIT, [this](IPlayer &player) { healMe(player); });
 
     static_assert(MEDKIT_MAX == 3, "справка в shopDescription называет размер стека — обнови текст");
     static_assert(MEDKIT_HEAL == 50.0f, "справка в shopDescription называет объём лечения — обнови текст");

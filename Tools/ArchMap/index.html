@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Карта архитектуры гейммода</title>
+<style>
+:root{
+  --bg:#0f1216; --panel:#161b22; --panel2:#1c2230; --line:#262d3a;
+  --text:#e6edf3; --dim:#8b97a8; --dim2:#5d6879;
+  --core:#4c8bf5; --biz:#f5a04c; --svc:#7ee787; --sys:#d2a8ff;
+  --warn:#f0883e; --bad:#f85149; --good:#3fb950;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.5 "Segoe UI",system-ui,sans-serif;display:flex;flex-direction:column}
+a{color:var(--core)}
+header{display:flex;align-items:center;gap:20px;padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.2px}
+header .meta{color:var(--dim2);font-size:12px}
+nav{display:flex;gap:4px;margin-left:auto}
+nav button{background:none;border:1px solid transparent;color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px}
+nav button:hover{color:var(--text);background:var(--panel2)}
+nav button.on{color:var(--text);background:var(--panel2);border-color:var(--line)}
+main{flex:1;overflow:hidden;position:relative}
+.view{position:absolute;inset:0;overflow:auto;padding:20px;display:none}
+.view.on{display:block}
+.view.flat{padding:0}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:24px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card .n{font-size:26px;font-weight:600;line-height:1.1}
+.card .l{color:var(--dim);font-size:12px;margin-top:4px}
+
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);margin:26px 0 10px;font-weight:600}
+h2:first-child{margin-top:0}
+.hint{color:var(--dim2);font-size:12px;margin:-4px 0 12px}
+
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{text-align:left;color:var(--dim);font-weight:500;font-size:12px;padding:6px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg)}
+td{padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+tr.click{cursor:pointer}
+tr.click:hover td{background:var(--panel)}
+code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-family:Consolas,monospace;font-size:12px}
+
+.tag{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11px;border:1px solid;white-space:nowrap}
+.t-core{color:var(--core);border-color:#2d4a7a}
+.t-biz{color:var(--biz);border-color:#7a5a2d}
+.t-svc{color:var(--svc);border-color:#2d5a3a}
+.t-sys{color:var(--sys);border-color:#5a3a7a}
+.t-warn{color:var(--warn);border-color:#7a4a2d}
+.t-bad{color:var(--bad);border-color:#7a2d2d}
+
+input.search{background:var(--panel);border:1px solid var(--line);color:var(--text);padding:8px 12px;border-radius:8px;width:100%;max-width:420px;margin-bottom:14px;font-size:13px}
+input.search:focus{outline:none;border-color:var(--core)}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
+.filters button{background:var(--panel);border:1px solid var(--line);color:var(--dim);padding:5px 12px;border-radius:20px;cursor:pointer;font-size:12px}
+.filters button.on{color:var(--text);border-color:var(--core)}
+
+/* карта */
+#mapWrap{position:absolute;inset:0;display:flex}
+#cv{flex:1;display:block;cursor:grab}
+#cv:active{cursor:grabbing}
+.overlay{position:absolute;top:14px;left:14px;background:rgba(22,27,34,.94);border:1px solid var(--line);border-radius:10px;padding:12px 14px;max-width:290px}
+.overlay .filters{margin:0}
+.legend{position:absolute;bottom:14px;left:14px;background:rgba(22,27,34,.94);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--dim)}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+
+/* панель модуля */
+#panel{width:430px;flex:none;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:18px;display:none}
+#panel.on{display:block}
+#panel h3{margin:0 0 2px;font-size:17px}
+#panel .path{color:var(--dim2);font-size:12px;font-family:Consolas,monospace;margin-bottom:10px;word-break:break-all}
+#panel .sum{white-space:pre-wrap;color:var(--dim);font-size:12.5px;background:var(--panel2);padding:10px 12px;border-radius:8px;margin:10px 0;max-height:260px;overflow:auto}
+#panel .sec{margin-top:16px}
+#panel .sec>b{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);margin-bottom:6px}
+.chip{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:3px 9px;margin:0 5px 5px 0;font-size:12px;cursor:pointer}
+.chip:hover{border-color:var(--core)}
+.chip.static{cursor:default}
+.chip.static:hover{border-color:var(--line)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:12.5px}
+.kv b{font-weight:500;font-family:Consolas,monospace;color:var(--svc)}
+.kv span{color:var(--dim)}
+.close{float:right;color:var(--dim);cursor:pointer;font-size:18px;line-height:1}
+.empty{color:var(--dim2);font-size:12px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Карта архитектуры гейммода</h1>
+  <span class="meta" id="meta"></span>
+  <nav>
+    <button data-view="overview" class="on">Обзор</button>
+    <button data-view="map">Карта связей</button>
+    <button data-view="modules">Модули</button>
+    <button data-view="commands">Команды</button>
+    <button data-view="settings">Настройки</button>
+    <button data-view="data">Данные</button>
+  </nav>
+</header>
+
+<main>
+  <section class="view on" id="v-overview"></section>
+
+  <section class="view flat" id="v-map">
+    <div id="mapWrap">
+      <canvas id="cv"></canvas>
+      <div class="overlay">
+        <div class="filters" id="mapFilters">
+          <button data-f="all" class="on">все</button>
+          <button data-f="business">бизнес</button>
+          <button data-f="core">core</button>
+          <button data-f="system">системы</button>
+          <button data-f="service">сервисы</button>
+        </div>
+        <div class="hint" style="margin:10px 0 0">Клик — открыть модуль. Тянуть — двигать, колесо — масштаб.<br>Толщина узла = сколько модулей на него опирается.</div>
+      </div>
+      <div class="legend">
+        <div><i style="background:var(--svc)"></i>сервис (состояние)</div>
+        <div><i style="background:var(--sys)"></i>система (поведение)</div>
+        <div style="margin-top:5px;color:var(--dim2)">светлее — Core, ярче — бизнес</div>
+      </div>
+      <div id="panel"></div>
+    </div>
+  </section>
+
+  <section class="view" id="v-modules"></section>
+  <section class="view" id="v-commands"></section>
+  <section class="view" id="v-settings"></section>
+  <section class="view" id="v-data"></section>
+</main>
+
+<script src="data.js?v=20260731142303"></script>
+<script>
+const A = window.ARCH;
+const MOD = {}; A.modules.forEach(m => MOD[m.name] = m);
+const esc = s => (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const q = s => document.querySelector(s);
+
+document.getElementById('meta').textContent =
+  A.modules.length + " модулей · собрано " + A.generatedAt;
+
+/* ------------------------------------------------------------- навигация */
+let current = 'overview';
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('on'));
+  current = b.dataset.view;
+  q('#v-' + current).classList.add('on');
+  if (current === 'map') resizeCanvas();
+});
+
+/* --------------------------------------------------------------- обзор */
+function overview(){
+  const M = A.modules;
+  const cnt = f => M.filter(f).length;
+  const cmds = M.reduce((s,m) => s + m.commands.length, 0);
+  const consts = M.reduce((s,m) => s + m.constants.length, 0);
+  const noDocs = M.filter(m => m.docs.length === 0 && m.layer === 'business');
+  const hubs = M.filter(m => m.usedBy.length > 0).sort((a,b) => b.usedBy.length - a.usedBy.length).slice(0,12);
+  const big = M.slice().sort((a,b) => b.loc - a.loc).slice(0,12);
+  const leaves = M.filter(m => m.kind === 'system' && m.usedBy.length === 0 && m.commands.length > 0);
+
+  let h = '<div class="cards">' +
+    card(M.length, 'модулей всего') +
+    card(cnt(m => m.kind === 'service'), 'сервисов') +
+    card(cnt(m => m.kind === 'system'), 'систем') +
+    card(cnt(m => m.layer === 'core'), 'в Core') +
+    card(cnt(m => m.layer === 'business'), 'бизнес-фич') +
+    card(cmds, 'команд игрока') +
+    card(consts, 'настроек') +
+    card(A.tables.length, 'таблиц БД') +
+    '</div>';
+
+  h += '<h2>На что смотреть в первую очередь</h2>';
+  h += '<div class="hint">Три вопроса, которые обычно и решают, куда двигать проект дальше.</div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px">';
+
+  h += '<div class="card"><b>Узлы риска</b><div class="hint">На них опирается больше всего кода — правка здесь задевает всех.</div><table>' +
+    hubs.map(m => '<tr class="click" data-m="' + m.name + '"><td>' + tag(m) + ' ' + m.name +
+      '</td><td style="text-align:right;color:var(--dim)">' + m.usedBy.length + '</td></tr>').join('') +
+    '</table></div>';
+
+  h += '<div class="card"><b>Бизнес-фичи без документации</b><div class="hint">' +
+    (noDocs.length ? 'Их поведение живёт только в коде.' : 'Все фичи задокументированы.') + '</div><table>' +
+    (noDocs.length ? noDocs.map(m => '<tr class="click" data-m="' + m.name + '"><td>' + tag(m) + ' ' + m.name + '</td></tr>').join('')
+                   : '<tr><td class="empty">пусто — это хорошо</td></tr>') +
+    '</table></div>';
+
+  h += '<div class="card"><b>Самые крупные модули</b><div class="hint">Строк в .h + .cpp. Кандидаты на разделение.</div><table>' +
+    big.map(m => '<tr class="click" data-m="' + m.name + '"><td>' + tag(m) + ' ' + m.name +
+      '</td><td style="text-align:right;color:var(--dim)">' + m.loc + '</td></tr>').join('') +
+    '</table></div>';
+
+  h += '</div>';
+
+  h += '<h2>Готовые фичи игрока</h2>';
+  h += '<div class="hint">Системы, которые дают команды и ни от кого не держат зависимостей — самостоятельные фичи. Их безопаснее всего трогать.</div>';
+  h += '<div>' + leaves.map(m => '<span class="chip" data-m="' + m.name + '">' + m.name +
+       ' <span style="color:var(--dim2)">' + m.commands.length + '</span></span>').join('') + '</div>';
+
+  q('#v-overview').innerHTML = h;
+  wire('#v-overview');
+}
+const card = (n,l) => '<div class="card"><div class="n">' + n + '</div><div class="l">' + l + '</div></div>';
+const tag = m => '<span class="tag t-' + (m.kind === 'service' ? 'svc' : 'sys') + '">' +
+                 (m.kind === 'service' ? 'сервис' : 'система') + '</span>' +
+                 (m.layer === 'core' ? ' <span class="tag t-core">core</span>' : '');
+
+/* -------------------------------------------------------------- модули */
+function modules(){
+  let h = '<input class="search" id="mSearch" placeholder="поиск по имени, описанию, команде...">';
+  h += '<div class="filters" id="mFilters"><button data-f="all" class="on">все</button>' +
+       '<button data-f="business">бизнес</button><button data-f="core">core</button>' +
+       '<button data-f="system">системы</button><button data-f="service">сервисы</button></div>';
+  h += '<table><thead><tr><th>Модуль</th><th>Что делает</th><th>Зависит</th><th>Опираются</th>' +
+       '<th>Команд</th><th>Настроек</th><th>Строк</th></tr></thead><tbody id="mBody"></tbody></table>';
+  q('#v-modules').innerHTML = h;
+
+  let filter = 'all', text = '';
+  const draw = () => {
+    const rows = A.modules.filter(m => {
+      if (filter === 'business' && m.layer !== 'business') return false;
+      if (filter === 'core' && m.layer !== 'core') return false;
+      if (filter === 'system' && m.kind !== 'system') return false;
+      if (filter === 'service' && m.kind !== 'service') return false;
+      if (!text) return true;
+      const hay = (m.name + ' ' + m.summary + ' ' + m.commands.map(c => c.name + c.description).join(' ')).toLowerCase();
+      return hay.includes(text);
+    });
+    q('#mBody').innerHTML = rows.map(m =>
+      '<tr class="click" data-m="' + m.name + '"><td>' + tag(m) + ' ' + m.name + '</td>' +
+      '<td style="color:var(--dim);max-width:520px">' + esc(firstLine(m.summary)) + '</td>' +
+      '<td style="color:var(--dim)">' + m.deps.length + '</td>' +
+      '<td style="color:var(--dim)">' + m.usedBy.length + '</td>' +
+      '<td style="color:var(--dim)">' + (m.commands.length || '') + '</td>' +
+      '<td style="color:var(--dim)">' + (m.constants.length || '') + '</td>' +
+      '<td style="color:var(--dim)">' + m.loc + '</td></tr>').join('');
+    wire('#v-modules');
+  };
+  q('#mSearch').oninput = e => { text = e.target.value.trim().toLowerCase(); draw(); };
+  q('#mFilters').onclick = e => {
+    if (e.target.tagName !== 'BUTTON') return;
+    filter = e.target.dataset.f;
+    q('#mFilters').querySelectorAll('button').forEach(b => b.classList.toggle('on', b === e.target));
+    draw();
+  };
+  draw();
+}
+const firstLine = s => (s||"").split('\n').filter(l => l).slice(0,1).join(' ').slice(0,150);
+
+/* ------------------------------------------------------------- команды */
+function commands(){
+  const all = [];
+  A.modules.forEach(m => m.commands.forEach(c => all.push(Object.assign({mod:m.name}, c))));
+  const byCat = {};
+  all.forEach(c => (byCat[c.category] = byCat[c.category] || []).push(c));
+  const names = {ChatRP:'Чат и отыгрыш', Economy:'Экономика', Faction:'Фракции', Misc:'Прочее', Hidden:'Скрытые (админ/дев)'};
+
+  let h = '<input class="search" id="cSearch" placeholder="поиск по команде или описанию...">';
+  h += '<div id="cBody"></div>';
+  q('#v-commands').innerHTML = h;
+
+  const draw = t => {
+    let out = '';
+    Object.keys(byCat).sort().forEach(cat => {
+      const list = byCat[cat].filter(c => !t || (c.name + c.description + c.mod).toLowerCase().includes(t));
+      if (!list.length) return;
+      out += '<h2>' + (names[cat] || cat) + ' <span style="color:var(--dim2)">· ' + list.length + '</span></h2>';
+      out += '<table><tbody>' + list.sort((a,b) => a.name.localeCompare(b.name)).map(c =>
+        '<tr class="click" data-m="' + c.mod + '"><td style="width:170px"><code>/' + c.name + '</code>' +
+        (c.admin ? ' <span class="tag t-bad">' + esc(c.admin) + '</span>' : '') + '</td>' +
+        '<td style="color:var(--dim)">' + esc(c.description) + '</td>' +
+        '<td style="width:210px;color:var(--dim2)">' + c.mod + '</td></tr>').join('') + '</tbody></table>';
+    });
+    q('#cBody').innerHTML = out;
+    wire('#v-commands');
+  };
+  q('#cSearch').oninput = e => draw(e.target.value.trim().toLowerCase());
+  draw('');
+}
+
+/* ------------------------------------------------------------ настройки */
+function settings(){
+  const all = [];
+  A.modules.forEach(m => m.constants.forEach(c => all.push(Object.assign({mod:m.name, layer:m.layer}, c))));
+  let h = '<h2>Настройки и балансовые константы</h2>';
+  h += '<div class="hint">Всё, что задано числом в коде: цены, тарифы, радиусы, таймауты, потолки. ' +
+       'Здесь видно, чем именно крутится геймплей, без чтения исходников.</div>';
+  h += '<input class="search" id="sSearch" placeholder="поиск: цена, timeout, radius, max...">';
+  h += '<div class="filters" id="sFilters"><button data-f="business" class="on">бизнес</button>' +
+       '<button data-f="all">все</button></div>';
+  h += '<table><thead><tr><th>Константа</th><th>Значение</th><th>Смысл</th><th>Модуль</th></tr></thead><tbody id="sBody"></tbody></table>';
+  q('#v-settings').innerHTML = h;
+
+  let f = 'business', t = '';
+  const draw = () => {
+    const rows = all.filter(c => (f === 'all' || c.layer === 'business') &&
+      (!t || (c.name + c.value + c.note + c.mod).toLowerCase().includes(t)));
+    q('#sBody').innerHTML = rows.map(c =>
+      '<tr class="click" data-m="' + c.mod + '"><td><code>' + c.name + '</code></td>' +
+      '<td style="color:var(--svc);font-family:Consolas,monospace">' + esc(c.value) + '</td>' +
+      '<td style="color:var(--dim);max-width:560px">' + esc(c.note) + '</td>' +
+      '<td style="color:var(--dim2)">' + c.mod + '</td></tr>').join('') ||
+      '<tr><td class="empty">ничего не нашлось</td></tr>';
+    wire('#v-settings');
+  };
+  q('#sSearch').oninput = e => { t = e.target.value.trim().toLowerCase(); draw(); };
+  q('#sFilters').onclick = e => {
+    if (e.target.tagName !== 'BUTTON') return;
+    f = e.target.dataset.f;
+    q('#sFilters').querySelectorAll('button').forEach(b => b.classList.toggle('on', b === e.target));
+    draw();
+  };
+  draw();
+}
+
+/* ---------------------------------------------------------------- данные */
+function dataView(){
+  let h = '<h2>Таблицы базы</h2><div class="hint">Кто читает и пишет каждую таблицу — по обращениям в коде.</div>';
+  h += '<table><thead><tr><th>Таблица</th><th>Колонки</th><th>Кто работает с ней</th></tr></thead><tbody>';
+  A.tables.forEach(t => {
+    const users = A.modules.filter(m => m.tables.includes(t.name));
+    h += '<tr><td><code>' + t.name + '</code></td>' +
+      '<td style="color:var(--dim);max-width:420px">' + t.columns.map(c => c.name).join(', ') + '</td>' +
+      '<td>' + (users.map(m => '<span class="chip" data-m="' + m.name + '">' + m.name + '</span>').join('') ||
+                '<span class="empty">никто (мёртвая таблица?)</span>') + '</td></tr>';
+  });
+  h += '</tbody></table>';
+
+  h += '<h2>Документация</h2><div class="hint">Доки и модули, о которых они говорят.</div>';
+  h += '<table><thead><tr><th>Файл</th><th>Заголовок</th><th>Строк</th><th>Модули</th></tr></thead><tbody>';
+  A.docs.slice().sort((a,b) => b.lines - a.lines).forEach(d => {
+    h += '<tr><td><code>' + d.file + '</code></td><td style="color:var(--dim)">' + esc(d.title) + '</td>' +
+      '<td style="color:var(--dim2)">' + d.lines + '</td>' +
+      '<td>' + d.modules.slice(0,6).map(n => '<span class="chip" data-m="' + n + '">' + n + '</span>').join('') + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  q('#v-data').innerHTML = h;
+  wire('#v-data');
+}
+
+/* ------------------------------------------------------- панель модуля */
+function openModule(name){
+  const m = MOD[name]; if (!m) return;
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.view === 'map'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('on'));
+  q('#v-map').classList.add('on'); current = 'map'; resizeCanvas();
+  focusNode(name);
+
+  let h = '<span class="close" onclick="document.getElementById(\'panel\').classList.remove(\'on\')">×</span>';
+  h += '<h3>' + m.name + '</h3><div>' + tag(m) + '</div>';
+  h += '<div class="path">' + m.path + ' · ' + m.loc + ' строк</div>';
+  if (m.summary) h += '<div class="sum">' + esc(m.summary) + '</div>';
+
+  h += sec('Зависит от', m.deps.map(chip).join('') || none('ни от кого — самодостаточный'));
+  h += sec('На него опираются', m.usedBy.map(chip).join('') || none('никто — это конечная фича'));
+  if (m.commands.length) h += sec('Команды', m.commands.map(c =>
+    '<div class="kv"><b>/' + c.name + '</b><span>' + esc(c.description) + '</span></div>').join(''));
+  if (m.registrations.length) h += sec('Регистрирует в других',
+    m.registrations.map(r => '<span class="chip static">' + r.what + ': ' + esc(r.value) + '</span>').join(''));
+  if (m.hooks.length) h += sec('Подключён к', m.hooks.map(x => '<span class="chip static">' + x + '</span>').join(''));
+  if (m.tables.length) h += sec('Таблицы БД', m.tables.map(t => '<span class="chip static"><code>' + t + '</code></span>').join(''));
+  if (m.docs.length) h += sec('Документация', m.docs.map(d => '<span class="chip static"><code>' + d + '</code></span>').join(''));
+  if (m.constants.length) h += sec('Настройки (' + m.constants.length + ')',
+    '<div class="kv">' + m.constants.map(c =>
+      '<b>' + c.name + '</b><span><span style="color:var(--svc)">' + esc(c.value) + '</span>' +
+      (c.note ? ' — ' + esc(c.note) : '') + '</span>').join('') + '</div>');
+
+  const p = q('#panel'); p.innerHTML = h; p.classList.add('on');
+  p.scrollTop = 0;
+  wire('#panel');
+}
+const sec = (title, body) => '<div class="sec"><b>' + title + '</b>' + body + '</div>';
+const chip = n => '<span class="chip" data-m="' + n + '">' + n + '</span>';
+const none = t => '<span class="empty">' + t + '</span>';
+function wire(root){
+  document.querySelectorAll(root + ' [data-m]').forEach(el =>
+    el.onclick = e => { e.stopPropagation(); openModule(el.dataset.m); });
+}
+
+/* ------------------------------------------------------------------ карта */
+const cv = q('#cv'), ctx = cv.getContext('2d');
+let nodes = [], links = [], view = {x:0, y:0, k:1}, hover = null, selected = null, mapFilter = 'all';
+
+function buildGraph(){
+  const visible = A.modules.filter(m => {
+    if (mapFilter === 'business') return m.layer === 'business';
+    if (mapFilter === 'core') return m.layer === 'core';
+    if (mapFilter === 'system') return m.kind === 'system';
+    if (mapFilter === 'service') return m.kind === 'service';
+    return true;
+  });
+  const set = new Set(visible.map(m => m.name));
+  const R = 520;
+  nodes = visible.map((m, i) => {
+    const a = i / visible.length * Math.PI * 2;
+    return {n:m.name, m, x:Math.cos(a) * R + (Math.random()-.5)*40, y:Math.sin(a) * R + (Math.random()-.5)*40,
+            vx:0, vy:0, r:5 + Math.min(14, Math.sqrt(m.usedBy.length) * 3.4)};
+  });
+  const idx = {}; nodes.forEach((d,i) => idx[d.n] = i);
+  links = [];
+  visible.forEach(m => m.deps.forEach(d => { if (set.has(d)) links.push({s:idx[m.name], t:idx[d]}); }));
+  for (let i = 0; i < 260; i++) step();
+  fit();
+}
+
+// Простая силовая раскладка: отталкивание всех от всех + притяжение по связям.
+// Узлов сотни, поэтому обычного O(n^2) хватает — считаем один раз при построении.
+function step(){
+  for (let i = 0; i < nodes.length; i++){
+    const a = nodes[i];
+    for (let j = i + 1; j < nodes.length; j++){
+      const b = nodes[j];
+      let dx = b.x - a.x, dy = b.y - a.y, d2 = dx*dx + dy*dy || 1;
+      if (d2 > 250000) continue;
+      const f = 900 / d2, d = Math.sqrt(d2);
+      const fx = dx / d * f, fy = dy / d * f;
+      a.vx -= fx; a.vy -= fy; b.vx += fx; b.vy += fy;
+    }
+  }
+  links.forEach(l => {
+    const a = nodes[l.s], b = nodes[l.t];
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx*dx + dy*dy) || 1;
+    const f = (d - 130) * 0.012;
+    const fx = dx / d * f, fy = dy / d * f;
+    a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+  });
+  nodes.forEach(n => {
+    n.vx -= n.x * 0.0016; n.vy -= n.y * 0.0016;   // лёгкое стягивание к центру
+    n.x += n.vx; n.y += n.vy; n.vx *= 0.82; n.vy *= 0.82;
+  });
+}
+
+function fit(){
+  if (!nodes.length) return;
+  const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+  const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
+  view.k = Math.min(cv.width / (w + 160), cv.height / (h + 160), 1.6);
+  view.x = cv.width/2 - (Math.min(...xs) + w/2) * view.k;
+  view.y = cv.height/2 - (Math.min(...ys) + h/2) * view.k;
+  draw();
+}
+
+function colorOf(m, dim){
+  const base = m.kind === 'service' ? [126,231,135] : [210,168,255];
+  const k = m.layer === 'core' ? 0.55 : 1;
+  const a = dim ? 0.18 : 1;
+  return 'rgba(' + base.map(c => Math.round(c * k)).join(',') + ',' + a + ')';
+}
+
+function draw(){
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.setTransform(view.k,0,0,view.k,view.x,view.y);
+
+  const focus = selected || hover;
+  const near = new Set();
+  if (focus){
+    near.add(focus.n);
+    links.forEach(l => {
+      if (nodes[l.s].n === focus.n) near.add(nodes[l.t].n);
+      if (nodes[l.t].n === focus.n) near.add(nodes[l.s].n);
+    });
+  }
+
+  links.forEach(l => {
+    const a = nodes[l.s], b = nodes[l.t];
+    const on = focus && (a.n === focus.n || b.n === focus.n);
+    ctx.strokeStyle = on ? 'rgba(76,139,245,.85)' : (focus ? 'rgba(38,45,58,.35)' : 'rgba(38,45,58,.9)');
+    ctx.lineWidth = (on ? 1.6 : 0.8) / view.k;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  });
+
+  nodes.forEach(n => {
+    const dim = focus && !near.has(n.n);
+    ctx.fillStyle = colorOf(n.m, dim);
+    ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7); ctx.fill();
+    if (selected && n.n === selected.n){
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 / view.k; ctx.stroke();
+    }
+    if (view.k > 0.55 || n.r > 9 || (focus && near.has(n.n))){
+      ctx.fillStyle = dim ? 'rgba(139,151,168,.25)' : '#e6edf3';
+      ctx.font = (11 / view.k) + 'px "Segoe UI",sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(n.n.replace(/(System|Service)$/, ''), n.x, n.y - n.r - 4 / view.k);
+    }
+  });
+}
+
+function at(px, py){
+  const x = (px - view.x) / view.k, y = (py - view.y) / view.k;
+  let best = null, bd = 1e9;
+  nodes.forEach(n => {
+    const d = (n.x - x) ** 2 + (n.y - y) ** 2;
+    if (d < bd && d < (n.r + 8) ** 2){ bd = d; best = n; }
+  });
+  return best;
+}
+
+function focusNode(name){
+  selected = nodes.find(n => n.n === name) || null;
+  if (selected){
+    view.k = Math.max(view.k, 0.9);
+    view.x = cv.width/2 - 215 - selected.x * view.k;
+    view.y = cv.height/2 - selected.y * view.k;
+  }
+  draw();
+}
+
+let drag = null;
+cv.onmousedown = e => drag = {x:e.clientX, y:e.clientY, vx:view.x, vy:view.y, moved:false};
+window.onmouseup = e => {
+  if (drag && !drag.moved){
+    const n = at(e.clientX - cv.getBoundingClientRect().left, e.clientY - cv.getBoundingClientRect().top);
+    if (n) openModule(n.n);
+    else { selected = null; q('#panel').classList.remove('on'); draw(); }
+  }
+  drag = null;
+};
+cv.onmousemove = e => {
+  const r = cv.getBoundingClientRect();
+  if (drag){
+    if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 3) drag.moved = true;
+    view.x = drag.vx + (e.clientX - drag.x); view.y = drag.vy + (e.clientY - drag.y);
+    draw(); return;
+  }
+  const n = at(e.clientX - r.left, e.clientY - r.top);
+  if (n !== hover){ hover = n; cv.style.cursor = n ? 'pointer' : 'grab'; draw(); }
+};
+cv.onwheel = e => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const k = Math.min(3, Math.max(0.15, view.k * (e.deltaY < 0 ? 1.12 : 0.89)));
+  view.x = mx - (mx - view.x) * k / view.k; view.y = my - (my - view.y) * k / view.k;
+  view.k = k; draw();
+};
+q('#mapFilters').onclick = e => {
+  if (e.target.tagName !== 'BUTTON') return;
+  mapFilter = e.target.dataset.f;
+  q('#mapFilters').querySelectorAll('button').forEach(b => b.classList.toggle('on', b === e.target));
+  selected = null; q('#panel').classList.remove('on');
+  buildGraph();
+};
+
+function resizeCanvas(){
+  const r = q('#mapWrap').getBoundingClientRect();
+  cv.width = r.width - (q('#panel').classList.contains('on') ? 430 : 0);
+  cv.height = r.height;
+  draw();
+}
+window.onresize = () => { if (current === 'map') resizeCanvas(); };
+
+/* --------------------------------------------------------------- запуск */
+overview(); modules(); commands(); settings(); dataView();
+cv.width = window.innerWidth; cv.height = window.innerHeight - 50;
+buildGraph();
+</script>
+</body>
+</html>
