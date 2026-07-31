@@ -322,9 +322,27 @@ def business_type_names():
     return [{"key": n, "title": titles.get(n, n)} for n in names]
 
 
+def collect_bus_route():
+    """Маршрут автобуса — таблица RouteNode в коде работы, а не контент сервера.
+    Кольцевой: после последнего чекпоинта снова первый."""
+    path = os.path.join(SRC, "Systems", "BusJobSystem", "BusJobSystem.cpp")
+    if not os.path.exists(path):
+        return []
+    block = re.search(r"RouteNode\s+ROUTE\[[^\]]*\]\s*=\s*\{(.+?)\n\};", read(path), re.S)
+    if not block:
+        return []
+    nodes = []
+    for x, y, _z, stop in re.findall(
+            r"\{\s*\{\s*(-?[\d.]+)f\s*,\s*(-?[\d.]+)f\s*,\s*(-?[\d.]+)f\s*\}\s*,\s*(true|false)\s*\}",
+            block.group(1)):
+        nodes.append({"x": float(x), "y": float(y), "stop": stop == "true"})
+    return nodes
+
+
 def collect_world():
     """Точки мира для карты: дома и бизнесы — дев-контент из json сервера."""
-    world = {"houses": [], "businesses": [], "businessTypes": business_type_names(), "places": []}
+    world = {"houses": [], "businesses": [], "businessTypes": business_type_names(), "places": [],
+             "busRoute": collect_bus_route()}
 
     catalog = os.path.join(SRC, "Services", "PlaceCatalogService", "PlaceCatalogService.cpp")
     if os.path.exists(catalog):
@@ -407,9 +425,9 @@ def main():
              sum(len(m["commands"]) for m in modules.values()),
              sum(len(m["constants"]) for m in modules.values()),
              len(tables), len(docs)))
-    print("на карте: домов %d, бизнесов %d, ориентиров %d"
+    print("на карте: домов %d, бизнесов %d, ориентиров %d, чекпоинтов автобуса %d"
           % (len(payload["world"]["houses"]), len(payload["world"]["businesses"]),
-             len(payload["world"]["places"])))
+             len(payload["world"]["places"]), len(payload["world"]["busRoute"])))
     print("записано: " + os.path.relpath(OUT, ROOT).replace("\\", "/"))
     return 0
 

@@ -145,6 +145,7 @@ input.search:focus{outline:none;border-color:var(--core)}
           <button data-f="houses" class="on">дома</button>
           <button data-f="businesses" class="on">бизнесы</button>
           <button data-f="places" class="on">ориентиры</button>
+          <button data-f="bus" class="on">маршрут автобуса</button>
         </div>
         <div class="filters" style="margin-top:8px">
           <button id="wFit">вписать объекты</button>
@@ -167,7 +168,7 @@ input.search:focus{outline:none;border-color:var(--core)}
   <section class="view" id="v-data"></section>
 </main>
 
-<script src="data.js?v=20260731151639"></script>
+<script src="data.js?v=20260731202638"></script>
 <script>
 const A = window.ARCH;
 const MOD = {}; A.modules.forEach(m => MOD[m.name] = m);
@@ -598,7 +599,7 @@ window.onresize = () => {
 const W = A.world || {houses:[], businesses:[], places:[], businessTypes:[]};
 const WORLD = 3000;
 const wcv = q('#wcv'), wctx = wcv.getContext('2d');
-let wview = {x:0, y:0, k:0.1}, wshow = {houses:true, businesses:true, places:true};
+let wview = {x:0, y:0, k:0.1}, wshow = {houses:true, businesses:true, places:true, bus:true};
 let wdrag = null, whover = null;
 // Затемнение подложки. Живёт в localStorage: подобрал один раз — держится.
 let dim = 0.45;
@@ -615,6 +616,7 @@ const REGIONS = [
   ['Fort Carson', -200, 1200, 0], ['Las Payasadas', -200, 2500, 0], ['Montgomery', 1300, 300, 0],
 ];
 const TYPE_COLOURS = ['#f5a04c', '#4c8bf5', '#7ee787', '#d2a8ff'];
+const BUS_COLOUR = '#ffd60a';
 
 // Подложка. Настоящей карты игры в репозитории нет и быть не должно (это ассет игры),
 // поэтому по умолчанию рисуем схему. Положите рядом map.jpg или map.png — приложение
@@ -645,6 +647,11 @@ function worldItems(){
     lines:['Госцена: ' + fmtMoney(b.price), 'В копилке: ' + fmtMoney(b.balance)]}));
   if (wshow.places) W.places.forEach(p => out.push({
     kind:'place', x:p.x, y:p.y, colour:'#8b97a8', title:p.name, lines:[]}));
+  // Наводиться даём только на ОСТАНОВКИ: рядовых чекпоинтов полсотни, и все они
+  // перехватывали бы курсор у домов и бизнесов.
+  if (wshow.bus) (W.busRoute || []).forEach((n, i) => { if (n.stop) out.push({
+    kind:'stop', x:n.x, y:n.y, colour:BUS_COLOUR,
+    title:'Остановка автобуса', lines:['Чекпоинт маршрута #' + (i + 1)]}); });
   return out;
 }
 const fmtMoney = v => (v || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.') + '$';
@@ -694,6 +701,9 @@ function drawWorld(){
             big ? 15 : 11, 'center', big ? '600 ' : ''));
   }
 
+  // Маршрут — ПОД метками: он фон для них, а не наоборот.
+  if (wshow.bus) drawBusRoute();
+
   // Метки рисуем в ЭКРАННОМ размере: при любом зуме они одинаково читаемы.
   const items = worldItems();
   items.forEach(it => {
@@ -716,7 +726,35 @@ function drawWorld(){
   q('#worldStats').innerHTML =
     'домов: <b style="color:#3fb950">' + W.houses.length + '</b> · ' +
     'бизнесов: <b style="color:#f5a04c">' + W.businesses.length + '</b>' +
+    ((W.busRoute || []).length ? ' · маршрут: <b style="color:' + BUS_COLOUR + '">' +
+      W.busRoute.length + '</b> чекпоинтов, <b style="color:' + BUS_COLOUR + '">' +
+      W.busRoute.filter(n => n.stop).length + '</b> остановок' : '') +
     (mapImg ? '' : '<br>подложка схематичная: положите map.jpg рядом с index.html');
+}
+
+// Маршрут автобуса: замкнутая линия по чекпоинтам плюс точки на них. Тёмная подложка
+// под линией — чтобы жёлтое читалось и на песке, и на воде.
+function drawBusRoute(){
+  const route = W.busRoute || [];
+  if (route.length < 2) return;
+
+  const path = () => {
+    wctx.beginPath();
+    route.forEach((n, i) => i ? wctx.lineTo(wx(n.x), wy(n.y)) : wctx.moveTo(wx(n.x), wy(n.y)));
+    wctx.closePath();   // маршрут кольцевой: после последнего снова первый
+  };
+  wctx.lineJoin = wctx.lineCap = 'round';
+  path(); wctx.strokeStyle = 'rgba(0,0,0,.55)'; wctx.lineWidth = 5.5; wctx.stroke();
+  path(); wctx.strokeStyle = BUS_COLOUR; wctx.lineWidth = 2.5; wctx.stroke();
+
+  // Рядовые чекпоинты — мелкие точки; остановки рисуются отдельно, как метки.
+  route.forEach(n => {
+    if (n.stop) return;
+    const x = wx(n.x), y = wy(n.y);
+    wctx.beginPath(); wctx.arc(x, y, 2.6, 0, 7);
+    wctx.fillStyle = BUS_COLOUR; wctx.fill();
+    wctx.strokeStyle = 'rgba(0,0,0,.6)'; wctx.lineWidth = 1; wctx.stroke();
+  });
 }
 
 // Иконки: домик — коробка с двускатной крышей, бизнес — витрина с маркизой.
@@ -727,6 +765,22 @@ function drawPin(x, y, it, on){
   wctx.shadowColor = 'rgba(0,0,0,.75)'; wctx.shadowBlur = 5;
   wctx.fillStyle = it.colour;
   wctx.strokeStyle = 'rgba(0,0,0,.55)'; wctx.lineWidth = 1;
+
+  if (it.kind === 'stop'){
+    // Остановка — знак на столбике: круг с буквой «А».
+    wctx.beginPath(); wctx.arc(0, -h*0.3, w*0.45, 0, 7);
+    wctx.fill(); wctx.stroke();
+    wctx.shadowBlur = 0;
+    wctx.fillStyle = 'rgba(0,0,0,.75)';
+    wctx.font = '600 ' + (9 * s) + 'px "Segoe UI",sans-serif';
+    wctx.textAlign = 'center';
+    wctx.fillText('А', 0, -h*0.3 + 3.2 * s);
+    wctx.restore();
+    wctx.fillStyle = it.colour;
+    wctx.beginPath(); wctx.moveTo(x, y); wctx.lineTo(x - 2.5*s, y - 5*s); wctx.lineTo(x + 2.5*s, y - 5*s);
+    wctx.closePath(); wctx.fill();
+    return;
+  }
 
   if (it.kind === 'house'){
     wctx.beginPath();                       // крыша
@@ -763,7 +817,9 @@ function worldAt(px, py){
 }
 
 function fitWorld(objectsOnly){
-  const items = objectsOnly ? worldItems().filter(i => i.kind !== 'place') : [];
+  // Вписываем по домам и бизнесам: ориентиры и маршрут раскиданы широко и увели бы
+  // кадр от того, ради чего карту открывают.
+  const items = objectsOnly ? worldItems().filter(i => i.kind === 'house' || i.kind === 'biz') : [];
   const r = q('#worldWrap').getBoundingClientRect();
   if (!items.length){
     wview.k = Math.min(r.width, r.height) / (2 * WORLD) * 0.92;
@@ -827,7 +883,8 @@ q('#worldLegend').innerHTML =
   '<div><i style="background:#3fb950"></i>дом</div>' +
   W.businessTypes.map((t, i) => '<div><i style="background:' + TYPE_COLOURS[i % TYPE_COLOURS.length] +
     '"></i>' + esc(t.title) + '</div>').join('') +
-  '<div><i style="background:#8b97a8"></i>ориентир</div>';
+  '<div><i style="background:#8b97a8"></i>ориентир</div>' +
+  ((W.busRoute || []).length ? '<div><i style="background:' + BUS_COLOUR + '"></i>маршрут автобуса</div>' : '');
 
 let worldFitted = false;
 function resizeWorld(){
