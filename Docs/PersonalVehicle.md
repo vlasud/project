@@ -149,13 +149,14 @@ out = nullptr)` — зовёт `ParkingSystem` с СЕРВЕРНЫМИ коор�
 
 Пока машина припаркована, во владении `vehicleId == -1` — Personal сам по себе её
 экземпляра не видит, а `/car`/парковка берут live id из
-`ParkedVehicleService::byDbId(dbId)->vehicleId` (иначе показали бы «на парковке»,
-хотя машина стоит у дома).
+`ParkedVehicleService::byDbId(dbId)->vehicleId` (иначе показали бы «на парковке», хотя
+машина стоит у дома вызванной). Не вызванная припаркованная в мире вообще не существует
+— её статус «в гараже» (см. `Docs/ParkedVehicles.md`).
 
 **Непересечение с деспавном припаркованных.** На конце сессии владельца `reset`
 уничтожает ТОЛЬКО сессионные Personal-экземпляры (`vehicleId != -1`), а
-`ParkedVehicleSystem::onOwnerOffline` — Parked-экземпляры личных припаркованных (их
-`vehicleId` лежит в записи `Parked`, во владении он `-1` после `detach`). Наборы
+`ParkedVehicleSystem::onCallerOffline` — Parked-экземпляры машин, которые этот аккаунт
+ВЫЗВАЛ (их `vehicleId` лежит в записи `Parked`, во владении он `-1` после `detach`). Наборы
 `vehicleId` НЕ пересекаются; порядок между `PersonalVehicleSystem` и
 `ParkedVehicleSystem` на конце сессии некритичен, двойного `destroy` одного id нет.
 

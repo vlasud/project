@@ -2,6 +2,7 @@
 
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/VehicleService/VehicleModelNames.h"
+#include "Services/ParkedVehicleService/ParkedVehicleCallNotice.h"
 #include "Services/ParkedVehicleService/ParkedVehicleRow.h"
 #include "Systems/Core/VehicleControlSystem/VehicleEngineNotice.h"
 #include "Services/Core/PlayerDialogService/MakeDialog.h"
@@ -170,7 +171,8 @@ void CarMenuSystem::toggleEngine(IPlayer &player, int carIndex, MenuOrigin origi
     // бы невыполнимой) vs в мире, но игрок не внутри.
     if (liveVehicleId(owned[carIndex].vehicleId, owned[carIndex].dbId) == -1)
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Эта машина на парковке. Возьмите её, чтобы управлять"));
+        player.sendClientMessage(ERROR_COLOUR,
+                                 u(fmt::format("{}, чтобы управлять", noInstanceHint(owned[carIndex].dbId))));
         showCarMenu(player, carIndex, origin);
         return;
     }
@@ -218,7 +220,8 @@ void CarMenuSystem::toggleLights(IPlayer &player, int carIndex, MenuOrigin origi
     }
     if (liveVehicleId(owned[carIndex].vehicleId, owned[carIndex].dbId) == -1)
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Эта машина на парковке. Возьмите её, чтобы управлять"));
+        player.sendClientMessage(ERROR_COLOUR,
+                                 u(fmt::format("{}, чтобы управлять", noInstanceHint(owned[carIndex].dbId))));
         showCarMenu(player, carIndex, origin);
         return;
     }
@@ -251,7 +254,8 @@ void CarMenuSystem::toggleLock(IPlayer &player, int carIndex, MenuOrigin origin)
     const int liveId = liveVehicleId(owned[carIndex].vehicleId, owned[carIndex].dbId);
     if (liveId == -1)
     {
-        player.sendClientMessage(ERROR_COLOUR, u("Эта машина на парковке. Возьмите её, чтобы управлять"));
+        player.sendClientMessage(ERROR_COLOUR,
+                                 u(fmt::format("{}, чтобы управлять", noInstanceHint(owned[carIndex].dbId))));
         showCarMenu(player, carIndex, origin);
         return;
     }
@@ -326,8 +330,9 @@ std::vector<CarMenuSystem::Action> CarMenuSystem::buildActions(int /*playerId*/,
     // Набор сейчас статичен (параметры не используются) — сверка «набор изменился»
     // в обработчике клика недостижима и оставлена как шов под будущий динамический
     // набор (паттерн FamilySystem::showMenu).
-    return {Action::Engine,  Action::Lights, Action::Lock,          Action::Respawn,
-            Action::ShowOnMap, Action::ParkHere, Action::Unpark, Action::ShareToFamily};
+    return {Action::Engine,    Action::Lights,   Action::Lock,   Action::Call,
+            Action::Respawn,   Action::ShowOnMap, Action::ParkHere, Action::Unpark,
+            Action::ShareToFamily};
 }
 
 void CarMenuSystem::showCarMenu(IPlayer &player, int carIndex, MenuOrigin origin)
@@ -351,6 +356,8 @@ void CarMenuSystem::showCarMenu(IPlayer &player, int carIndex, MenuOrigin origin
     const bool locked = live && m_lockService.isLocked(liveId);
     const int mode = dbId != -1 ? m_parkedService.parkedMode(dbId) : ParkedVehicleService::NOT_PARKED;
     const bool shared = mode != ParkedVehicleService::NOT_PARKED && mode != FamilyService::NO_FAMILY;
+    // Вызвана ли она СЕЙЧАС этим игроком — только для лейбла.
+    const bool called = dbId != -1 && m_parkedService.calledBy(dbId) == m_sessionService.getAccountId(playerId);
 
     const std::vector<Action> actions = buildActions(playerId, carIndex);
     std::string body;
@@ -366,6 +373,10 @@ void CarMenuSystem::showCarMenu(IPlayer &player, int carIndex, MenuOrigin origin
             break;
         case Action::Lock:
             body += locked ? "Открыть двери\n" : "Закрыть двери\n";
+            break;
+        case Action::Call:
+            // Лейбл показывает состояние, но прав не даёт: гейт — в обработчике.
+            body += called ? "Вызвать заново\n" : "Вызвать машину\n";
             break;
         case Action::Respawn:
             body += "Респавн\n";
@@ -439,6 +450,9 @@ void CarMenuSystem::showCarMenu(IPlayer &player, int carIndex, MenuOrigin origin
             case Action::Lock:
                 toggleLock(*player, carIndex, origin);
                 break;
+            case Action::Call:
+                callCar(*player, carIndex);
+                break;
             case Action::Respawn:
                 respawnAction(*player, carIndex);
                 break;
@@ -456,6 +470,33 @@ void CarMenuSystem::showCarMenu(IPlayer &player, int carIndex, MenuOrigin origin
                 break;
             }
         });
+}
+
+void CarMenuSystem::callCar(IPlayer &player, int carIndex)
+{
+    const int playerId = player.getID();
+    const std::vector<PersonalVehicleService::OwnedVehicle> &owned = m_personalService.owned(playerId);
+    if (carIndex < 0 || carIndex >= static_cast<int>(owned.size()))
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("Эта машина больше недоступна"));
+        return;
+    }
+    const long long dbId = owned[carIndex].dbId;
+    if (dbId == -1)
+    {
+        player.sendClientMessage(ERROR_COLOUR, u("У этой машины нет места парковки"));
+        return;
+    }
+
+    // Снимок водителя ДО вызова: повторный вызов уже вызванной машины подаёт её на
+    // место и отказывает под сидящим водителем — по этому снимку отказ различает
+    // «за рулём сам нажавший» и «чужой водитель».
+    const ParkedVehicleService::Parked *rec = m_parkedService.byDbId(dbId);
+    const int driverId = rec && rec->vehicleId != -1 ? m_vehicleService.getDriver(rec->vehicleId) : -1;
+    // accountId серверный (из сессии) — клиенту не верим; сервис им же и гейтит.
+    // Текст ответа общий с /family «Транспорт семьи» (ParkedVehicleCall).
+    ParkedVehicleCall::reply(player, m_parkedService.call(dbId, m_sessionService.getAccountId(playerId)),
+                             INFO_COLOUR, ERROR_COLOUR, driverId);
 }
 
 void CarMenuSystem::respawnAction(IPlayer &player, int carIndex)
@@ -520,7 +561,9 @@ void CarMenuSystem::respawnAction(IPlayer &player, int carIndex)
         break;
     }
     case ParkedVehicleService::Result::NoInstance:
-        player.sendClientMessage(ERROR_COLOUR, u("Машина сейчас недоступна"));
+        // Штатное состояние припаркованной: её не вызывали, в мире машины нет —
+        // возвращать на точку нечего, вызов и есть «подать машину на место».
+        player.sendClientMessage(ERROR_COLOUR, u("Эта машина в гараже — вызовите её, и она приедет на своё место"));
         break;
     default:
         player.sendClientMessage(ERROR_COLOUR, u("Сейчас нельзя вернуть машину, попробуйте позже"));
@@ -616,15 +659,18 @@ void CarMenuSystem::parkHere(IPlayer &player, int carIndex)
     // b) spawn-позиция = текущая точка: death-респавн ядра вернёт машину сюда.
     m_vehicleService.setSpawnPosition(*veh, spot, angle);
     // c) запись парковки (память + write-through INSERT, с реальным fuel) + связь с
-    // живым экземпляром = ТЕМ ЖЕ liveVehicleId (машину не создаём).
-    m_parkedService.park(dbId, session->accountId, model, spot, angle, fuel);
-    m_parkedService.setVehicleId(dbId, liveVehicleId);
+    // живым экземпляром = ТЕМ ЖЕ liveVehicleId (машину не создаём). park помечает
+    // запись вызванной владельцем: машина стоит здесь, пока он в игре, а на выходе
+    // уходит из мира — у точки парковки никто не ждёт.
+    m_parkedService.park(dbId, session->accountId, model, spot, angle, fuel, liveVehicleId);
     // d) КРИТИЧНО: отвязать от сессионного трекинга Personal (vehicleId владения -> -1),
     // иначе reset на дисконнекте владельца уничтожит припаркованную машину. Без destroy.
     m_personalService.detach(dbId);
 
-    player.sendClientMessage(INFO_COLOUR,
-                             u("Машина припаркована у вашего дома. Она останется здесь и будет ждать вас"));
+    player.sendClientMessage(
+        INFO_COLOUR,
+        u("Машина припаркована у вашего дома. После вашего выхода она уедет в гараж — вызвать её на это место "
+          "можно через /car"));
 }
 
 void CarMenuSystem::unpark(IPlayer &player, int carIndex)
@@ -652,8 +698,9 @@ void CarMenuSystem::unpark(IPlayer &player, int carIndex)
     IVehicle *veh = carId != -1 ? m_vehicleService.get(carId) : nullptr;
     if (!veh)
     {
-        // Экземпляр пропал (внешний destroy между показом меню и кликом) — вернуть
-        // машину в мир нечем. Переносим последний известный снимок fuel записи в
+        // Машины нет в мире — обычное состояние припаркованной, пока её не вызвали
+        // (и редкий случай внешнего destroy между показом меню и кликом): ре-тегать
+        // на месте нечего. Переносим последний известный снимок fuel записи в
         // владение (иначе следующий спавн через центральную парковку взял бы
         // устаревший entry.fuel, каким он был ДО парковки у дома). Снимаем только
         // запись (владение и так в гараже, vehicleId=-1); на следующем заходе игрок
@@ -806,6 +853,14 @@ int CarMenuSystem::liveVehicleId(int ownedVehicleId, long long dbId) const
     return -1;
 }
 
+const char *CarMenuSystem::noInstanceHint(long long dbId) const
+{
+    // Припаркованная у дома в мире не ждёт — её надо вызвать; неприпаркованная
+    // личная стоит на центральной парковке, её берут там.
+    return dbId != -1 && m_parkedService.isParked(dbId) ? "Эта машина в гараже. Вызовите её"
+                                                        : "Эта машина на парковке. Возьмите её";
+}
+
 void CarMenuSystem::showOnMap(IPlayer &player, int carIndex)
 {
     const int playerId = player.getID();
@@ -822,8 +877,9 @@ void CarMenuSystem::showOnMap(IPlayer &player, int carIndex)
     if (vehicleId == -1)
     {
         // Владение есть, но машина не в мире — отметить нечего.
-        player.sendClientMessage(ERROR_COLOUR,
-                                 u("Эта машина на парковке. Возьмите её, чтобы отметить на карте"));
+        player.sendClientMessage(
+            ERROR_COLOUR,
+            u(fmt::format("{}, чтобы отметить на карте", noInstanceHint(owned[carIndex].dbId))));
         return;
     }
 

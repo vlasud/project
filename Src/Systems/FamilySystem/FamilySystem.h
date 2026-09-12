@@ -65,7 +65,8 @@ class FamilySystem : public BaseSystem
     const FamilyService::Mem *memberByAccount(int playerId, FamilyService::AccountId targetAccount) const;
     // Онлайн — актуальный «Ник[id]», оффлайн — чищенный снимок Mem::name.
     std::string memberDisplayName(FamilyService::AccountId targetAccount, const FamilyService::Mem &member) const;
-    // 3: список расшаренных семье машин (формат /car «Мои машины», read-only).
+    // 3: список расшаренных семье машин (формат /car «Мои машины»); выбор строки —
+    // вызов машины к её месту парковки (единственный вход в вызов для члена семьи).
     void showVehicles(IPlayer &player);
     // 4: приглашение по id — только лидер.
     void showInviteInput(IPlayer &player);
@@ -92,7 +93,7 @@ class FamilySystem : public BaseSystem
     PlayerSessionService &m_sessionService;
     PlayerDialogService &m_dialogService;
     PlayerChatService &m_chatService;
-    ParkedVehicleService &m_parkedService; // семейный парк (просмотр списка, read-only)
+    ParkedVehicleService &m_parkedService; // семейный парк (список + вызов машины членом семьи)
     VehicleService &m_vehicleService;      // для ParkedVehicleRow::build (топливо/водитель)
     ScreenNoticeService &m_screenNotice;   // праздничный попап создания семьи
 };

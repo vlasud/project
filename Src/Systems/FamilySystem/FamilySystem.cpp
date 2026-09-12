@@ -3,6 +3,7 @@
 #include "Database/DatabaseManager.h"
 #include "Log/LogManager.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
+#include "Services/ParkedVehicleService/ParkedVehicleCallNotice.h"
 #include "Services/ParkedVehicleService/ParkedVehicleRow.h"
 #include "Services/Core/PlayerDialogService/MakeDialog.h"
 #include "Utils/Encoding/Encoding.h"
@@ -642,9 +643,11 @@ void FamilySystem::showVehicles(IPlayer &player)
     }
 
     // Формат /car «Мои машины» (TABLIST_HEADERS «Машина | Где находится | Топливо»,
-    // общий builder — см. ParkedVehicleRow.h), но READ-ONLY: выбор строки ничего не
-    // делает. «Забрать» доступа семьи — только у владельца МАШИНЫ через /car ->
-    // «Вернуть от семьи» (см. Docs/ParkedVehicles.md).
+    // общий builder — см. ParkedVehicleRow.h). Выбор строки = ВЫЗОВ машины к её
+    // месту парковки: расшаренная машина в мире тоже не ждёт, член семьи получает
+    // её только по вызову — это его единственный вход в вызов (в /car чужие машины
+    // не показываются). Снять шеринг («Вернуть от семьи») по-прежнему может только
+    // владелец МАШИНЫ через /car (см. Docs/ParkedVehicles.md).
     std::string body = "Машина\tГде находится\tТопливо\n";
     for (const long long dbId : dbIds)
     {
@@ -657,13 +660,40 @@ void FamilySystem::showVehicles(IPlayer &player)
     if (!body.empty())
         body.pop_back();
 
-    m_dialogService.show(player, makeDialog(DialogStyle_TABLIST_HEADERS, "Транспорт семьи", body, "Назад", ""),
-                         [this, playerId](DialogResponse, int, StringView)
-                         {
-                             IPlayer *player = m_core.getPlayers().get(playerId);
-                             if (player)
-                                 showMenu(*player);
-                         });
+    // Снимок dbId строк уходит в обработчик КОПИЕЙ: порядок parkedOfFamily (обход
+    // multimap) между показом и кликом не гарантирован, а индекс из диалога должен
+    // указывать на ту машину, которую игрок видел в строке. Права всё равно
+    // проверяет сервис на каждом клике (call -> hasAccess по серверной сессии).
+    m_dialogService.show(
+        player, makeDialog(DialogStyle_TABLIST_HEADERS, "Транспорт семьи", body, "Вызвать", "Назад"),
+        [this, playerId, dbIds](DialogResponse response, int listItem, StringView)
+        {
+            IPlayer *player = m_core.getPlayers().get(playerId);
+            if (!player)
+                return;
+            if (response != DialogResponse_Left)
+            {
+                showMenu(*player);
+                return;
+            }
+            if (listItem < 0 || listItem >= static_cast<int>(dbIds.size()))
+            {
+                player->sendClientMessage(ERROR_COLOUR, u("Эта машина больше недоступна"));
+                showMenu(*player);
+                return;
+            }
+            // Снимок водителя ДО вызова: повторный вызов уже вызванной машины подаёт
+            // её на место и отказывает под сидящим водителем — отказ по снимку
+            // различает «за рулём сам нажавший» и «чужой водитель».
+            const ParkedVehicleService::Parked *rec = m_parkedService.byDbId(dbIds[listItem]);
+            const int driverId = rec && rec->vehicleId != -1 ? m_vehicleService.getDriver(rec->vehicleId) : -1;
+            // accountId серверный (из сессии) — клиенту не верим; гейт доступа
+            // (член той семьи, которой машина расшарена) делает сам сервис.
+            ParkedVehicleCall::reply(*player,
+                                     m_parkedService.call(dbIds[listItem], m_sessionService.getAccountId(playerId)),
+                                     INFO_COLOUR, ERROR_COLOUR, driverId);
+            showVehicles(*player); // список сразу показывает новый статус машины
+        });
 }
 
 // ------------------------------------------------------------------ 4: пригласить по нику

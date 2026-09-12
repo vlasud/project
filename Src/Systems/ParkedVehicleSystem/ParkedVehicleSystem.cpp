@@ -55,14 +55,11 @@ ParkedVehicleSystem::ParkedVehicleSystem(ICore &core, const ServiceRegister &ser
     // снимок (onUnsanctionedDeath), восстанавливаем его поверх дефолта.
     m_vehicleService.subscribeRespawned([this](IVehicle &vehicle) { onVehicleRespawned(vehicle); });
 
-    // Жизненный цикл ЛИЧНОГО экземпляра — по сессии владельца (не raw disconnect).
-    // Вход: его личные припаркованные появляются в мире на своих точках; расшаренные
-    // уже стоят (спавн на старте/переходе). Выход: личные исчезают (запись+БД целы ->
-    // респавн на следующем входе); расшаренные НЕ трогаем. Оба обработчика идемпотентны.
-    m_sessionService.subscribeStart(
-        [this](IPlayer &, const PlayerSessionService::Session &session) { onOwnerOnline(session.accountId); });
+    // Экземпляр живёт в мире ТОЛЬКО вызванным, поэтому на входе в игру не спавнится
+    // ничего: ни личные, ни расшаренные семье. На конце сессии снимаем вызовы этого
+    // игрока — его вызванные машины уходят из мира, записи и БД целы.
     m_sessionService.subscribeEnd(
-        [this](IPlayer &, const PlayerSessionService::Session &session) { onOwnerOffline(session.accountId); });
+        [this](IPlayer &, const PlayerSessionService::Session &session) { onCallerOffline(session.accountId); });
 
     // Переход режима доступа (share/unshare/крайние случаи флипают family_id внутри
     // сервиса) -> привести экземпляр к желаемому состоянию. Сервис нотифицирует, система
@@ -239,20 +236,15 @@ void ParkedVehicleSystem::loadParked()
                 // fuel клампится в сервисе (мусор из БД — NaN/отрицательное/сверх капасити).
                 m_parkedService.loadParked(dbId, owner, model, spot, ang, effectiveFamilyId,
                                           static_cast<float>(fuel));
-                // Приводим экземпляр к инвариату «в мире <=> семья ИЛИ владелец онлайн»
-                // через reconcile: расшаренная заводится всегда; личная — только если
-                // владелец УЖЕ онлайн (редкое стартовое окно, когда игрок вошёл ДО прихода
-                // async-загрузки parked; иначе его личная стояла бы «в гараже» до перезахода).
-                // Личная оффлайн-владельца остаётся деспавненной (заведётся на его входе).
-                // spawnInstance идемпотентен — двойного спавна семейных нет.
-                reconcile(dbId);
+                // Ничего не спавним: вызовы рантаймные, после рестарта сервера в мире
+                // не ждёт ни одна машина, пока владелец (или член семьи) её не вызовет.
             }
         },
         [](const std::string &error)
         { LogManager::log(Error, "ParkedVehicleSystem: failed to load parked vehicles: " + error); });
 }
 
-bool ParkedVehicleSystem::ownerOnline(ParkedVehicleService::AccountId accountId) const
+bool ParkedVehicleSystem::accountOnline(ParkedVehicleService::AccountId accountId) const
 {
     // playerByAccount — единственный источник правды об онлайне (обратный индекс сессий);
     // свой set<AccountId> не ведём (риск рассинхрона на двойном входе/перелогине, которые
@@ -317,8 +309,10 @@ void ParkedVehicleSystem::reconcile(long long dbId)
     {
         return;
     }
-    // Желаемое: расшаренная семье живёт всегда; личная — только пока владелец онлайн.
-    const bool desired = rec->familyId != FamilyService::NO_FAMILY || ownerOnline(rec->ownerAccountId);
+    // Желаемое: машина в мире, только пока она ВЫЗВАНА, а вызвавший в игре. Ни
+    // владение, ни шеринг семье сами по себе экземпляр в мире не держат — у места
+    // парковки никто не ждёт.
+    const bool desired = accountOnline(rec->calledBy);
     if (desired && rec->vehicleId == -1)
     {
         spawnInstance(dbId);
@@ -329,34 +323,14 @@ void ParkedVehicleSystem::reconcile(long long dbId)
     }
 }
 
-void ParkedVehicleSystem::onOwnerOnline(ParkedVehicleService::AccountId accountId)
+void ParkedVehicleSystem::onCallerOffline(ParkedVehicleService::AccountId accountId)
 {
-    // На subscribeStart аккаунт уже в m_online (сервис ставит его ДО прогона обсерверов),
-    // поэтому ownerOnline(accountId) уже true. Но фильтруем по NO_FAMILY и зовём спавн
-    // напрямую (расшаренные уже в мире, их не трогаем). parkedByAccount — копия vector,
-    // перебор не инвалидируется правками индексов.
-    for (const long long dbId : m_parkedService.parkedByAccount(accountId))
+    // КРИТИЧНО: на subscribeEnd аккаунт ещё в онлайн-индексе сессий, поэтому reconcile
+    // сам бы экземпляр не убрал — снимаем вызовы ЯВНО. clearCall правит запись и
+    // уведомляет reconcile, который и уничтожит экземпляр; запись и БД целы.
+    // calledByAccount — копия vector, перебор не инвалидируется правками записей.
+    for (const long long dbId : m_parkedService.calledByAccount(accountId))
     {
-        const ParkedVehicleService::Parked *rec = m_parkedService.byDbId(dbId);
-        if (rec && rec->familyId == FamilyService::NO_FAMILY)
-        {
-            spawnInstance(dbId); // личная владельца -> в мир (идемпотентно)
-        }
-    }
-}
-
-void ParkedVehicleSystem::onOwnerOffline(ParkedVehicleService::AccountId accountId)
-{
-    // КРИТИЧНО: на subscribeEnd аккаунт ещё в m_online (сервис делает erase ПОСЛЕ прогона
-    // end-обсерверов), значит ownerOnline(accountId) вернул бы true и reconcile НЕ деспавнил
-    // бы личную. Поэтому деспавним ЯВНО (не через reconcile). Расшаренные (family_id !=
-    // NO_FAMILY) не трогаем — они живут независимо от онлайна владельца.
-    for (const long long dbId : m_parkedService.parkedByAccount(accountId))
-    {
-        const ParkedVehicleService::Parked *rec = m_parkedService.byDbId(dbId);
-        if (rec && rec->familyId == FamilyService::NO_FAMILY)
-        {
-            despawnInstance(dbId); // личная владельца -> из мира, запись и БД целы
-        }
+        m_parkedService.clearCall(dbId);
     }
 }

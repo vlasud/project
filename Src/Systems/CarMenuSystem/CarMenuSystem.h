@@ -56,6 +56,7 @@ class CarMenuSystem : public BaseSystem
         Engine, // тумблеры: лейбл динамический по живому экземпляру
         Lights,
         Lock,
+        Call, // вызвать машину к её месту парковки (в мире она не ждёт)
         Respawn,
         ShowOnMap,
         ParkHere,
@@ -98,6 +99,9 @@ class CarMenuSystem : public BaseSystem
     void toggleEngine(IPlayer &player, int carIndex, MenuOrigin origin);
     void toggleLights(IPlayer &player, int carIndex, MenuOrigin origin);
     void toggleLock(IPlayer &player, int carIndex, MenuOrigin origin);
+    // «Вызвать машину»: припаркованная приезжает на своё место парковки (у точки
+    // она не ждёт — экземпляр живёт только пока вызвана). Расстояние роли не играет.
+    void callCar(IPlayer &player, int carIndex);
     // «Респавн»: вызванную (сессионную в мире) убирает на парковку (destroy); припаркованную
     // (у дома/в семье) возвращает на точку через ParkedVehicleService::respawnHome.
     void respawnAction(IPlayer &player, int carIndex);
@@ -109,6 +113,11 @@ class CarMenuSystem : public BaseSystem
     // Live vehicleId владения: у припаркованной — из parked-записи (владение detached,
     // vehicleId=-1); иначе — сессионный из owned. -1, если нигде не в мире. Bounds-safe.
     int liveVehicleId(int ownedVehicleId, long long dbId) const;
+
+    // Первая половина отказа «машины нет в мире»: путь к ней зависит от места —
+    // припаркованную у дома надо ВЫЗВАТЬ, обычную сессионную взять на парковке.
+    // Вторая половина («чтобы …») — у каждого пункта меню своя.
+    const char *noInstanceHint(long long dbId) const;
 
     PersonalVehicleService &m_personalService;
     VehicleService &m_vehicleService;

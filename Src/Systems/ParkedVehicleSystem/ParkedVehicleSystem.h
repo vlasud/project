@@ -84,7 +84,7 @@ class ParkedVehicleSystem : public BaseSystem
 
     // Онлайн ли аккаунт-владелец: резолв через PlayerSessionService (единственный
     // источник правды об онлайне). NO_ACCOUNT — не онлайн. O(1).
-    bool ownerOnline(ParkedVehicleService::AccountId accountId) const;
+    bool accountOnline(ParkedVehicleService::AccountId accountId) const;
 
     // Завести живой экземпляр записи, если его ещё нет (vehicleId != -1 -> no-op).
     // Служебный ownerId тега -1 (доступ — canDrive по записи). Применяет персистентный
@@ -95,7 +95,7 @@ class ParkedVehicleSystem : public BaseSystem
     // vehicleId -> -1. Порядок: setVehicleId(-1) ДО destroy (destroyed-наблюдатель
     // no-op). Идемпотентно (нет экземпляра -> no-op).
     void despawnInstance(long long dbId);
-    // Единая точка приведения: desired = (family_id != NO_FAMILY) || ownerOnline; спавн
+    // Единая точка приведения: desired = машина вызвана И вызвавший в игре; спавн
     // при desired && vehicleId==-1, деспавн при !desired && vehicleId!=-1.
     void reconcile(long long dbId);
 
@@ -105,8 +105,7 @@ class ParkedVehicleSystem : public BaseSystem
 
     // Вход/выход владельца: спавн/деспавн его ЛИЧНЫХ (NO_FAMILY) записей. Расшаренные
     // семье НЕ трогаются (живут независимо от онлайна владельца).
-    void onOwnerOnline(ParkedVehicleService::AccountId accountId);
-    void onOwnerOffline(ParkedVehicleService::AccountId accountId);
+    void onCallerOffline(ParkedVehicleService::AccountId accountId);
 
     ParkedVehicleService &m_parkedService;
     VehicleService &m_vehicleService;

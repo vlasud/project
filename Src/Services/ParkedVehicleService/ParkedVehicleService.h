@@ -19,7 +19,8 @@ class ParkedVehicleSystem;
 // разновидности — один тег VehicleService (Owner::Parked); собственность остаётся у
 // аккаунта (запись personal_vehicle НЕ трогается). Персист в parked_vehicle
 // (write-through), грузится на старте СТРОГО после семей (семьи нужны для гейта
-// РАСШАРЕННЫХ) и спавнится у дома независимо от онлайна владельца.
+// РАСШАРЕННЫХ). Живой экземпляр у точки НЕ ждёт никого: он существует только пока
+// машина ВЫЗВАНА (call) и уходит из мира, когда вызвавший вышел.
 //
 // Живой экземпляр в мире — Owner::Parked. При смерти он НЕ уничтожается
 // (PersonalVehicleSystem::onVehicleDied трогает только Owner::Player), ядро само
@@ -57,6 +58,10 @@ class ParkedVehicleService final : public IService
         // заспавнен — источник правды VehicleService::getFuel(vehicleId), это поле
         // лишь снимок на момент последнего сохранения (перед despawn/детонацией).
         float fuel = VehicleService::FUEL_CAPACITY;
+        // Кто вызвал машину к месту парковки. NO_ACCOUNT — не вызвана, и тогда
+        // живого экземпляра в мире НЕТ. Состояние РАНТАЙМНОЕ и в БД не уходит:
+        // после рестарта сервера в мире не ждёт ничего, пока не вызовут заново.
+        AccountId calledBy = PlayerSessionService::NO_ACCOUNT;
     };
 
     // Итог операции: код для сообщения вызывающему (тексты — в системе).
@@ -69,7 +74,8 @@ class ParkedVehicleService final : public IService
         NotShared,     // при unshareFromFamily: не расшарена (familyId == NO_FAMILY)
         Invalid,       // невалидный dbId/сервис не связан
         NoInstance,    // при respawnHome: экземпляр сейчас не в мире (vehicleId == -1)
-        Occupied       // при respawnHome: за рулём есть водитель — респавн под ним недопустим
+        Occupied,      // при respawnHome: за рулём есть водитель — респавн под ним недопустим
+        NoAccess       // при call: вызывающий не владелец и не член семьи-получателя
     };
 
     // Привязать зависимости (реестр создаёт сервис дефолтным ctor; bind — в
@@ -86,11 +92,16 @@ class ParkedVehicleService final : public IService
 
     // --- операции (write-through в parked_vehicle) ---
     // Припарковать машину лично (familyId=NO_FAMILY): регистрирует Parked в памяти +
-    // INSERT. Живой экземпляр (create Owner::Parked) заводит система и связывает
-    // setVehicleId. fuel — снимок остатка бака НА МОМЕНТ парковки (живой экземпляр
-    // ре-тегается НА МЕСТЕ, не пересоздаётся — топливо у него уже то, что наездил
-    // игрок; INSERT обязан записать РЕАЛЬНЫЙ остаток, не дефолт БД).
-    Result park(long long dbId, AccountId owner, int model, Vector3 spot, float angle, float fuel);
+    // INSERT и сразу связывает запись с ЖИВЫМ экземпляром liveVehicleId, который
+    // игрок только что пригнал (парковка = ре-тег НА МЕСТЕ, машину не создаём).
+    // Экземпляр уже стоит у точки, поэтому запись помечается ВЫЗВАННОЙ владельцем:
+    // без этого calledBy == NO_ACCOUNT при живом vehicleId разошёлся бы с миром, и
+    // машина осталась бы ждать у точки после выхода владельца. Слот вызова один —
+    // прошлая вызванная владельцем машина снимается, как и при call(). fuel —
+    // снимок остатка бака НА МОМЕНТ парковки (топливо у экземпляра уже то, что
+    // наездил игрок; INSERT обязан записать РЕАЛЬНЫЙ остаток, не дефолт БД).
+    Result park(long long dbId, AccountId owner, int model, Vector3 spot, float angle, float fuel,
+                int liveVehicleId);
     // Убрать с парковки, УНИЧТОЖИВ живой экземпляр (через VehicleService): удаляет
     // Parked из памяти + DELETE строки. Для путей, где машина должна ИСЧЕЗНУТЬ вместе с
     // парковкой (напр. пул-очистка). Централизует «destroy + БД» — строка не осиротеет.
@@ -176,6 +187,34 @@ class ParkedVehicleService final : public IService
     // серверный, NO_ACCOUNT не проходит). Расшаренная — член семьи familyId. O(1).
     bool canDrive(int vehicleId, AccountId accountId) const;
 
+    // ---------------------------------------------------------------- вызов машины
+    //
+    // Машина у места парковки в мире НЕ ждёт: живой экземпляр существует только
+    // пока машина ВЫЗВАНА. Сервис правит состояние и уведомляет reconcile, а
+    // create/destroy делает система (у неё VehicleService и онлайн игроков).
+
+    // Вызвать машину к её месту парковки. Прежняя вызванная ЭТИМ ЖЕ игроком
+    // снимается безусловно — даже если в ней кто-то сидит (решение владельца).
+    // Вызывать может владелец, а расшаренную семье — любой член этой семьи;
+    // расстояние роли не играет (машина появляется на своей точке, не у игрока).
+    // Повторный вызов той же машины тем же игроком (она уже в мире) = ПОДАТЬ ЕЁ НА
+    // МЕСТО заново: делегирует в respawnHome (тот же путь, что «Респавн», с
+    // анти-абьюзом топлива), поэтому может вернуть Occupied — под сидящим водителем
+    // машину не выдёргиваем.
+    Result call(long long dbId, AccountId caller);
+
+    // Снять вызов: экземпляр уйдёт из мира на reconcile. Идемпотентно.
+    void clearCall(long long dbId);
+
+    // Кто вызвал машину (NO_ACCOUNT — не вызвана).
+    AccountId calledBy(long long dbId) const;
+
+    // Записи, вызванные этим аккаунтом (обычно ноль или одна).
+    std::vector<long long> calledByAccount(AccountId caller) const;
+
+    // Вправе ли аккаунт вызывать эту машину (то же правило, что у доступа за руль).
+    bool canCall(long long dbId, AccountId accountId) const;
+
     // --- крайние случаи (write-through UPDATE family_id) ---
     // Семья распущена: СНЯТЬ ШЕРИНГ у всех её машин (UPDATE family_id -> NO_FAMILY).
     // Машины ОСТАЮТСЯ припаркованы ЛИЧНО у дома (экземпляры не уничтожаются).
@@ -193,6 +232,16 @@ class ParkedVehicleService final : public IService
     void persistFamily(long long dbId, int familyId);
     // Прогнать m_reconcileObservers по dbId (после каждого флипа family_id).
     void notifyReconcile(long long dbId);
+
+    // Снять все вызовы аккаунта, кроме keepDbId: слот вызова у аккаунта ОДИН.
+    // Одно место на call() и park() (припаркованная на месте машина — тот же
+    // занятый слот). Прошлый экземпляр уничтожается безусловно, в т.ч. с людьми
+    // внутри — это решение вызвавшего.
+    void releaseOtherCalls(AccountId caller, long long keepDbId);
+
+    // Общее правило доступа: личную водит/вызывает только владелец, расшаренную —
+    // любой член семьи-получателя. Одно место на canDrive и canCall.
+    bool hasAccess(const Parked &parked, AccountId accountId) const;
 
     VehicleService *m_vehicleService = nullptr;
     FamilyService *m_familyService = nullptr;

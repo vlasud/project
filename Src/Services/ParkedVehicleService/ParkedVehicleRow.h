@@ -19,13 +19,16 @@ namespace ParkedVehicleRow
 // у своей точки) / «у дома семьи» (расшаренная стоит у точки — все семейные
 // машины стоят у дома лидера: шарит только лидер свою припаркованную, его дом и
 // есть «дом семьи»); «брошена» — припаркованная (любая) оставлена дальше
-// HOME_SPOT_RADIUS от точки; «на парковке» (не в мире) / «вызвана» (в мире,
-// сессионная).
+// HOME_SPOT_RADIUS от точки; «в гараже» — припаркованная НЕ вызвана (живого
+// экземпляра нет, у точки никто не ждёт); «на парковке» (не в мире) / «вызвана»
+// (в мире, сессионная).
 inline const char *placementStatus(const ParkedVehicleService &parked, long long dbId, int liveVehicleId)
 {
     const int mode = parked.parkedMode(dbId);
     if (mode == ParkedVehicleService::NOT_PARKED)
         return liveVehicleId == -1 ? "на парковке" : "вызвана";
+    if (liveVehicleId == -1)
+        return "в гараже"; // припаркованная, но не вызванная — в мире её нет
     if (parked.isAwayFromSpot(dbId))
         return "брошена";
     return mode == FamilyService::NO_FAMILY ? "у дома" : "у дома семьи";

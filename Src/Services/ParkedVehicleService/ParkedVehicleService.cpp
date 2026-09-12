@@ -60,7 +60,7 @@ void ParkedVehicleService::loadParked(long long dbId, AccountId owner, int model
 }
 
 ParkedVehicleService::Result ParkedVehicleService::park(long long dbId, AccountId owner, int model, Vector3 spot,
-                                                        float angle, float fuel)
+                                                        float angle, float fuel, int liveVehicleId)
 {
     if (dbId < 0 || !m_vehicleService)
     {
@@ -74,10 +74,27 @@ ParkedVehicleService::Result ParkedVehicleService::park(long long dbId, AccountI
     const float clampedFuel = clampParkedFuel(fuel);
     loadParked(dbId, owner, model, spot, angle, FamilyService::NO_FAMILY, clampedFuel); // те же индексы, что и на загрузке
 
+    // Машину НЕ создаём — привязываем тот же экземпляр, который игрок пригнал, и
+    // помечаем запись вызванной владельцем. Иначе живой экземпляр остался бы в мире
+    // с calledBy == NO_ACCOUNT: reconcile его не держит, снять на выходе владельца
+    // тоже некому (onCallerOffline идёт по вызовам) — машина ждала бы у точки, чего
+    // в этой модели быть не должно. reconcile здесь НЕ уведомляем: желаемое
+    // состояние уже достигнуто, а уведомление на связанном экземпляре — no-op.
+    setVehicleId(dbId, liveVehicleId);
+    const auto it = m_byDbId.find(dbId);
+    if (it == m_byDbId.end())
+    {
+        return Result::Invalid; // loadParked не взял запись (мусорный dbId уже отсечён выше)
+    }
+    it->second.calledBy = owner;
+    // Слот вызова один: прошлая вызванная машина владельца уходит из мира. Строго
+    // ПОСЛЕ пометки этой записи — иначе снялась бы она сама.
+    releaseOtherCalls(owner, dbId);
+
     // Write-through INSERT (family_id = NO_FAMILY: личная у дома). fuel — РЕАЛЬНЫЙ
     // снимок на момент парковки (машина ре-тегается НА МЕСТЕ, не пересоздаётся —
     // писать дефолт БД вместо наезженного остатка открыло бы бесплатную доливку).
-    // Ошибка БД лишь логируется (память уже обновлена, экземпляр создаст система).
+    // Ошибка БД лишь логируется (память уже обновлена, экземпляр уже в мире).
     // На следующем старте зеркало из БД либо подтвердит, либо снимет.
     DatabaseManager::throwQuery(
         [dbId, owner, model, spot, angle, clampedFuel](mysqlx::Schema schema)
@@ -389,18 +406,13 @@ const ParkedVehicleService::Parked *ParkedVehicleService::byVehicleId(int vehicl
     return parked != m_byDbId.end() ? &parked->second : nullptr;
 }
 
-bool ParkedVehicleService::canDrive(int vehicleId, AccountId accountId) const
+bool ParkedVehicleService::hasAccess(const Parked &parked, AccountId accountId) const
 {
-    const Parked *parked = byVehicleId(vehicleId);
-    if (!parked)
-    {
-        return true; // не наша (не Parked) машина — гейт доступа не наш
-    }
-    if (parked->familyId == FamilyService::NO_FAMILY)
+    if (parked.familyId == FamilyService::NO_FAMILY)
     {
         // Личная owner-only: только владелец. accountId серверный (из сессии); не
         // залогиненный (NO_ACCOUNT) не проходит даже если ownerAccountId битый.
-        return accountId != PlayerSessionService::NO_ACCOUNT && accountId == parked->ownerAccountId;
+        return accountId != PlayerSessionService::NO_ACCOUNT && accountId == parked.ownerAccountId;
     }
     if (!m_familyService)
     {
@@ -408,7 +420,110 @@ bool ParkedVehicleService::canDrive(int vehicleId, AccountId accountId) const
     }
     // Расшаренная: член семьи-получателя? familyByAccount работает и оффлайн-владельца
     // (m_accountFamily) — доступ не зависит от онлайна. O(1).
-    return m_familyService->familyByAccount(accountId) == parked->familyId;
+    return m_familyService->familyByAccount(accountId) == parked.familyId;
+}
+
+bool ParkedVehicleService::canDrive(int vehicleId, AccountId accountId) const
+{
+    const Parked *parked = byVehicleId(vehicleId);
+    if (!parked)
+    {
+        return true; // не наша (не Parked) машина — гейт доступа не наш
+    }
+    return hasAccess(*parked, accountId);
+}
+
+bool ParkedVehicleService::canCall(long long dbId, AccountId accountId) const
+{
+    const Parked *parked = byDbId(dbId);
+    return parked != nullptr && hasAccess(*parked, accountId);
+}
+
+ParkedVehicleService::AccountId ParkedVehicleService::calledBy(long long dbId) const
+{
+    const Parked *parked = byDbId(dbId);
+    return parked ? parked->calledBy : PlayerSessionService::NO_ACCOUNT;
+}
+
+std::vector<long long> ParkedVehicleService::calledByAccount(AccountId caller) const
+{
+    std::vector<long long> result;
+    if (caller == PlayerSessionService::NO_ACCOUNT)
+    {
+        return result;
+    }
+    // Машин у игрока единицы, вызванная обычно одна — линейный проход по записям
+    // дешевле отдельного индекса, который пришлось бы держать в синхроне.
+    for (const auto &[dbId, parked] : m_byDbId)
+    {
+        if (parked.calledBy == caller)
+        {
+            result.push_back(dbId);
+        }
+    }
+    return result;
+}
+
+void ParkedVehicleService::clearCall(long long dbId)
+{
+    const auto it = m_byDbId.find(dbId);
+    if (it == m_byDbId.end() || it->second.calledBy == PlayerSessionService::NO_ACCOUNT)
+    {
+        return; // нет записи или вызов уже снят — идемпотентно
+    }
+    it->second.calledBy = PlayerSessionService::NO_ACCOUNT;
+    notifyReconcile(dbId); // система уберёт экземпляр из мира
+}
+
+ParkedVehicleService::Result ParkedVehicleService::call(long long dbId, AccountId caller)
+{
+    if (caller == PlayerSessionService::NO_ACCOUNT)
+    {
+        return Result::Invalid;
+    }
+    const auto it = m_byDbId.find(dbId);
+    if (it == m_byDbId.end())
+    {
+        return Result::NotParked; // машина не в гараже — вызывать нечего
+    }
+    if (!hasAccess(it->second, caller))
+    {
+        return Result::NoAccess;
+    }
+    if (it->second.calledBy == caller && it->second.vehicleId != -1)
+    {
+        // Повторный вызов ТОЙ ЖЕ машины тем же игроком = ПОДАТЬ ЕЁ НА МЕСТО заново
+        // (в /car лейбл так и читается — «Вызвать заново»): экземпляр уже есть,
+        // пересоздавать его незачем, возвращаем на точку тем же путём, что
+        // «Респавн» — с анти-абьюзом топлива внутри. Под сидящим водителем
+        // respawnHome откажет (Occupied): машину из-под водителя не выдёргиваем.
+        return respawnHome(dbId);
+    }
+
+    it->second.calledBy = caller;
+    // Слот вызова один: прошлая вызванная ЭТИМ игроком уходит из мира. Пометку
+    // ставим ДО снятия прошлых, иначе releaseOtherCalls снял бы эту же запись.
+    releaseOtherCalls(caller, dbId);
+    notifyReconcile(dbId); // система заведёт экземпляр на точке парковки
+    return Result::Ok;
+}
+
+void ParkedVehicleService::releaseOtherCalls(AccountId caller, long long keepDbId)
+{
+    if (caller == PlayerSessionService::NO_ACCOUNT)
+    {
+        return;
+    }
+    // calledByAccount отдаёт КОПИЮ вектора: clearCall правит записи и синхронно
+    // гоняет reconcile (деспавн экземпляра), но m_byDbId не вставляет и не удаляет —
+    // перебор по копии от этого не зависит.
+    for (const long long other : calledByAccount(caller))
+    {
+        if (other != keepDbId)
+        {
+            clearCall(other);
+        }
+    }
 }
 
 void ParkedVehicleService::onFamilyDissolved(int familyId)
