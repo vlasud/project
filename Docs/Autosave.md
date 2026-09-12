@@ -61,6 +61,8 @@ Offline/без сессии — ранний return.
 - `PlayerMoneyPersistSystem::persistMoney` — UPSERT `player_money`;
   `PlayerWeaponPersistSystem::persistWeapons` — REPLACE снимка `player_weapon`
   (транзакция), см. `Docs/Persistence.md`.
+- `ReturnPointSystem::persistPoint` — UPSERT `player_return_point` (снимок
+  позиции/интерьера/мира, гейт «логин-спавн пройден»), см. `Docs/ReturnPoint.md`.
 
 **Исключены (остаются на `subscribeEnd`, автосейвом НЕ гоняются):**
 

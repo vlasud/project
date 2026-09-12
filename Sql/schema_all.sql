@@ -731,3 +731,35 @@ CREATE TABLE IF NOT EXISTS `auction_player` (
     `outbid`     TINYINT NOT NULL DEFAULT 0,
     PRIMARY KEY (`account_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+
+-- ============ player_return_point.sql ============
+
+-- Точка возврата аккаунта (ReturnPointSystem, см. Docs/ReturnPoint.md). Применить
+-- вручную к схеме геймода. Одна строка на аккаунт (PK) — снимок ПОСЛЕДНЕГО
+-- местонахождения игрока, переписывается идемпотентным UPSERT на save-канале сессии
+-- (конец сессии И периодический автосейв, см. Docs/Autosave.md). Нет строки — новый
+-- аккаунт/первый вход: возвращаться некуда, диалог на логин-спавне не показывается.
+--
+-- x/y/z — ПРИНЯТАЯ СЕРВЕРОМ позиция (PlayerLocationService), не сырая клиентская.
+-- angle — yaw модели в градусах на момент снимка; у игрока В ТРАНСПОРТЕ поворот
+-- модели не обновляется (vehicle-синк пишет только позицию), поэтому для логаута за
+-- рулём здесь лежит последний ПЕШИЙ курс — координаты при этом верные.
+-- interior — интерьер 0..255; virtual_world — виртуальный мир (серверный факт).
+-- Транспорт не сохраняется: вышел за рулём — вернётся пешком на те же координаты.
+--
+-- Тип DOUBLE для координат/угла — как parked_vehicle: SA-MP float проходит round-trip
+-- через double без потерь. Битую строку (нефинитные/запредельные значения, интерьер
+-- вне 0..255, отрицательный virtual_world — мир без пикапов выхода) геймод при
+-- загрузке ОТБРАСЫВАЕТ и считает, что точки нет; такой же снимок он симметрично НЕ
+-- пишет — одно правило годности на запись и чтение.
+CREATE TABLE IF NOT EXISTS `player_return_point` (
+    `account_id`    BIGINT NOT NULL,
+    `x`             DOUBLE NOT NULL,
+    `y`             DOUBLE NOT NULL,
+    `z`             DOUBLE NOT NULL,
+    `angle`         DOUBLE NOT NULL DEFAULT 0,
+    `interior`      INT    NOT NULL DEFAULT 0,
+    `virtual_world` INT    NOT NULL DEFAULT 0,
+    PRIMARY KEY (`account_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;

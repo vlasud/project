@@ -8,6 +8,10 @@
 `Src/Services/Core/PlayerMoneyService`, `Src/Services/Core/PlayerWeaponService`.
 Схема БД: `Sql/schema_all.sql` (`player_money`, `player_weapon`).
 
+По тому же save-каналу сессии, но отдельной фичей, персистится точка возврата —
+где игрок был в конце прошлой сессии (`player_return_point`, гейт «логин-спавн
+пройден» вместо `areWeaponsApplied`): см. `Docs/ReturnPoint.md`.
+
 ## Что это
 
 Раньше `PlayerAuthSystem::onPlayerSpawn` на первом реальном спавне после

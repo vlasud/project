@@ -166,6 +166,13 @@ Vector3 PlayerLocationService::getPosition(int playerId) const
     return m_state[playerId].position;
 }
 
+bool PlayerLocationService::hasPosition(int playerId) const
+{
+    if (playerId < 0 || playerId >= MAX_PLAYERS)
+        return false;
+    return m_state[playerId].tracking;
+}
+
 unsigned PlayerLocationService::getInterior(int playerId) const
 {
     if (playerId < 0 || playerId >= MAX_PLAYERS)

@@ -11,6 +11,7 @@
 #include "sodium/crypto_pwhash.h"
 #include "types.hpp"
 #include <fmt/format.h>
+#include <filesystem>
 #include <optional>
 #include <sodium.h>
 #include <string>
@@ -29,6 +30,29 @@ struct LoginRow
     std::uint8_t sex = PlayerSessionService::SEX_MALE;
     int banDaysLeft = 0;
 };
+
+// Дев-обход диалога пароля для существующего аккаунта. Включается НАЛИЧИЕМ файла
+// в рабочем каталоге сервера — не константой в коде и не полем конфига: файла нет
+// в репозитории, его видно в каталоге глазами, и включённым он не уедет вместе с
+// сборкой. Проверка одна на запуск; путь пароля и регистрация не меняются.
+const char *DEV_NOAUTH_FLAG = "dev_noauth.flag";
+
+bool devPasswordBypass()
+{
+    static const bool enabled = []
+    {
+        std::error_code ec;
+        const bool present = std::filesystem::exists(DEV_NOAUTH_FLAG, ec) && !ec;
+        if (present)
+        {
+            LogManager::log(Warning, fmt::format("PlayerAuthSystem: ПАРОЛЬ НЕ ПРОВЕРЯЕТСЯ — найден дев-флаг {}. "
+                                                 "Удалите файл, чтобы вернуть авторизацию",
+                                                 DEV_NOAUTH_FLAG));
+        }
+        return present;
+    }();
+    return enabled;
+}
 } // namespace
 
 PlayerAuthSystem::PlayerAuthSystem(ICore &core, const ServiceRegister &serviceRegister)
@@ -252,6 +276,21 @@ void PlayerAuthSystem::runLogin(int playerId)
     IPlayer *player = m_core.getPlayers().get(playerId);
     if (!player)
     {
+        return;
+    }
+    if (devPasswordBypass())
+    {
+        // Ветка ровно та же, что после успешной проверки хеша: сессия, затем
+        // finalize. Пароль не спрашивается и не сверяется.
+        LogManager::log(Warning, fmt::format("PlayerAuthSystem: {} авторизован без пароля (дев-флаг {})",
+                                             player->getName().to_string(), DEV_NOAUTH_FLAG));
+        if (!m_sessionService.start(*player, m_loginData[playerId].accountId, m_loginData[playerId].sex))
+        {
+            player->sendClientMessage(Colour::White(), Encoding::utf8Tocp1251("Этот аккаунт уже в игре"));
+            player->kick();
+            return;
+        }
+        finalize(*player, m_loginData[playerId].personalSkin);
         return;
     }
     showLoginDialog(*player);

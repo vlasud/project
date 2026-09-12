@@ -44,6 +44,7 @@
 #include "Services/PlayerWeaponPersistService/PlayerWeaponPersistService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
 #include "Services/PlayerSpawnService/PlayerSpawnService.h"
+#include "Services/Core/PlayerBubbleService/PlayerBubbleService.h"
 #include "Services/Core/PlayerChatService/PlayerChatService.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Services/Core/PlayerConnectionVersionService/PlayerConnectionVersionService.h"
@@ -64,6 +65,7 @@
 #include "Services/Core/PlayerStateService/PlayerStateService.h"
 #include "Services/Core/PlayerVelocityService/PlayerVelocityService.h"
 #include "Services/ReportService/ReportService.h"
+#include "Services/ReturnPointService/ReturnPointService.h"
 #include "Services/SpawnChoiceService/SpawnChoiceService.h"
 #include "Services/VehicleWaypointService/VehicleWaypointService.h"
 #include "Services/Core/PlayerWeaponService/PlayerWeaponService.h"
@@ -145,6 +147,10 @@ void ServiceRegister::registerServices()
     registerService<ReportService>();
     registerService<AntiCheatService>();
     registerService<PlayerAnimationService>();
+    // Чат-бабл над головой (Core, дисплей-слой): тонкая обёртка над
+    // IPlayer::setChatBubble с санитизацией текста и клампами. Без зависимостей и
+    // без состояния — своей системы не требует.
+    registerService<PlayerBubbleService>();
     registerService<PlayerChatService>();
     registerService<PlayerHealthService>();
     registerService<PlayerMoneyService>();
@@ -156,6 +162,11 @@ void ServiceRegister::registerServices()
     // выдачу на логин-спавне — PlayerAuthSystem.
     registerService<PlayerMoneyPersistService>();
     registerService<PlayerWeaponPersistService>();
+    // Точка возврата аккаунта (где игрок был в конце прошлой сессии, бизнес-фича,
+    // не Core): кэш загруженной точки + гейты «логин-спавн пройден» и «предложение
+    // сделано». Без зависимостей; загрузку/сохранение (player_return_point) и
+    // диалог на логин-спавне делает ReturnPointSystem.
+    registerService<ReturnPointService>();
     registerService<BankService>();
     registerService<FactionService>();
     // Семьи — player-created социальные группы (бизнес-фича, не Core). Без

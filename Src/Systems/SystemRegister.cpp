@@ -87,6 +87,7 @@
 #include "Systems/Core/PlayerSkinSystem/PlayerSkinSystem.h"
 #include "Systems/PlayerPersonalSkinSystem/PlayerPersonalSkinSystem.h"
 #include "Systems/Core/PlayerStateSystem/PlayerStateSystem.h"
+#include "Systems/ReturnPointSystem/ReturnPointSystem.h"
 #include "Systems/Core/RoleplayChatSystem/RoleplayChatSystem.h"
 #include "Systems/Core/PlayerVelocitySystem/PlayerVelocitySystem.h"
 #include "Systems/Core/ScreenNoticeSystem/ScreenNoticeSystem.h"
@@ -395,6 +396,9 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // (PickupSystem/MapIconSystem/StreamerSystem/PlayerLocationSystem/
     // PlayerDialogSystem) тоже инициализируются раньше — к моменту, когда придёт
     // async-колбэк загрузки и начнёт заводить пикапы/иконки, всё уже подключено.
+    // Грейс входа на спавне (onPlayerSpawn) сверяется с ЗАПИСАННОЙ точкой спавна
+    // (PlayerSpawnService), а не с позицией игрока — порядок обработчиков спавна
+    // относительно PlayerSpawnSystem на него не влияет.
     m_systems.push_back(std::make_unique<HouseSystem>(core, serviceRegister));
     // ParkedVehicleSystem (припаркованные у дома машины, бизнес-фича вне Core) после
     // FamilySystem (загрузка parked_vehicle идёт через FamilyService::subscribeLoaded —
@@ -435,6 +439,15 @@ void SystemRegister::registerSystems(ICore &core, const ServiceRegister &service
     // Core-сервисы команд/диалога зарегистрированы раньше. Загрузка выбора — по
     // старту сессии (serial-guard), применение/резолв — по входу/выбору, не per-tick.
     m_systems.push_back(std::make_unique<SpawnChoiceSystem>(core, serviceRegister));
+    // ReturnPointSystem (точка возврата прошлой сессии, бизнес-фича вне Core) после
+    // PlayerSpawnSystem (на логин-спавне позиция/интерьер/мир точки спавна уже
+    // применены — наш телепорт идёт ПОСЛЕ, точку спавна фича не трогает),
+    // PlayerSessionSystem (загрузка по старту сессии, снимок в save-канал),
+    // PlayerHealthSystem (живость игрока на ответ диалога) и PlayerLocationSystem
+    // (принятая позиция — источник снимка). Core-сервисы диалога/камеры/бабла
+    // зарегистрированы раньше. Загрузка — один async-select на старт сессии, диалог
+    // и телепорт — холодный путь, per-tick работы нет.
+    m_systems.push_back(std::make_unique<ReturnPointSystem>(core, serviceRegister));
     // GpsSystem (/gps всем + /tp админам, бизнес-фича вне Core) после VehicleWaypointSystem
     // (VehicleWaypointService связан с CheckpointService — единый чекпоинт-слот GPS),
     // Bus/PortJobSystem (держат NavigationLockService — GpsSystem подписывается на его

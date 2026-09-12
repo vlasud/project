@@ -52,6 +52,11 @@ class PlayerLocationService final : public IService
 
     // --- источник правды (принятая сервером, не сырая клиентская) ---
     Vector3 getPosition(int playerId) const;
+    // Есть ли у слота ПРИНЯТАЯ позиция. false — трека нет (игрок ещё не заспавнен
+    // либо слот сброшен), и getPosition() отдаёт нулевой вектор-дефолт, а не место
+    // игрока. Обязателен тем, кто СОХРАНЯЕТ позицию: нулевой вектор — правдоподобная
+    // точка мира (океан под картой), по значению его от реального места не отличить.
+    bool hasPosition(int playerId) const;
     unsigned getInterior(int playerId) const;
     int getVirtualWorld(int playerId) const;
 

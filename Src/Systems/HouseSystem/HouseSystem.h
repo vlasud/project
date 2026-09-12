@@ -12,6 +12,7 @@
 #include "Services/Core/TextLabelService/TextLabelService.h"
 #include "Services/HouseService/HouseService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
+#include "Services/PlayerSpawnService/PlayerSpawnService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
 #include <array>
@@ -58,12 +59,22 @@
 // применяется к живым домам (зелёная -> красная).
 //
 // Все перемещения — ТОЛЬКО через PlayerLocationService (иначе анти-чит откатит).
-class HouseSystem : public BaseSystem
+class HouseSystem : public BaseSystem, public PlayerSpawnEventHandler, public PlayerConnectEventHandler
 {
   public:
     HouseSystem(ICore &core, const ServiceRegister &serviceRegister);
 
     void initialize(IComponentList *components) override;
+
+    // Спавн «у дома» (выбор SpawnChoiceService::Choice::Home) ставит игрока РОВНО в
+    // точку выхода дома. Взводим тот же грейс входа, что и выход из дома: точка
+    // выхода вне радиуса срабатывания входного пикапа, но она к нему ближе всех, и
+    // страховка от лага позиции здесь стоит один timestamp.
+    void onPlayerSpawn(IPlayer &player) override;
+
+    // Обнуление грейсов слота: таймстемпы прежнего владельца слота иначе достались бы
+    // новому игроку (до EXIT_GRACE чужого грейса).
+    void onPlayerConnect(IPlayer &player) override;
 
   private:
     // Рантайм-хэндлы дома: пикапы/иконка/3D-текст. В JSON не хранятся —
@@ -170,9 +181,10 @@ class HouseSystem : public BaseSystem
     // Грейс выхода: per-player момент входа в дом. Пикап выхода смещён от точки
     // спавна, но грейс — страховка от мгновенного ре-триггера на лаге позиции.
     bool inExitGrace(int playerId) const;
-    // Грейс входа: per-player момент выхода из дома. Точка выхода в EXIT_DISTANCE от
-    // пикапа входа может тут же сработать вход — грейс гасит ре-триггер (симметрично
-    // выходному, та же длительность EXIT_GRACE).
+    // Грейс входа: per-player момент выхода из дома ИЛИ спавна в точке выхода
+    // (onPlayerSpawn). Точка выхода в EXIT_DISTANCE от пикапа входа — вне радиуса
+    // его срабатывания, но ближайшая к нему точка; грейс — страховка от ре-триггера
+    // на лаге позиции (симметрично выходному, та же длительность EXIT_GRACE).
     bool inEntranceGrace(int playerId) const;
 
     MapIconService &m_mapIconService;
@@ -182,6 +194,7 @@ class HouseSystem : public BaseSystem
     PlayerDialogService &m_dialogService;
     TextLabelService &m_labelService;
     PlayerSessionService &m_sessionService; // ключ владельца = std::to_string(accountId)
+    PlayerSpawnService &m_spawnService;     // точка спавна (серверный факт) — гейт грейса на спавне
     PlayerMoneyService &m_moneyService;     // оплата госцены при покупке дома
     AuctionService &m_auctionService;       // возврат ставок при сносе дома (торгов госимуществом больше нет)
 

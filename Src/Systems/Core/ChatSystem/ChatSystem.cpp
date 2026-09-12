@@ -9,6 +9,13 @@
 namespace
 {
 constexpr float CHAT_RADIUS = 20.0f;
+// Длительность анимации разговора. Ноль здесь и был «сломанной анимацией»: с
+// нулём клиент, доиграв, ДЕРЖИТ последний кадр — персонаж навсегда оставался с
+// поднятыми руками, в том числе на ходу. Значение заведомо короче натуральной
+// длины жеста: с `time` БОЛЬШЕ неё клиент «добивает» остаток повтором, и жест
+// проигрывается два-три раза. Движение анимация не забирает — замерено, игрок
+// идёт и пока она играет.
+constexpr std::uint32_t CHAT_ANIM_TIME_MS = 1500;
 constexpr size_t CHAT_BUFFER_SIZE = 128 + 1;
 constexpr int MAX_MESSAGE_LENGTH = 93; // "- текст : Имя[id]" укладывается в 128
 
@@ -124,7 +131,8 @@ bool ChatSystemSystem::onPlayerText(IPlayer &player, StringView message)
     // не переустанавливает (interruptible). В транспорте не проигрываем.
     if (m_stateService.getState(playerId) == PlayerState_OnFoot)
     {
-        m_animationService.play(player, AnimationData(4.1f, false, false, false, false, 0, "PED", "IDLE_CHAT"), true);
+        m_animationService.play(
+            player, AnimationData(4.1f, false, false, false, false, CHAT_ANIM_TIME_MS, "PED", "IDLE_CHAT"), true);
     }
 
     const Vector3 position = m_locationService.getPosition(playerId);

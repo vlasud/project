@@ -4,6 +4,7 @@
 #include "Log/LogManager.h"
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
+#include "Utils/Geometry/Geometry.h"
 #include <fmt/format.h>
 #include <mysqlx/xdevapi.h>
 
@@ -216,7 +217,7 @@ SpawnPoint SpawnChoiceSystem::resolveSpawn(IPlayer &player) const
         // выполняется на логине, /setspawn и смене членства, НЕ на каждой смерти:
         // точка замораживается в class-данных клиента до следующего applySpawn.
         // Если дом пропал в середине сессии (дев удалил дом), игрок с выбором Home
-        // будет появляться у входа БЫВШЕГО дома (публичная точка, vw 0) до
+        // будет появляться у БЫВШЕГО дома (публичная точка, vw 0) до
         // следующего applySpawn — фолбэк на порт (дефолт) срабатывает на следующем
         // resolveSpawn. Нет сессии -> фолбэк на порт (дефолт).
         const PlayerSessionService::Session *session = m_sessionService.get(playerId);
@@ -226,8 +227,15 @@ SpawnPoint SpawnChoiceSystem::resolveSpawn(IPlayer &player) const
         if (!house)
             return station;
         SpawnPoint point;
-        point.position = house->entrance; // вход дома (основной мир, интерьер 0)
-        point.angle = 0.0f;
+        // Точка ВЫХОДА из дома, а не entrance: пикап входа срабатывает по касанию,
+        // и заспавненного прямо на нём мгновенно затянуло бы в интерьер. Угол — как
+        // на выходе (HouseSystem::onExitPickup): угол создателя + 180, то есть
+        // вышедший смотрит ОТ двери, которая осталась за спиной; snapToQuarterTurn
+        // нормализует 270+180=450 обратно в 90. Точка выхода — снаружи, поэтому
+        // интерьер 0 и основной мир. Разворот и камеру за спину применяет
+        // PlayerSpawnService::handleSpawn по этому point.angle.
+        point.position = house->exit;
+        point.angle = Geometry::snapToQuarterTurn(house->exitAngle + 180.0f);
         point.interior = 0;
         point.virtualWorld = 0;
         return point;

@@ -8,6 +8,7 @@
 #include "Utils/Encoding/Encoding.h"
 #include "Utils/Geometry/Geometry.h"
 #include "Utils/MoneyFormat/MoneyFormat.h"
+#include "glm/geometric.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -82,6 +83,13 @@ constexpr std::chrono::milliseconds EXIT_GRACE{1500};
 // срабатывания пикапа — вошедший на нём не стоит.
 constexpr float INSIDE_EXIT_DISTANCE = 2.0f;
 
+// Допуск, с которым точка спавна опознаётся как точка ВЫХОДА своего дома (на ней
+// взводится грейс входа). Спавн «у дома» приходит РОВНО в house->exit, поэтому
+// сверяемся с самой точкой, а не с радиусом от двери: смена EXIT_DISTANCE
+// (приватная константа HouseService) гейт не рассинхронизирует. Полметра —
+// на санитизацию точки в PlayerSpawnService и погрешность float.
+constexpr float SPAWN_AT_EXIT_TOLERANCE = 0.5f;
+
 // Стабильный ключ категории в файле аукционов. Строка, а не индекс регистрации:
 // порядок систем правится, а ставки обязаны оставаться на своих лотах.
 const std::string AUCTION_KEY = "house";
@@ -145,9 +153,15 @@ HouseSystem::HouseSystem(ICore &core, const ServiceRegister &serviceRegister)
       m_dialogService(serviceRegister.getService<PlayerDialogService>()),
       m_labelService(serviceRegister.getService<TextLabelService>()),
       m_sessionService(serviceRegister.getService<PlayerSessionService>()),
+      m_spawnService(serviceRegister.getService<PlayerSpawnService>()),
       m_moneyService(serviceRegister.getService<PlayerMoneyService>()),
       m_auctionService(serviceRegister.getService<AuctionService>())
 {
+    // Спавн у дома приходит в точку выхода — взводим грейс входа (см. onPlayerSpawn);
+    // на коннекте грейсы слота обнуляются.
+    listen(core.getPlayers().getPlayerSpawnDispatcher(), this);
+    listen(core.getPlayers().getPlayerConnectDispatcher(), this);
+
     auto &commands = serviceRegister.getService<PlayerCommandService>();
 
     commands.add("house", {},
@@ -656,6 +670,57 @@ void HouseSystem::onExitPickup(int houseId, IPlayer &player)
                                Geometry::snapToQuarterTurn(house->exitAngle + 180.0f));
     m_cameraService.setBehind(player); // камера — за спину, вдоль нового направления
     m_entranceGraceFrom[player.getID()] = std::chrono::steady_clock::now();
+}
+
+void HouseSystem::onPlayerSpawn(IPlayer &player)
+{
+    // Спавн «у дома» ставит игрока в точку ВЫХОДА своего дома (SpawnChoiceSystem) —
+    // в EXIT_DISTANCE от пикапа входа, вне радиуса его срабатывания, но ближе к нему
+    // некуда. Выход из дома в этой точке взводит грейс входа, спавн — нет, так что
+    // от лага позиции его тут не прикрывает ничто. Взводим ТОТ ЖЕ грейс (второго
+    // механизма не заводим): цена — один timestamp, эффект — вход не сработает
+    // раньше, чем игрок сделает шаг.
+    const int playerId = player.getID();
+    if (!validPlayerId(playerId))
+    {
+        return;
+    }
+
+    const HouseService &service = m_serviceRegister.getService<HouseService>();
+    const HouseService::House *house = service.houseOf(ownerKeyOf(playerId));
+    if (!house)
+    {
+        return; // своего дома нет — спавн у дома невозможен
+    }
+
+    // Сверяем с точкой спавна, ЗАПИСАННОЙ сервером, а не с текущей позицией игрока:
+    // порядок обработчиков спавна (позицию докатывает PlayerSpawnSystem) на неё не
+    // влияет, и клиент на этот гейт не влияет вовсе.
+    const SpawnPoint &point = m_spawnService.getSpawn(playerId);
+    if (point.interior != 0 || point.virtualWorld != 0)
+    {
+        return; // не основной мир — пикап входа (vw 0) там не сработает
+    }
+    if (glm::distance(point.position, house->exit) > SPAWN_AT_EXIT_TOLERANCE)
+    {
+        return; // спавн не в точке выхода своего дома (порт, база фракции)
+    }
+
+    m_entranceGraceFrom[playerId] = std::chrono::steady_clock::now();
+}
+
+void HouseSystem::onPlayerConnect(IPlayer &player)
+{
+    const int playerId = player.getID();
+    if (!validPlayerId(playerId))
+    {
+        return;
+    }
+    // Слот переиспользуется: без сброса новый игрок унаследовал бы грейсы прежнего
+    // (до EXIT_GRACE молчащих пикапов). Эпоха steady_clock от now() отстоит заведомо
+    // дальше грейса.
+    m_exitGraceFrom[playerId] = TimePoint{};
+    m_entranceGraceFrom[playerId] = TimePoint{};
 }
 
 bool HouseSystem::inExitGrace(int playerId) const
