@@ -51,6 +51,12 @@ class PlayerSpawnService final : public IService
     // Принудительный респаун прямо сейчас — в точку из getSpawn().
     void respawn(IPlayer &player);
 
+    // Пересобрать spawn-инфо клиента из УЖЕ записанной точки, ничего не меняя.
+    // Нужно тем, кто правит то, что входит в spawn-инфо помимо точки: оно
+    // строится из getSkin() на момент вызова, и без пересборки респаун из
+    // спектейта появит игрока в прежнем скине.
+    void refreshSpawnInfo(IPlayer &player);
+
   private:
     struct Slot
     {

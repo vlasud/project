@@ -582,13 +582,10 @@ void PlayerAuthSystem::finalize(IPlayer &player, int personalSkin)
     m_personalSkinService.setSkin(player.getID(), validSkin);
     m_skinService.setSkin(player, validSkin);
 
-    // Точка появления после входа — через единый источник правды о спавне:
-    // выход из спектейта вызовет респаун ровно в неё (и в неё же — все
-    // последующие смерти, пока бизнес-логика не переустановит спавн). setSpawn
-    // строит spawn-инфо уже с применённым выше скином.
-    SpawnPoint spawn;
-    spawn.position = {1762.1505f, -1896.2495f, 13.5621f};
-    m_spawnService.setSpawn(player, spawn);
+    // Точку спавна здесь НЕ задаём: её единственный писатель — SpawnChoiceSystem
+    // (см. Docs/SetSpawn.md). Нужна только пересборка spawn-инфо — оно строится
+    // из скина на момент вызова, а скин применён строкой выше.
+    m_spawnService.refreshSpawnInfo(player);
 
     // Оружие и деньги нельзя выдавать здесь: событие спавна придёт позже и
     // сбросит их (инвентарь чистится на спавне). Экипировка — в onPlayerSpawn.

@@ -55,6 +55,11 @@ void PlayerSpawnService::respawn(IPlayer &player)
     player.spawn();
 }
 
+void PlayerSpawnService::refreshSpawnInfo(IPlayer &player)
+{
+    applySpawnInfo(player);
+}
+
 // ------------------------------------------------------------------ вызовы PlayerSpawnSystem
 
 void PlayerSpawnService::initialize(PlayerLocationService *location, PlayerSkinService *skins)
