@@ -1,14 +1,12 @@
 #pragma once
 
 #include "Services/Core/PlayerDialogService/PlayerDialogService.h"
-#include "Services/Core/ScreenNoticeService/ScreenNoticeService.h"
 #include "Services/Core/VehicleService/VehicleService.h"
 #include "Services/FamilyService/FamilyService.h"
 #include "Services/HouseService/HouseService.h"
 #include "Services/ParkedVehicleService/ParkedVehicleService.h"
 #include "Services/PersonalVehicleService/PersonalVehicleService.h"
 #include "Services/PlayerSessionService/PlayerSessionService.h"
-#include "Services/VehicleLockService/VehicleLockService.h"
 #include "Services/VehicleWaypointService/VehicleWaypointService.h"
 #include "Systems/BaseSystem.h"
 #include "player.hpp"
@@ -16,17 +14,17 @@
 
 // Меню личного транспорта (/car) — бизнес-фича (НЕ Core). Корневое LIST-меню
 // («Текущая машина - {имя|не за рулем}» / «Мои машины») — источник владения
-// по-прежнему PersonalVehicleService::owned, о машинах — VehicleService, красный
-// чекпоинт-указатель — общий VehicleWaypointService, замок — VehicleLockService.
+// PersonalVehicleService::owned, о машинах — VehicleService, красный
+// чекпоинт-указатель — общий VehicleWaypointService.
 //
-// ЕДИНОЕ МЕНЮ МАШИНЫ (showCarMenu) — один и тот же под-диалог для обоих входов:
-// тумблеры (Завести-Заглушить / Фары / Двери, динамические лейблы по живому
-// экземпляру) + действия (Респавн / Показать на карте / Припарковать здесь /
-// Убрать с парковки / Передать-Вернуть от семьи). Все пункты видны ВСЕГДА
-// (правило видимости); тумблеры гейтятся «сидит В ЭТОЙ машине» (любое сиденье)
-// в обработчике, действия — своими серверными гейтами. Машину идентифицирует
-// ЗАХВАЧЕННЫЙ carIndex (индекс owned()) с ре-валидацией на каждом клике; после
-// тумблера меню переоткрывается с обновлёнными лейблами.
+// ЕДИНОЕ МЕНЮ МАШИНЫ (showCarMenu) — один и тот же под-диалог для обоих
+// входов, только ДЕЙСТВИЯ над машиной (Вызвать / Респавн / Показать на
+// карте / Припарковать здесь / Убрать с парковки / Передать-Вернуть от семьи).
+// Управления состоянием машины в меню НЕТ: двигатель и фары — клавишами за
+// рулём (Core VehicleControlSystem), и дублировать их диалогом не надо. Все
+// пункты видны ВСЕГДА (правило видимости), каждое действие гейтится своим
+// серверным гейтом в обработчике. Машину идентифицирует ЗАХВАЧЕННЫЙ carIndex
+// (индекс owned()) с ре-валидацией на каждом клике.
 //
 // Входы:
 //  * корень «Текущая машина - {имя}» — резолвит carIndex машины, в которой игрок
@@ -53,9 +51,6 @@ class CarMenuSystem : public BaseSystem
     // вектору, не по магическим индексам, как FamilySystem).
     enum class Action
     {
-        Engine, // тумблеры: лейбл динамический по живому экземпляру
-        Lights,
-        Lock,
         Call, // вызвать машину к её месту парковки (в мире она не ждёт)
         Respawn,
         ShowOnMap,
@@ -64,8 +59,7 @@ class CarMenuSystem : public BaseSystem
         ShareToFamily, // лейбл динамический: «Передать семье» / «Вернуть от семьи»
     };
 
-    // Откуда открыто единое меню машины — туда же ведёт «Назад» и переоткрытие
-    // после тумблера.
+    // Откуда открыто единое меню машины — туда же ведёт «Назад».
     enum class MenuOrigin
     {
         Root,   // корень /car («Текущая машина»)
@@ -85,20 +79,13 @@ class CarMenuSystem : public BaseSystem
     int currentCarIndex(int playerId) const;
     void showCurrentVehicle(IPlayer &player);
 
-    // --- единое меню машины (тумблеры + действия) ---
+    // --- единое меню машины (действия) ---
     // Собрать пункты меню по машине carIndex в порядке показа.
     std::vector<Action> buildActions(int playerId, int carIndex) const;
     // Список личных машин («Мои машины»); пустой -> сообщение, в диалог не заходим.
     void showMyCars(IPlayer &player);
     // Единое меню машины carIndex; origin — куда ведёт «Назад»/переоткрытие.
     void showCarMenu(IPlayer &player, int carIndex, MenuOrigin origin);
-    // Живой экземпляр машины записи владения, в котором игрок сидит СЕЙЧАС
-    // (любое сиденье); nullptr — не в мире либо игрок не внутри.
-    IVehicle *seatedVehicle(int playerId, const PersonalVehicleService::OwnedVehicle &entry) const;
-    // Тумблеры: гейт «сидит В ЭТОЙ машине» (любое сиденье) — в обработчике.
-    void toggleEngine(IPlayer &player, int carIndex, MenuOrigin origin);
-    void toggleLights(IPlayer &player, int carIndex, MenuOrigin origin);
-    void toggleLock(IPlayer &player, int carIndex, MenuOrigin origin);
     // «Вызвать машину»: припаркованная приезжает на своё место парковки (у точки
     // она не ждёт — экземпляр живёт только пока вызвана). Расстояние роли не играет.
     void callCar(IPlayer &player, int carIndex);
@@ -127,6 +114,4 @@ class CarMenuSystem : public BaseSystem
     ParkedVehicleService &m_parkedService;
     HouseService &m_houseService;
     PlayerSessionService &m_sessionService;
-    VehicleLockService &m_lockService;
-    ScreenNoticeService &m_screenNotice; // попапы отказа двигателя (общие с клавишей)
 };
