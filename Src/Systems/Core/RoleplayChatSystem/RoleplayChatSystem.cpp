@@ -3,6 +3,7 @@
 #include "Services/Core/PlayerCommandService/PlayerCommandService.h"
 #include "Utils/Encoding/Encoding.h"
 #include "fmt/format.h"
+#include <cstring>
 #include <random>
 
 namespace
@@ -31,18 +32,11 @@ bool trySucceeds()
 StringView sanitizeEmote(StringView text, char (&out)[RP_MAX_TEXT_LENGTH + 1])
 {
     const size_t n = std::min<size_t>(text.size(), RP_MAX_TEXT_LENGTH);
-    for (size_t i = 0; i < n; ++i)
-    {
-        const unsigned char c = static_cast<unsigned char>(text[i]);
-        if (c == '{')
-            out[i] = '(';
-        else if (c == '}')
-            out[i] = ')';
-        else if (c < 0x20)
-            out[i] = ' ';
-        else
-            out[i] = text[i];
-    }
+    std::memcpy(out, text.data(), n);
+    // Своя чистка тут была неполной: скобки и управляющие байты снимала, а
+    // тильду пропускала, и `~r~` из эмоута доезжал до чужих клиентов сырым
+    // (проверено в игре). Штатный хелпер снимает `{}`, `~`, управляющие и 0x7F.
+    Encoding::neutralizeLine(out, n);
     return StringView(out, n);
 }
 } // namespace
